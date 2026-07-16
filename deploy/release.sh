@@ -34,6 +34,15 @@ rsync -a --delete "$release_dir/deploy/" "$app_dir/deploy/"
 cp "$release_dir/requirements.txt" "$app_dir/requirements.txt"
 cp "$release_dir/验证8.py" "$app_dir/验证8.py"
 
+install -m 700 "$app_dir/deploy/verigo-backup.sh" /usr/local/sbin/verigo-backup
+install -m 644 "$app_dir/deploy/verigo-backup.service" /etc/systemd/system/verigo-backup.service
+install -m 644 "$app_dir/deploy/verigo-backup.timer" /etc/systemd/system/verigo-backup.timer
+if [[ ! -f /etc/verigo/backup.env ]]; then
+    install -m 600 "$app_dir/deploy/verigo-backup.env.example" /etc/verigo/backup.env
+fi
+systemctl daemon-reload
+systemctl enable --now verigo-backup.timer
+
 for setting in \
     'VERIGO_MAX_GUEST_EMAILS=100' \
     'VERIGO_FREE_SINGLE_DAILY_LIMIT=20' \
