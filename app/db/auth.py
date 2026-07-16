@@ -23,6 +23,9 @@ class User:
     created_at: str
     email_verified: bool = False
     credits: int = 0
+    paid_credits: int = 0
+    trial_credits: int = 0
+    trial_credit_expires_at: str | None = None
 
 
 class FreeUsageLimitError(ValueError):
@@ -134,9 +137,75 @@ class AuthStore:
                     )
                     """
                 )
+                connection.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS promo_credit_grants (
+                        id TEXT PRIMARY KEY,
+                        user_id TEXT NOT NULL,
+                        reference TEXT NOT NULL UNIQUE,
+                        initial_credits INTEGER NOT NULL,
+                        remaining_credits INTEGER NOT NULL,
+                        expires_at TEXT NOT NULL,
+                        created_at TEXT NOT NULL,
+                        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+                    )
+                    """
+                )
+                connection.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS credit_debits (
+                        reference TEXT PRIMARY KEY,
+                        user_id TEXT NOT NULL,
+                        paid_credits INTEGER NOT NULL,
+                        promo_credits INTEGER NOT NULL,
+                        created_at TEXT NOT NULL,
+                        refunded_at TEXT,
+                        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+                    )
+                    """
+                )
+                connection.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS credit_debit_grants (
+                        reference TEXT NOT NULL,
+                        grant_id TEXT NOT NULL,
+                        credits INTEGER NOT NULL,
+                        PRIMARY KEY(reference, grant_id),
+                        FOREIGN KEY(reference) REFERENCES credit_debits(reference) ON DELETE CASCADE,
+                        FOREIGN KEY(grant_id) REFERENCES promo_credit_grants(id) ON DELETE CASCADE
+                    )
+                    """
+                )
                 connection.execute("DELETE FROM sessions WHERE expires_at <= ?", (utc_now().isoformat(),))
                 connection.execute("DELETE FROM password_resets WHERE expires_at <= ?", (utc_now().isoformat(),))
             self._initialized = True
+
+    @staticmethod
+    def _trial_credit_summary(connection: sqlite3.Connection, user_id: str) -> tuple[int, str | None]:
+        row = connection.execute(
+            """
+            SELECT COALESCE(SUM(remaining_credits), 0), MIN(expires_at)
+            FROM promo_credit_grants
+            WHERE user_id=? AND remaining_credits > 0 AND expires_at > ?
+            """,
+            (user_id, utc_now().isoformat()),
+        ).fetchone()
+        return int(row[0]), row[1]
+
+    def _user_from_row(self, connection: sqlite3.Connection, row: tuple[object, ...]) -> User:
+        trial_credits, trial_expires_at = self._trial_credit_summary(connection, str(row[0]))
+        paid_credits = int(row[4])
+        return User(
+            id=str(row[0]),
+            username=str(row[1]),
+            email=str(row[2]) if row[2] is not None else None,
+            email_verified=bool(row[3]),
+            credits=paid_credits + trial_credits,
+            paid_credits=paid_credits,
+            trial_credits=trial_credits,
+            trial_credit_expires_at=trial_expires_at,
+            created_at=str(row[5]),
+        )
 
     def create_user(self, email: str, password: str) -> User:
         self.initialize()
@@ -158,14 +227,15 @@ class AuthStore:
         with closing(self._connect()) as connection:
             row = connection.execute(
                 """
-                SELECT id, username, email, email_verified, credits, password_hash, created_at FROM users
+                SELECT id, username, email, email_verified, credits, created_at, password_hash FROM users
                 WHERE email = ? COLLATE NOCASE
                 """,
                 (email,),
             ).fetchone()
-        if row is None or not verify_password(password, row[5]):
+        if row is None or not verify_password(password, row[6]):
             return None
-        return User(id=row[0], username=row[1], email=row[2], email_verified=bool(row[3]), credits=row[4], created_at=row[6])
+        with closing(self._connect()) as connection:
+            return self._user_from_row(connection, row[:6])
 
     def create_password_reset(self, email: str) -> str | None:
         self.initialize()
@@ -204,38 +274,114 @@ class AuthStore:
 
     def confirm_email_verification(self, user_id: str, code: str) -> User:
         self.initialize()
-        now = utc_now().isoformat()
+        now = utc_now()
         with closing(self._connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute("SELECT code_hash, expires_at, attempts FROM email_verifications WHERE user_id = ?", (user_id,)).fetchone()
-            if row is None or row[1] <= now or row[2] >= 5 or not hmac.compare_digest(row[0], token_hash(code)):
-                if row is not None and row[1] > now:
+            now_value = now.isoformat()
+            if row is None or row[1] <= now_value or row[2] >= 5 or not hmac.compare_digest(row[0], token_hash(code)):
+                if row is not None and row[1] > now_value:
                     connection.execute("UPDATE email_verifications SET attempts=attempts+1 WHERE user_id=?", (user_id,))
                     connection.commit()
                 else: connection.rollback()
                 raise ValueError("验证码无效或已过期")
+            was_verified = connection.execute(
+                "SELECT email_verified FROM users WHERE id=?", (user_id,)
+            ).fetchone()
+            if was_verified is None:
+                connection.rollback()
+                raise ValueError("账号不存在")
             connection.execute("UPDATE users SET email_verified=1 WHERE id=?", (user_id,))
-            inserted = connection.execute("INSERT OR IGNORE INTO credit_ledger(user_id, delta, kind, reference, created_at) VALUES (?, 100, 'email_verified', ?, ?)", (user_id, f"email-verified:{user_id}", now)).rowcount
-            if inserted:
-                connection.execute("UPDATE users SET credits=credits+100 WHERE id=?", (user_id,))
+            if not was_verified[0]:
+                reference = f"email-verified-trial:{user_id}"
+                expires_at = now + timedelta(days=settings.trial_credit_days)
+                inserted = connection.execute(
+                    """
+                    INSERT OR IGNORE INTO promo_credit_grants(
+                        id, user_id, reference, initial_credits, remaining_credits, expires_at, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        uuid.uuid4().hex,
+                        user_id,
+                        reference,
+                        settings.email_verification_trial_credits,
+                        settings.email_verification_trial_credits,
+                        expires_at.isoformat(),
+                        now_value,
+                    ),
+                ).rowcount
+                if inserted:
+                    connection.execute(
+                        """
+                        INSERT INTO credit_ledger(user_id, delta, kind, reference, created_at)
+                        VALUES (?, ?, 'email_verified_trial', ?, ?)
+                        """,
+                        (user_id, settings.email_verification_trial_credits, reference, now_value),
+                    )
             connection.execute("DELETE FROM email_verifications WHERE user_id=?", (user_id,))
-            row = connection.execute("SELECT id, username, email, created_at, email_verified, credits FROM users WHERE id=?", (user_id,)).fetchone()
+            row = connection.execute(
+                "SELECT id, username, email, email_verified, credits, created_at FROM users WHERE id=?",
+                (user_id,),
+            ).fetchone()
             connection.commit()
-        return User(id=row[0], username=row[1], email=row[2], created_at=row[3], email_verified=bool(row[4]), credits=row[5])
+            return self._user_from_row(connection, row)
 
     def consume_credits(self, user_id: str, amount: int, reference: str) -> int:
         self.initialize()
+        if amount < 1:
+            raise ValueError("扣减额度必须大于零")
+        now = utc_now().isoformat()
         with closing(self._connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute("SELECT email_verified, credits FROM users WHERE id=?", (user_id,)).fetchone()
             if row is None or not row[0]:
                 connection.rollback(); raise ValueError("请先验证邮箱后领取额度")
-            if row[1] < amount:
+            grants = connection.execute(
+                """
+                SELECT id, remaining_credits FROM promo_credit_grants
+                WHERE user_id=? AND remaining_credits > 0 AND expires_at > ?
+                ORDER BY expires_at, created_at, id
+                """,
+                (user_id, now),
+            ).fetchall()
+            promo_available = sum(int(grant[1]) for grant in grants)
+            paid_credits = int(row[1])
+            if paid_credits + promo_available < amount:
                 connection.rollback(); raise ValueError("额度不足，请充值后继续")
-            connection.execute("INSERT INTO credit_ledger(user_id, delta, kind, reference, created_at) VALUES (?, ?, 'verification', ?, ?)", (user_id, -amount, reference, utc_now().isoformat()))
-            connection.execute("UPDATE users SET credits=credits-? WHERE id=?", (amount, user_id))
+            remaining = amount
+            grant_debits: list[tuple[str, int]] = []
+            for grant_id, available in grants:
+                consumed = min(remaining, int(available))
+                if not consumed:
+                    break
+                connection.execute(
+                    "UPDATE promo_credit_grants SET remaining_credits=remaining_credits-? WHERE id=?",
+                    (consumed, grant_id),
+                )
+                grant_debits.append((str(grant_id), consumed))
+                remaining -= consumed
+            paid_debit = remaining
+            if paid_debit:
+                connection.execute("UPDATE users SET credits=credits-? WHERE id=?", (paid_debit, user_id))
+            promo_debit = amount - paid_debit
+            connection.execute(
+                "INSERT INTO credit_ledger(user_id, delta, kind, reference, created_at) VALUES (?, ?, 'verification', ?, ?)",
+                (user_id, -amount, reference, now),
+            )
+            connection.execute(
+                """
+                INSERT INTO credit_debits(reference, user_id, paid_credits, promo_credits, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (reference, user_id, paid_debit, promo_debit, now),
+            )
+            connection.executemany(
+                "INSERT INTO credit_debit_grants(reference, grant_id, credits) VALUES (?, ?, ?)",
+                [(reference, grant_id, credits) for grant_id, credits in grant_debits],
+            )
             connection.commit()
-            return row[1] - amount
+            return paid_credits + promo_available - amount
 
     def refund_credits(self, user_id: str, amount: int, reference: str) -> None:
         """Refund a failed submission once, keyed by its original ledger reference."""
@@ -243,6 +389,13 @@ class AuthStore:
         now = utc_now().isoformat()
         with closing(self._connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
+            debit = connection.execute(
+                """
+                SELECT paid_credits, promo_credits, refunded_at
+                FROM credit_debits WHERE reference=? AND user_id=?
+                """,
+                (reference, user_id),
+            ).fetchone()
             charged = connection.execute(
                 "SELECT 1 FROM credit_ledger WHERE user_id=? AND reference=? AND delta=?",
                 (user_id, reference, -amount),
@@ -257,10 +410,23 @@ class AuthStore:
                     """,
                     (user_id, amount, refund_reference, now),
                 ).rowcount
-            if inserted:
-                connection.execute(
-                    "UPDATE users SET credits=credits+? WHERE id=?", (amount, user_id)
+            if inserted and debit and debit[2] is None:
+                if debit[0]:
+                    connection.execute(
+                        "UPDATE users SET credits=credits+? WHERE id=?", (debit[0], user_id)
+                    )
+                grant_rows = connection.execute(
+                    "SELECT grant_id, credits FROM credit_debit_grants WHERE reference=?", (reference,)
+                ).fetchall()
+                connection.executemany(
+                    "UPDATE promo_credit_grants SET remaining_credits=remaining_credits+? WHERE id=?",
+                    [(credits, grant_id) for grant_id, credits in grant_rows],
                 )
+                connection.execute(
+                    "UPDATE credit_debits SET refunded_at=? WHERE reference=?", (now, reference)
+                )
+            elif inserted:
+                connection.execute("UPDATE users SET credits=credits+? WHERE id=?", (amount, user_id))
             connection.commit()
 
     def reserve_free_usage(self, user_id: str, kind: str, limit: int) -> int:
@@ -363,13 +529,13 @@ class AuthStore:
         with closing(self._connect()) as connection:
             row = connection.execute(
                 """
-                SELECT users.id, users.username, users.email, users.created_at, users.email_verified, users.credits
+                SELECT users.id, users.username, users.email, users.email_verified, users.credits, users.created_at
                 FROM sessions JOIN users ON users.id = sessions.user_id
                 WHERE sessions.token_hash = ? AND sessions.expires_at > ?
                 """,
                 (token_hash(token), utc_now().isoformat()),
             ).fetchone()
-        return User(id=row[0], username=row[1], email=row[2], created_at=row[3], email_verified=bool(row[4]), credits=row[5]) if row else None
+            return self._user_from_row(connection, row) if row else None
 
     def delete_session(self, token: str | None) -> None:
         if not token:

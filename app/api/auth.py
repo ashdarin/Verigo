@@ -66,6 +66,9 @@ class UserResponse(BaseModel):
     email: str
     email_verified: bool
     credits: int
+    paid_credits: int
+    trial_credits: int
+    trial_credit_expires_at: str | None
 
 
 class AttemptLimiter:
@@ -85,6 +88,18 @@ class AttemptLimiter:
 
 
 attempt_limiter = AttemptLimiter()
+
+
+def serialize_user(user: User) -> UserResponse:
+    return UserResponse(
+        id=user.id,
+        email=user.email or user.username,
+        email_verified=user.email_verified,
+        credits=user.credits,
+        paid_credits=user.paid_credits,
+        trial_credits=user.trial_credits,
+        trial_credit_expires_at=user.trial_credit_expires_at,
+    )
 
 
 def optional_user(
@@ -119,7 +134,7 @@ def register(payload: RegistrationCredentials, request: Request, response: Respo
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     set_session_cookie(response, auth_store.create_session(user.id))
-    return UserResponse(id=user.id, email=user.email or user.username, email_verified=user.email_verified, credits=user.credits)
+    return serialize_user(user)
 
 
 @auth_router.post("/login", response_model=UserResponse)
@@ -129,7 +144,7 @@ def login(payload: Credentials, request: Request, response: Response) -> UserRes
     if user is None:
         raise HTTPException(status_code=401, detail="邮箱或密码错误")
     set_session_cookie(response, auth_store.create_session(user.id))
-    return UserResponse(id=user.id, email=user.email or user.username, email_verified=user.email_verified, credits=user.credits)
+    return serialize_user(user)
 
 
 @auth_router.post("/email-verification/request", status_code=204)
@@ -153,7 +168,7 @@ def confirm_email_verification(
         verified = auth_store.confirm_email_verification(user.id, payload.code)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return UserResponse(id=verified.id, email=verified.email or verified.username, email_verified=True, credits=verified.credits)
+    return serialize_user(verified)
 
 
 @auth_router.post("/password-reset/request", status_code=204)
@@ -189,4 +204,4 @@ def logout(
 
 @auth_router.get("/me", response_model=UserResponse | None)
 def me(user: Annotated[User | None, Depends(optional_user)]) -> UserResponse | None:
-    return UserResponse(id=user.id, email=user.email or user.username, email_verified=user.email_verified, credits=user.credits) if user else None
+    return serialize_user(user) if user else None

@@ -21,8 +21,12 @@ class Settings:
     max_emails_per_job: int = int(os.getenv("VERIGO_MAX_EMAILS", "5000"))
     max_guest_emails: int = int(os.getenv("VERIGO_MAX_GUEST_EMAILS", "100"))
     free_single_daily_limit: int = int(
-        os.getenv("VERIGO_FREE_SINGLE_DAILY_LIMIT", "10")
+        os.getenv("VERIGO_FREE_SINGLE_DAILY_LIMIT", "20")
     )
+    email_verification_trial_credits: int = int(
+        os.getenv("VERIGO_EMAIL_VERIFICATION_TRIAL_CREDITS", "10")
+    )
+    trial_credit_days: int = int(os.getenv("VERIGO_TRIAL_CREDIT_DAYS", "7"))
     max_workers_per_job: int = int(os.getenv("VERIGO_MAX_WORKERS", "8"))
     max_parallel_jobs: int = int(os.getenv("VERIGO_MAX_PARALLEL_JOBS", "2"))
     max_pending_jobs: int = int(os.getenv("VERIGO_MAX_PENDING_JOBS", "20"))

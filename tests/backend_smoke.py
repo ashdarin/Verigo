@@ -15,6 +15,8 @@ os.environ["VERIGO_DATABASE_PATH"] = str(temp_dir / "verigo.db")
 os.environ["VERIGO_RESULTS_DIR"] = str(temp_dir / "results")
 os.environ["VERIGO_SECURE_COOKIES"] = "false"
 os.environ["VERIGO_FREE_SINGLE_DAILY_LIMIT"] = "2"
+os.environ["VERIGO_EMAIL_VERIFICATION_TRIAL_CREDITS"] = "10"
+os.environ["VERIGO_TRIAL_CREDIT_DAYS"] = "7"
 os.environ["VERIGO_MAX_PENDING_JOBS"] = "50"
 
 from fastapi.testclient import TestClient
@@ -100,7 +102,10 @@ with TestClient(app) as account:
     auth_store.confirm_email_verification(user_id, verification_code)
     verified_user = account.get("/api/auth/me").json()
     assert verified_user["email_verified"] is True
-    assert verified_user["credits"] == 100
+    assert verified_user["credits"] == 10
+    assert verified_user["paid_credits"] == 0
+    assert verified_user["trial_credits"] == 10
+    assert verified_user["trial_credit_expires_at"]
 
     candidates = account.post(
         "/api/discovery/candidates",
@@ -108,7 +113,7 @@ with TestClient(app) as account:
     )
     assert candidates.status_code == 200, candidates.text
     assert candidates.json()["candidates"]
-    assert account.get("/api/auth/me").json()["credits"] == 100
+    assert account.get("/api/auth/me").json()["credits"] == 10
 
     first_free = account.post(
         "/api/verify/single", json={"email": "first@example.com"}
@@ -118,7 +123,7 @@ with TestClient(app) as account:
     )
     assert first_free.status_code == 202, first_free.text
     assert second_free.status_code == 202, second_free.text
-    assert account.get("/api/auth/me").json()["credits"] == 100
+    assert account.get("/api/auth/me").json()["credits"] == 10
     exhausted = account.post(
         "/api/verify/single", json={"email": "third@example.com"}
     )
@@ -132,7 +137,12 @@ with TestClient(app) as account:
         },
     )
     assert paid.status_code == 202, paid.text
-    assert account.get("/api/auth/me").json()["credits"] == 98
+    after_paid = account.get("/api/auth/me").json()
+    assert after_paid["credits"] == 8
+    assert after_paid["paid_credits"] == 0
+    assert after_paid["trial_credits"] == 8
+    auth_store.refund_credits(user_id, 2, f"verification:{paid.json()['id']}")
+    assert account.get("/api/auth/me").json()["credits"] == 10
 
     job_store.add(completed_job("ownedjob0001", owner_id=user_id))
     jobs = account.get("/api/jobs")

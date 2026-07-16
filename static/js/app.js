@@ -551,7 +551,13 @@ async function loadRecentJobs() {
 function updateAccount() {
   el("account-button").textContent = state.user ? state.user.email : "登录";
   el("account-name").textContent = state.user?.email || "";
-  el("account-credits").textContent = state.user ? `${state.user.credits || 0} 额度` : "";
+  const trialCredits = Number(state.user?.trial_credits || 0);
+  el("account-credits").textContent = state.user
+    ? `${state.user.credits || 0} 额度${trialCredits ? ` · ${trialCredits} 体验额度` : ""}`
+    : "";
+  el("account-credits").title = state.user?.trial_credit_expires_at
+    ? `体验额度有效至 ${new Date(state.user.trial_credit_expires_at).toLocaleString("zh-CN")}`
+    : "";
   el("verify-email-button").classList.toggle("hidden", !state.user || state.user.email_verified);
   el("recent-block").classList.toggle("hidden", !state.user);
   el("account-menu").classList.add("hidden");
