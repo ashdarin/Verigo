@@ -18,6 +18,8 @@ os.environ["VERIGO_FREE_SINGLE_DAILY_LIMIT"] = "2"
 os.environ["VERIGO_EMAIL_VERIFICATION_TRIAL_CREDITS"] = "10"
 os.environ["VERIGO_TRIAL_CREDIT_DAYS"] = "7"
 os.environ["VERIGO_MAX_PENDING_JOBS"] = "50"
+os.environ["VERIGO_ADMIN_EMAILS"] = "admin@example.com"
+os.environ["VERIGO_METRICS_SALT"] = "smoke-test-metrics-salt"
 
 from fastapi.testclient import TestClient
 from openpyxl import Workbook
@@ -43,6 +45,9 @@ def completed_job(job_id: str, **kwargs) -> Job:
 
 with TestClient(app) as guest:
     assert guest.get("/api/health").json() == {"status": "ok"}
+    assert guest.get("/dashboard").status_code == 200
+    assert guest.get("/").status_code == 200
+    assert guest.get("/api/admin/metrics").status_code == 401
     assert guest.get("/api/jobs").status_code == 401
 
     workbook = Workbook()
@@ -95,6 +100,7 @@ with TestClient(app) as account:
     assert registered.status_code == 201, registered.text
     user_id = registered.json()["id"]
     assert account.get("/api/auth/me").json()["email"] == "smoke@example.com"
+    assert account.get("/api/admin/metrics").status_code == 403
     assert account.post(
         "/api/verify/single", json={"email": "first@example.com"}
     ).status_code == 403
@@ -153,6 +159,23 @@ with TestClient(app) as account:
 
     assert account.post("/api/auth/logout").status_code == 204
     assert account.get("/api/jobs/ownedjob0001").status_code == 404
+
+
+with TestClient(app) as admin_account:
+    registered = admin_account.post(
+        "/api/auth/register",
+        json={"email": "admin@example.com", "password": "correct-horse-2026"},
+    )
+    assert registered.status_code == 201, registered.text
+    assert registered.json()["is_admin"] is False
+    admin_id = registered.json()["id"]
+    verification_code = auth_store.create_email_verification(admin_id)
+    auth_store.confirm_email_verification(admin_id, verification_code)
+    assert admin_account.get("/api/auth/me").json()["is_admin"] is True
+    metrics = admin_account.get("/api/admin/metrics")
+    assert metrics.status_code == 200, metrics.text
+    assert metrics.json()["today"]["page_views"] >= 1
+    assert len(metrics.json()["daily"]) == 7
 
 
 legacy_id = "legacy-smoke-user"

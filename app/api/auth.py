@@ -97,6 +97,7 @@ class UserResponse(BaseModel):
     trial_credits: int
     trial_credit_expires_at: str | None
     needs_email_binding: bool
+    is_admin: bool
 
 
 class AttemptLimiter:
@@ -128,6 +129,11 @@ def serialize_user(user: User) -> UserResponse:
         trial_credits=user.trial_credits,
         trial_credit_expires_at=user.trial_credit_expires_at,
         needs_email_binding=user.email is None,
+        is_admin=bool(
+            user.email_verified
+            and user.email
+            and user.email.lower() in settings.admin_emails
+        ),
     )
 
 
@@ -140,6 +146,17 @@ def optional_user(
 def require_user(user: Annotated[User | None, Depends(optional_user)]) -> User:
     if user is None:
         raise HTTPException(status_code=401, detail="请先登录")
+    return user
+
+
+def require_admin(user: Annotated[User | None, Depends(optional_user)]) -> User:
+    user = require_user(user)
+    if (
+        not user.email_verified
+        or not user.email
+        or user.email.lower() not in settings.admin_emails
+    ):
+        raise HTTPException(status_code=403, detail="没有运营面板访问权限")
     return user
 
 

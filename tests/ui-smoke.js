@@ -111,6 +111,42 @@ async function checkMobileTrialAction(browser) {
   return { mobileTrialAction: true };
 }
 
+async function checkDashboard(browser) {
+  const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  await page.route("**/api/auth/me", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({
+      id: "admin", email: "admin@example.com", email_verified: true,
+      credits: 0, paid_credits: 0, trial_credits: 0, trial_credit_expires_at: null,
+      needs_email_binding: false, is_admin: true,
+    }),
+  }));
+  await page.route("**/api/admin/metrics", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({
+      updated_at: new Date().toISOString(),
+      today: { page_views: 42, unique_visitors: 17, new_users: 3, new_jobs: 5, credits_consumed: 12, revenue_fen: 2990, paid_orders: 2 },
+      totals: { page_views: 200, unique_visitors: 80, users: 31, verified_users: 20, jobs: 50, revenue_fen: 5990, paid_orders: 4 },
+      jobs: { queued: 1, running: 2, completed: 45, failed: 2 },
+      daily: Array.from({ length: 7 }, (_, index) => ({ day: `2026-07-${String(index + 10).padStart(2, "0")}`, page_views: index + 1, unique_visitors: index + 1 })),
+    }),
+  }));
+  await page.goto("http://127.0.0.1:8000/dashboard", { waitUntil: "networkidle" });
+  await page.waitForSelector("#dashboard-workspace:not(.hidden)");
+  const result = await page.evaluate(() => ({
+    title: document.title,
+    overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+    navVisible: !document.querySelector("#dashboard-nav")?.classList.contains("hidden"),
+    trafficRows: document.querySelectorAll("#dashboard-traffic-body tr").length,
+    revenue: document.querySelector("#metric-today-revenue")?.textContent,
+  }));
+  if (result.title !== "运营监控 | Verigo" || result.overflow || !result.navVisible || result.trafficRows !== 7 || result.revenue !== "¥29.90") {
+    throw new Error(`dashboard: unexpected rendering ${JSON.stringify(result)}`);
+  }
+  await page.close();
+  return { dashboard: true };
+}
+
 (async () => {
   const browser = await chromium.launch({ headless: true });
   try {
@@ -118,7 +154,8 @@ async function checkMobileTrialAction(browser) {
     const mobile = await checkViewport(browser, "mobile", 390, 844);
     const interaction = await checkAccountAndImport(browser);
     const mobileTrialAction = await checkMobileTrialAction(browser);
-    console.log(JSON.stringify([desktop, mobile, interaction, mobileTrialAction]));
+    const dashboard = await checkDashboard(browser);
+    console.log(JSON.stringify([desktop, mobile, interaction, mobileTrialAction, dashboard]));
   } finally {
     await browser.close();
   }

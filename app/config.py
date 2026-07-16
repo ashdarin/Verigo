@@ -27,6 +27,12 @@ class Settings:
         os.getenv("VERIGO_EMAIL_VERIFICATION_TRIAL_CREDITS", "10")
     )
     trial_credit_days: int = int(os.getenv("VERIGO_TRIAL_CREDIT_DAYS", "7"))
+    admin_emails: frozenset[str] = frozenset(
+        email.strip().lower()
+        for email in os.getenv("VERIGO_ADMIN_EMAILS", "").split(",")
+        if email.strip()
+    )
+    metrics_salt: str = os.getenv("VERIGO_METRICS_SALT", "")
     max_workers_per_job: int = int(os.getenv("VERIGO_MAX_WORKERS", "8"))
     max_parallel_jobs: int = int(os.getenv("VERIGO_MAX_PARALLEL_JOBS", "2"))
     max_pending_jobs: int = int(os.getenv("VERIGO_MAX_PENDING_JOBS", "20"))

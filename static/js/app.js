@@ -1,5 +1,5 @@
 const state = {
-  view: "single",
+  view: window.location.pathname === "/dashboard" ? "dashboard" : "single",
   mode: "paste",
   fileEmails: [],
   user: null,
@@ -12,6 +12,7 @@ const state = {
   page: 0,
   downloadName: null,
   discovery: { jobId: null, candidates: [], results: [] },
+  metricsTimer: null,
 };
 
 const pageSize = 50;
@@ -70,7 +71,16 @@ async function api(url, options = {}) {
 }
 
 function switchView(view) {
+  if (view === "dashboard" && !state.user?.is_admin) {
+    if (!state.user) {
+      el("auth-dialog").showModal();
+      setAuthMode("login");
+      el("auth-error").textContent = "请先登录管理员账户";
+    }
+    return;
+  }
   const discovery = view === "discovery";
+  const dashboard = view === "dashboard";
   if (discovery && !state.user) {
     el("auth-dialog").showModal();
     setAuthMode("login");
@@ -78,18 +88,80 @@ function switchView(view) {
     return;
   }
   state.view = view;
-  el("verify-workspace").classList.toggle("hidden", discovery);
+  el("verify-workspace").classList.toggle("hidden", discovery || dashboard);
   el("discovery-workspace").classList.toggle("hidden", !discovery);
+  el("dashboard-workspace").classList.toggle("hidden", !dashboard);
   el("single-panel").classList.toggle("hidden", view !== "single");
   el("batch-panel").classList.toggle("hidden", view !== "batch");
-  if (!discovery) {
+  if (!discovery && !dashboard) {
     el("verify-eyebrow").textContent = view === "single" ? "免费单个验证" : "收费批量验证";
     el("verify-heading").textContent = view === "single" ? "验证单个收件地址" : "批量验证收件地址";
   }
   document.querySelectorAll("[data-view]").forEach((button) => {
     button.classList.toggle("active", button.dataset.view === view);
   });
+  if (dashboard) {
+    document.title = "运营监控 | Verigo";
+    if (window.location.pathname !== "/dashboard") window.history.pushState({}, "", "/dashboard");
+    loadDashboardMetrics();
+    clearInterval(state.metricsTimer);
+    state.metricsTimer = window.setInterval(loadDashboardMetrics, 30000);
+  } else {
+    document.title = "Verigo";
+    clearInterval(state.metricsTimer);
+    state.metricsTimer = null;
+    if (window.location.pathname === "/dashboard") window.history.replaceState({}, "", "/");
+  }
   updateCount();
+}
+
+function formatMoney(fen) {
+  return `¥${(Number(fen || 0) / 100).toFixed(2)}`;
+}
+
+function setMetric(id, value) {
+  el(id).textContent = Number(value || 0).toLocaleString("zh-CN");
+}
+
+function renderTraffic(days) {
+  const body = el("dashboard-traffic-body");
+  body.replaceChildren();
+  days.forEach((item) => {
+    const row = document.createElement("tr");
+    const date = document.createElement("td");
+    const views = document.createElement("td");
+    const visitors = document.createElement("td");
+    date.textContent = item.day.slice(5).replace("-", "/");
+    views.textContent = Number(item.page_views || 0).toLocaleString("zh-CN");
+    visitors.textContent = Number(item.unique_visitors || 0).toLocaleString("zh-CN");
+    row.append(date, views, visitors);
+    body.append(row);
+  });
+}
+
+async function loadDashboardMetrics() {
+  if (!state.user?.is_admin || state.view !== "dashboard") return;
+  try {
+    const data = await api("/api/admin/metrics");
+    setMetric("metric-today-views", data.today.page_views);
+    setMetric("metric-today-visitors", data.today.unique_visitors);
+    setMetric("metric-today-users", data.today.new_users);
+    setMetric("metric-today-jobs", data.today.new_jobs);
+    setMetric("metric-today-credits", data.today.credits_consumed);
+    el("metric-today-revenue").textContent = formatMoney(data.today.revenue_fen);
+    el("metric-today-orders").textContent = `${Number(data.today.paid_orders || 0).toLocaleString("zh-CN")} 笔订单`;
+    setMetric("metric-total-views", data.totals.page_views);
+    setMetric("metric-total-visitors", data.totals.unique_visitors);
+    setMetric("metric-total-users", data.totals.users);
+    setMetric("metric-total-verified-users", data.totals.verified_users);
+    setMetric("metric-total-jobs", data.totals.jobs);
+    el("metric-total-revenue").textContent = formatMoney(data.totals.revenue_fen);
+    ["queued", "running", "completed", "failed"].forEach((status) => setMetric(`metric-jobs-${status}`, data.jobs[status]));
+    renderTraffic(data.daily);
+    el("dashboard-updated").textContent = `最近更新：${new Date(data.updated_at).toLocaleString("zh-CN")}`;
+  } catch (error) {
+    el("dashboard-updated").textContent = `数据加载失败：${error.message}`;
+  }
 }
 
 document.querySelectorAll("[data-view]").forEach((button) => {
@@ -575,6 +647,7 @@ function updateAccount() {
     ? `体验额度有效至 ${new Date(state.user.trial_credit_expires_at).toLocaleString("zh-CN")}`
     : "";
   el("bind-email-button").classList.toggle("hidden", !state.user?.needs_email_binding);
+  el("dashboard-nav").classList.toggle("hidden", !state.user?.is_admin);
   el("claim-trial-button").classList.toggle(
     "hidden", !state.user || state.user.needs_email_binding || state.user.email_verified,
   );
@@ -587,6 +660,8 @@ async function loadAccount() {
   try { state.user = await api("/api/auth/me"); } catch (_) { state.user = null; }
   updateAccount();
 }
+
+el("dashboard-refresh").addEventListener("click", loadDashboardMetrics);
 
 el("account-button").addEventListener("click", () => {
   if (state.user) el("account-menu").classList.toggle("hidden");
@@ -683,6 +758,7 @@ el("auth-form").addEventListener("submit", async (event) => {
     el("auth-dialog").close();
     el("auth-form").reset();
     updateAccount();
+    if (window.location.pathname === "/dashboard" && state.user.is_admin) switchView("dashboard");
   } catch (error) {
     el("auth-error").textContent = error.message;
   } finally {
@@ -731,6 +807,18 @@ el("refresh-jobs").addEventListener("click", loadRecentJobs);
   setAuthMode(state.authMode);
   updateCount();
   await loadAccount();
+  if (window.location.pathname === "/dashboard") {
+    if (state.user?.is_admin) {
+      switchView("dashboard");
+    } else if (state.user) {
+      window.location.replace("/");
+      return;
+    } else {
+      el("auth-dialog").showModal();
+      setAuthMode("login");
+      el("auth-error").textContent = "请登录有运营监控权限的账户";
+    }
+  }
   if (state.jobId) {
     try {
       const job = await api(`/api/jobs/${state.jobId}`);

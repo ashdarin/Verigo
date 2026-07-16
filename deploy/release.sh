@@ -60,6 +60,10 @@ do
     fi
 done
 
+if ! grep -q '^VERIGO_METRICS_SALT=' /etc/verigo/verigo.env; then
+    printf 'VERIGO_METRICS_SALT=%s\n' "$(openssl rand -hex 32)" >> /etc/verigo/verigo.env
+fi
+
 chown -R verigo:verigo "$app_dir"
 chmod 600 /etc/verigo/verigo.env
 systemctl start verigo

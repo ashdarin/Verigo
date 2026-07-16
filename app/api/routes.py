@@ -8,7 +8,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
 
-from app.api.auth import optional_user, require_user
+from app.api.auth import optional_user, require_admin, require_user
 from app.api.schemas import (
     CreateJobRequest,
     DiscoveryRequest,
@@ -26,6 +26,7 @@ from app.core.discovery import candidate_emails
 from app.core.security import token_hash
 from app.db.auth import FreeUsageLimitError, User, auth_store
 from app.db.jobs import Job, job_store
+from app.db.metrics import metrics_store
 from app.tasks.verification import (
     clean_emails,
     job_progress,
@@ -86,6 +87,11 @@ def serialize_job(job: Job) -> JobResponse:
 @router.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@router.get("/admin/metrics")
+def admin_metrics(_: Annotated[User, Depends(require_admin)]) -> dict[str, object]:
+    return metrics_store.snapshot()
 
 
 @router.post("/discovery/candidates", response_model=DiscoveryResponse)
