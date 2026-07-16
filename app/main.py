@@ -3,7 +3,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from app.api.auth import auth_router
@@ -56,6 +56,44 @@ def index() -> FileResponse:
     return FileResponse(STATIC_DIR / "index.html")
 
 
+@app.get("/robots.txt", include_in_schema=False, response_class=PlainTextResponse)
+def robots() -> str:
+    return "\n".join(
+        [
+            "User-agent: *",
+            "Allow: /",
+            "Disallow: /api/",
+            "Disallow: /dashboard",
+            "Sitemap: https://verigo.site/sitemap.xml",
+            "",
+        ]
+    )
+
+
+@app.get("/sitemap.xml", include_in_schema=False)
+def sitemap() -> Response:
+    body = """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">
+  <url><loc>https://verigo.site/</loc></url>
+  <url><loc>https://verigo.site/privacy</loc></url>
+  <url><loc>https://verigo.site/acceptable-use</loc></url>
+</urlset>
+"""
+    return Response(content=body, media_type="application/xml")
+
+
 @app.get("/dashboard", include_in_schema=False)
 def dashboard() -> FileResponse:
-    return FileResponse(STATIC_DIR / "index.html")
+    return FileResponse(
+        STATIC_DIR / "index.html", headers={"X-Robots-Tag": "noindex, nofollow"}
+    )
+
+
+@app.get("/privacy", include_in_schema=False)
+def privacy() -> FileResponse:
+    return FileResponse(STATIC_DIR / "privacy.html")
+
+
+@app.get("/acceptable-use", include_in_schema=False)
+def acceptable_use() -> FileResponse:
+    return FileResponse(STATIC_DIR / "acceptable-use.html")

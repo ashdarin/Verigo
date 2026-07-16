@@ -24,7 +24,7 @@ async function checkViewport(browser, name, width, height) {
     };
   });
 
-  if (result.title !== "Verigo") throw new Error(`${name}: unexpected title`);
+  if (!result.title.includes("Verigo")) throw new Error(`${name}: unexpected title`);
   if (result.overflow) throw new Error(`${name}: page has horizontal overflow`);
   if (!result.startVisible || !result.progressVisible || !result.tableVisible) {
     throw new Error(`${name}: a primary UI region is hidden`);

@@ -47,6 +47,12 @@ with TestClient(app) as guest:
     assert guest.get("/api/health").json() == {"status": "ok"}
     assert guest.get("/dashboard").status_code == 200
     assert guest.get("/").status_code == 200
+    robots = guest.get("/robots.txt")
+    assert robots.status_code == 200 and "Sitemap: https://verigo.site/sitemap.xml" in robots.text
+    sitemap = guest.get("/sitemap.xml")
+    assert sitemap.status_code == 200 and "https://verigo.site/privacy" in sitemap.text
+    assert guest.get("/privacy").status_code == 200
+    assert guest.get("/acceptable-use").status_code == 200
     assert guest.get("/api/admin/metrics").status_code == 401
     assert guest.get("/api/jobs").status_code == 401
 
