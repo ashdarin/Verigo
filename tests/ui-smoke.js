@@ -50,6 +50,11 @@ async function checkAccountAndImport(browser) {
   if (await page.locator("#claim-trial-button").evaluate((node) => node.classList.contains("hidden"))) {
     throw new Error("account: the trial-credit action should be prominent for unverified users");
   }
+  await page.click("#claim-trial-button");
+  if (!(await page.locator("#email-verification-dialog").evaluate((node) => node.open))) {
+    throw new Error("account: email verification should use the in-app dialog");
+  }
+  await page.click("#close-email-verification");
 
   await page.click('[data-view="batch"]');
   await page.click('[data-mode="file"]');

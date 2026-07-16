@@ -273,6 +273,7 @@
       <input id="auth-email" name="email" type="text" autocomplete="email" required>
       <label for="auth-password">密码</label>
       <input id="auth-password" name="password" type="password" autocomplete="current-password" minlength="6" maxlength="128" required>
+      <div id="turnstile-container" class="turnstile-container hidden"><div id="turnstile-widget"></div></div>
       <button id="open-reset" class="text-action" type="button">忘记密码？</button>
       <p id="auth-error" class="form-error" role="alert"></p>
       <button id="auth-submit" class="primary-action" type="submit">登录</button>
@@ -293,6 +294,22 @@
       <input id="bind-email-code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required>
       <p id="bind-email-confirm-error" class="form-error" role="alert"></p>
       <button class="primary-action" type="submit">完成绑定</button>
+    </form>
+  </dialog>
+
+  <dialog id="email-verification-dialog" class="auth-dialog">
+    <form id="email-verification-request-form" method="dialog">
+      <div class="dialog-heading"><div><p class="eyebrow">体验额度</p><h2>验证注册邮箱</h2></div><button id="close-email-verification" class="dialog-close" type="button" aria-label="关闭">×</button></div>
+      <p class="dialog-copy">验证后可领取 10 个体验额度，有效期为 7 天。</p>
+      <p id="email-verification-error" class="form-error" role="alert"></p>
+      <button class="primary-action" type="submit">发送验证码</button>
+    </form>
+    <form id="email-verification-confirm-form" method="dialog" class="hidden">
+      <div class="dialog-heading"><div><p class="eyebrow">体验额度</p><h2>输入邮箱验证码</h2></div><button class="dialog-close" type="button" data-close-email-verification aria-label="关闭">×</button></div>
+      <label for="email-verification-code">六位验证码</label>
+      <input id="email-verification-code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required>
+      <p id="email-verification-confirm-error" class="form-error" role="alert"></p>
+      <button class="primary-action" type="submit">完成验证并领取额度</button>
     </form>
   </dialog>
 

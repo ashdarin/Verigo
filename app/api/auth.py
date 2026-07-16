@@ -3,6 +3,12 @@ from __future__ import annotations
 import re
 import threading
 import time
+import hashlib
+import hmac
+import json
+from urllib.error import URLError
+from urllib.parse import urlencode
+from urllib.request import Request as UrlRequest, urlopen
 from collections import defaultdict, deque
 from typing import Annotated
 
@@ -34,11 +40,13 @@ class Credentials(BaseModel):
         value = value.strip().lower()
         if not EMAIL_PATTERN.fullmatch(value):
             raise ValueError("请输入有效的邮箱地址")
+        if value.rsplit("@", 1)[1] in settings.blocked_email_domains:
+            raise ValueError("不支持使用临时邮箱注册")
         return value
 
 
 class RegistrationCredentials(Credentials):
-    pass
+    turnstile_token: str | None = Field(default=None, max_length=2048)
 
 
 class LoginCredentials(BaseModel):
@@ -119,6 +127,45 @@ class AttemptLimiter:
 attempt_limiter = AttemptLimiter()
 
 
+def request_network_hash(request: Request) -> str:
+    forwarded_for = request.headers.get("x-forwarded-for", "")
+    client_host = forwarded_for.split(",", 1)[0].strip() or (
+        request.client.host if request.client else "unknown"
+    )
+    secret = settings.metrics_salt or "verigo-network-limit-unconfigured"
+    return hmac.new(
+        secret.encode("utf-8"), client_host.encode("utf-8"), hashlib.sha256
+    ).hexdigest()
+
+
+def verify_turnstile(token: str | None, request: Request) -> None:
+    if not settings.turnstile_secret_key:
+        return
+    if not token:
+        raise HTTPException(status_code=403, detail="请先完成人机验证")
+    payload = urlencode(
+        {
+            "secret": settings.turnstile_secret_key,
+            "response": token,
+            "remoteip": request.client.host if request.client else "",
+        }
+    ).encode("utf-8")
+    try:
+        with urlopen(
+            UrlRequest(
+                "https://challenges.cloudflare.com/turnstile/v0/siteverify",
+                data=payload,
+                method="POST",
+            ),
+            timeout=5,
+        ) as response:
+            result = json.loads(response.read())
+    except (URLError, TimeoutError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=503, detail="人机验证服务暂时不可用") from exc
+    if not result.get("success"):
+        raise HTTPException(status_code=403, detail="人机验证未通过，请重试")
+
+
 def serialize_user(user: User) -> UserResponse:
     return UserResponse(
         id=user.id,
@@ -174,7 +221,10 @@ def set_session_cookie(response: Response, token: str) -> None:
 
 @auth_router.post("/register", response_model=UserResponse, status_code=201)
 def register(payload: RegistrationCredentials, request: Request, response: Response) -> UserResponse:
-    attempt_limiter.check(f"register:{request.client.host if request.client else 'unknown'}")
+    attempt_limiter.check(
+        f"register:{request_network_hash(request)}", limit=5, window=3600
+    )
+    verify_turnstile(payload.turnstile_token, request)
     try:
         user = auth_store.create_user(payload.email, payload.password)
     except ValueError as exc:
@@ -194,9 +244,13 @@ def login(payload: LoginCredentials, request: Request, response: Response) -> Us
 
 
 @auth_router.post("/email-verification/request", status_code=204)
-def request_email_verification(user: Annotated[User, Depends(require_user)]) -> None:
+def request_email_verification(
+    request: Request, user: Annotated[User, Depends(require_user)]
+) -> None:
     if not user.email:
         raise HTTPException(status_code=409, detail="旧账号尚未绑定邮箱，请联系管理员")
+    attempt_limiter.check(f"verify-email:{user.id}", limit=3, window=900)
+    attempt_limiter.check(f"verify-email-network:{request_network_hash(request)}", limit=12, window=900)
     try:
         code = auth_store.create_email_verification(user.id)
         send_email_verification(user.email, code)
@@ -208,10 +262,14 @@ def request_email_verification(user: Annotated[User, Depends(require_user)]) -> 
 
 @auth_router.post("/email-verification/confirm", response_model=UserResponse)
 def confirm_email_verification(
-    payload: VerificationCode, user: Annotated[User, Depends(require_user)]
+    payload: VerificationCode,
+    request: Request,
+    user: Annotated[User, Depends(require_user)],
 ) -> UserResponse:
     try:
-        verified = auth_store.confirm_email_verification(user.id, payload.code)
+        verified = auth_store.confirm_email_verification(
+            user.id, payload.code, request_network_hash(request)
+        )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return serialize_user(verified)
@@ -278,3 +336,8 @@ def logout(
 @auth_router.get("/me", response_model=UserResponse | None)
 def me(user: Annotated[User | None, Depends(optional_user)]) -> UserResponse | None:
     return serialize_user(user) if user else None
+
+
+@auth_router.get("/public-config")
+def public_config() -> dict[str, str]:
+    return {"turnstile_site_key": settings.turnstile_site_key}

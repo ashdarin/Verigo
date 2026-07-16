@@ -18,6 +18,7 @@ os.environ["VERIGO_FREE_SINGLE_DAILY_LIMIT"] = "2"
 os.environ["VERIGO_EMAIL_VERIFICATION_TRIAL_CREDITS"] = "10"
 os.environ["VERIGO_TRIAL_CREDIT_DAYS"] = "7"
 os.environ["VERIGO_MAX_PENDING_JOBS"] = "50"
+os.environ["VERIGO_TRIAL_NETWORK_LIMIT"] = "2"
 os.environ["VERIGO_ADMIN_EMAILS"] = "admin@example.com"
 os.environ["VERIGO_METRICS_SALT"] = "smoke-test-metrics-salt"
 
@@ -108,6 +109,10 @@ with TestClient(app) as account:
     assert account.get("/api/auth/me").json()["email"] == "smoke@example.com"
     assert account.get("/api/admin/metrics").status_code == 403
     assert account.post(
+        "/api/auth/register",
+        json={"email": "blocked@mailinator.com", "password": "correct-horse-2026"},
+    ).status_code == 422
+    assert account.post(
         "/api/verify/single", json={"email": "first@example.com"}
     ).status_code == 403
 
@@ -182,6 +187,18 @@ with TestClient(app) as admin_account:
     assert metrics.status_code == 200, metrics.text
     assert metrics.json()["today"]["page_views"] >= 1
     assert len(metrics.json()["daily"]) == 7
+
+
+for number in range(3):
+    network_user = auth_store.create_user(
+        f"network-{number}@example.com", "correct-horse-2026"
+    )
+    network_code = auth_store.create_email_verification(network_user.id)
+    network_verified = auth_store.confirm_email_verification(
+        network_user.id, network_code, network_hash="shared-network-test"
+    )
+    assert network_verified.email_verified is True
+    assert network_verified.trial_credits == (10 if number < 2 else 0)
 
 
 legacy_id = "legacy-smoke-user"

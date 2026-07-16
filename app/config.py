@@ -27,6 +27,21 @@ class Settings:
         os.getenv("VERIGO_EMAIL_VERIFICATION_TRIAL_CREDITS", "10")
     )
     trial_credit_days: int = int(os.getenv("VERIGO_TRIAL_CREDIT_DAYS", "7"))
+    trial_network_limit: int = int(os.getenv("VERIGO_TRIAL_NETWORK_LIMIT", "2"))
+    trial_network_window_days: int = int(
+        os.getenv("VERIGO_TRIAL_NETWORK_WINDOW_DAYS", "7")
+    )
+    blocked_email_domains: frozenset[str] = frozenset(
+        domain.strip().lower()
+        for domain in os.getenv(
+            "VERIGO_BLOCKED_EMAIL_DOMAINS",
+            "mailinator.com,yopmail.com,guerrillamail.com,guerrillamail.info,"
+            "tempmail.com,temp-mail.org,10minutemail.com,getnada.com,dispostable.com",
+        ).split(",")
+        if domain.strip()
+    )
+    turnstile_site_key: str = os.getenv("VERIGO_TURNSTILE_SITE_KEY", "")
+    turnstile_secret_key: str = os.getenv("VERIGO_TURNSTILE_SECRET_KEY", "")
     admin_emails: frozenset[str] = frozenset(
         email.strip().lower()
         for email in os.getenv("VERIGO_ADMIN_EMAILS", "").split(",")

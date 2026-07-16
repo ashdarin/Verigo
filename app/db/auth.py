@@ -189,6 +189,19 @@ class AuthStore:
                     )
                     """
                 )
+                connection.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS trial_network_grants (
+                        user_id TEXT PRIMARY KEY,
+                        network_hash TEXT NOT NULL,
+                        created_at TEXT NOT NULL,
+                        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+                    )
+                    """
+                )
+                connection.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_trial_network_grants ON trial_network_grants(network_hash, created_at)"
+                )
                 connection.execute("DELETE FROM sessions WHERE expires_at <= ?", (utc_now().isoformat(),))
                 connection.execute("DELETE FROM password_resets WHERE expires_at <= ?", (utc_now().isoformat(),))
                 connection.execute("DELETE FROM email_bindings WHERE expires_at <= ?", (utc_now().isoformat(),))
@@ -383,7 +396,9 @@ class AuthStore:
             connection.commit()
             return self._user_from_row(connection, row)
 
-    def confirm_email_verification(self, user_id: str, code: str) -> User:
+    def confirm_email_verification(
+        self, user_id: str, code: str, network_hash: str | None = None
+    ) -> User:
         self.initialize()
         now = utc_now()
         with closing(self._connect()) as connection:
@@ -403,7 +418,21 @@ class AuthStore:
                 connection.rollback()
                 raise ValueError("账号不存在")
             connection.execute("UPDATE users SET email_verified=1 WHERE id=?", (user_id,))
-            if not was_verified[0]:
+            grant_trial = not was_verified[0]
+            if grant_trial and network_hash:
+                window_start = (now - timedelta(days=settings.trial_network_window_days)).isoformat()
+                grants_in_window = connection.execute(
+                    "SELECT COUNT(*) FROM trial_network_grants WHERE network_hash=? AND created_at >= ?",
+                    (network_hash, window_start),
+                ).fetchone()[0]
+                if grants_in_window >= settings.trial_network_limit:
+                    grant_trial = False
+                else:
+                    connection.execute(
+                        "INSERT OR IGNORE INTO trial_network_grants(user_id, network_hash, created_at) VALUES (?, ?, ?)",
+                        (user_id, network_hash, now_value),
+                    )
+            if grant_trial:
                 reference = f"email-verified-trial:{user_id}"
                 expires_at = now + timedelta(days=settings.trial_credit_days)
                 inserted = connection.execute(

@@ -149,8 +149,10 @@ th:nth-child(1) { width: 24%; } th:nth-child(2) { width: 12%; } th:nth-child(3) 
 .auth-tabs { margin-top: 20px; }
 .auth-dialog input { margin-bottom: 16px; }
 .auth-dialog .primary-action { margin-top: 5px; }
+.dialog-copy { margin: 12px 0 18px; color: var(--muted); line-height: 1.55; }
 .text-action { display: block; margin: -7px 0 13px; padding: 0; border: 0; background: transparent; color: var(--accent); font-size: 12px; font-weight: 700; }
 .text-action:hover { color: var(--accent-dark); text-decoration: underline; }
+.turnstile-container { min-height: 65px; margin: 2px 0 14px; }
 
 .discovery-workspace { min-height: calc(100vh - 72px); max-width: 1640px; margin: 0 auto; display: grid; grid-template-columns: minmax(320px, 430px) minmax(0, 1fr); background: var(--paper); box-shadow: var(--shadow); }
 .discovery-form-area { padding: 30px 28px; border-right: 1px solid var(--line); background: #fafcfb; }

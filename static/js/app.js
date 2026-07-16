@@ -13,6 +13,8 @@ const state = {
   downloadName: null,
   discovery: { jobId: null, candidates: [], results: [] },
   metricsTimer: null,
+  turnstileSiteKey: "",
+  turnstileWidgetId: null,
 };
 
 const pageSize = 50;
@@ -672,19 +674,55 @@ el("logout-button").addEventListener("click", async () => {
   state.user = null;
   updateAccount();
 });
-async function claimTrialCredits() {
-  try {
-    await api("/api/auth/email-verification/request", { method: "POST" });
-    const code = window.prompt("请输入邮件中的六位验证码");
-    if (!code) return;
-    state.user = await api("/api/auth/email-verification/confirm", {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code }),
-    });
-    updateAccount();
-  } catch (error) { errorBox.textContent = error.message; }
+function claimTrialCredits() {
+  el("email-verification-request-form").classList.remove("hidden");
+  el("email-verification-confirm-form").classList.add("hidden");
+  el("email-verification-error").textContent = "";
+  el("email-verification-confirm-error").textContent = "";
+  el("email-verification-code").value = "";
+  el("email-verification-dialog").showModal();
 }
 
 el("claim-trial-button").addEventListener("click", claimTrialCredits);
+el("close-email-verification").addEventListener("click", () => el("email-verification-dialog").close());
+document.querySelectorAll("[data-close-email-verification]").forEach((button) => {
+  button.addEventListener("click", () => el("email-verification-dialog").close());
+});
+el("email-verification-request-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const submit = event.currentTarget.querySelector("button[type='submit']");
+  submit.disabled = true;
+  el("email-verification-error").textContent = "";
+  try {
+    await api("/api/auth/email-verification/request", { method: "POST" });
+    el("email-verification-request-form").classList.add("hidden");
+    el("email-verification-confirm-form").classList.remove("hidden");
+    el("email-verification-code").focus();
+  } catch (error) {
+    el("email-verification-error").textContent = error.message;
+  } finally {
+    submit.disabled = false;
+  }
+});
+el("email-verification-confirm-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const submit = event.currentTarget.querySelector("button[type='submit']");
+  submit.disabled = true;
+  el("email-verification-confirm-error").textContent = "";
+  try {
+    state.user = await api("/api/auth/email-verification/confirm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code: el("email-verification-code").value }),
+    });
+    el("email-verification-dialog").close();
+    updateAccount();
+  } catch (error) {
+    el("email-verification-confirm-error").textContent = error.message;
+  } finally {
+    submit.disabled = false;
+  }
+});
 
 function openBindEmailDialog() {
   el("account-menu").classList.add("hidden");
@@ -735,8 +773,37 @@ function setAuthMode(mode) {
   el("auth-email").type = mode === "login" ? "text" : "email";
   el("auth-email").autocomplete = mode === "login" ? "username" : "email";
   el("auth-password").autocomplete = mode === "login" ? "current-password" : "new-password";
+  el("turnstile-container").classList.toggle("hidden", mode !== "register" || !state.turnstileSiteKey);
+  if (mode === "register") renderTurnstile();
   document.querySelectorAll("[data-auth-mode]").forEach((button) => button.classList.toggle("active", button.dataset.authMode === mode));
   el("auth-error").textContent = "";
+}
+
+function renderTurnstile() {
+  if (!state.turnstileSiteKey || !window.turnstile || state.turnstileWidgetId !== null) return;
+  state.turnstileWidgetId = window.turnstile.render("#turnstile-widget", {
+    sitekey: state.turnstileSiteKey,
+    theme: "light",
+  });
+}
+
+async function loadPublicConfig() {
+  try {
+    const config = await api("/api/auth/public-config");
+    state.turnstileSiteKey = config.turnstile_site_key || "";
+    if (!state.turnstileSiteKey) return;
+    const script = document.createElement("script");
+    script.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
+    script.async = true;
+    script.defer = true;
+    script.addEventListener("load", () => {
+      el("turnstile-container").classList.toggle("hidden", state.authMode !== "register");
+      renderTurnstile();
+    });
+    document.head.append(script);
+  } catch (_) {
+    state.turnstileSiteKey = "";
+  }
 }
 
 document.querySelectorAll("[data-auth-mode]").forEach((button) => button.addEventListener("click", () => setAuthMode(button.dataset.authMode)));
@@ -753,6 +820,9 @@ el("auth-form").addEventListener("submit", async (event) => {
       body: JSON.stringify({
         [state.authMode === "login" ? "account" : "email"]: el("auth-email").value,
         password: el("auth-password").value,
+        ...(state.authMode === "register" && state.turnstileSiteKey ? {
+          turnstile_token: window.turnstile?.getResponse(state.turnstileWidgetId) || "",
+        } : {}),
       }),
     });
     el("auth-dialog").close();
@@ -807,6 +877,7 @@ el("refresh-jobs").addEventListener("click", loadRecentJobs);
   setAuthMode(state.authMode);
   updateCount();
   await loadAccount();
+  await loadPublicConfig();
   if (window.location.pathname === "/dashboard") {
     if (state.user?.is_admin) {
       switchView("dashboard");
