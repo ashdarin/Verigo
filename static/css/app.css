@@ -75,6 +75,9 @@ textarea:focus, input:focus, select:focus { border-color: var(--accent); box-sha
 .primary-action { width: 100%; min-height: 44px; border: 0; border-radius: 6px; background: var(--accent); color: #fff; font-weight: 750; }
 .primary-action:hover { background: var(--accent-dark); }
 .primary-action:disabled { background: #99a7a1; cursor: not-allowed; }
+.secondary-action { width: 100%; min-height: 42px; border: 1px solid var(--line-strong); border-radius: 6px; background: #fff; color: var(--ink); font-weight: 750; }
+.secondary-action:hover:not(:disabled) { border-color: var(--accent); color: var(--accent-dark); }
+.secondary-action:disabled { color: var(--muted); background: var(--soft); cursor: not-allowed; }
 .form-error { min-height: 20px; margin: 8px 0 0; color: var(--bad); font-size: 12px; }
 
 .recent-block { margin-top: 22px; padding-top: 19px; border-top: 1px solid var(--line); }
@@ -156,7 +159,7 @@ th:nth-child(1) { width: 24%; } th:nth-child(2) { width: 12%; } th:nth-child(3) 
 .discovery-stop input { width: 16px; height: 16px; margin: 0; accent-color: var(--accent); }
 .discovery-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .discovery-fields label { min-width: 0; }
-.discovery-form-area .primary-action { margin-top: 22px; }
+.discovery-actions { display: grid; gap: 8px; margin-top: 22px; }
 .candidate-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--line); }
 .candidate-list span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; padding: 5px 7px; border: 1px solid var(--line); border-radius: 4px; background: #fff; color: var(--muted); font-size: 11px; }
 .discovery-results-area { min-width: 0; padding: 30px 34px; }

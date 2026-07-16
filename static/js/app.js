@@ -10,7 +10,7 @@ const state = {
   resultsAvailable: 0,
   page: 0,
   downloadName: null,
-  discovery: { jobId: null, results: [] },
+  discovery: { jobId: null, candidates: [], results: [] },
 };
 
 const pageSize = 50;
@@ -37,7 +37,15 @@ function currentEmails() {
 }
 
 function updateCount() {
-  count.textContent = currentEmails().length.toLocaleString();
+  const total = currentEmails().length;
+  count.textContent = total.toLocaleString();
+  if (state.mode === "paste" && total === 1) {
+    startButton.textContent = "免费验证";
+  } else if (total > 0) {
+    startButton.textContent = `开始验证 · ${total.toLocaleString()} 额度`;
+  } else {
+    startButton.textContent = "开始验证";
+  }
 }
 
 function jobHeaders(extra = {}) {
@@ -138,10 +146,13 @@ startButton.addEventListener("click", async () => {
   try {
     state.guestToken = null;
     const workerCount = Number(document.querySelector('input[name="speed"]:checked').value);
-    const job = await api("/api/jobs", {
+    const isFreeSingle = state.mode === "paste" && emails.length === 1;
+    const job = await api(isFreeSingle ? "/api/verify/single" : "/api/jobs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ emails, worker_count: workerCount }),
+      body: JSON.stringify(isFreeSingle
+        ? { email: emails[0] }
+        : { emails, worker_count: workerCount }),
     });
     state.jobId = job.id;
     state.guestToken = job.access_token || null;
@@ -153,13 +164,13 @@ startButton.addEventListener("click", async () => {
     state.page = 0;
     showJob(job);
     renderResults();
-    if (state.user) await loadRecentJobs();
+    if (state.user) await loadAccount();
     schedulePoll(400);
   } catch (error) {
     errorBox.textContent = error.message;
   } finally {
     startButton.disabled = false;
-    startButton.textContent = "开始验证";
+    updateCount();
   }
 });
 
@@ -331,10 +342,22 @@ function renderDiscoveryResults() {
   const body = el("discovery-results-body");
   body.replaceChildren();
   if (!state.discovery.results.length) {
-    const row = document.createElement("tr");
-    row.className = "empty-row";
-    row.innerHTML = '<td colspan="4">正在生成验证结果</td>';
-    body.append(row);
+    if (state.discovery.candidates.length && !state.discovery.jobId) {
+      state.discovery.candidates.forEach((email) => {
+        const row = document.createElement("tr");
+        [email, "未验证", "-", "-"].forEach((value) => {
+          const cell = document.createElement("td");
+          cell.textContent = value;
+          row.append(cell);
+        });
+        body.append(row);
+      });
+    } else {
+      const row = document.createElement("tr");
+      row.className = "empty-row";
+      row.innerHTML = '<td colspan="4">正在生成验证结果</td>';
+      body.append(row);
+    }
     return;
   }
   state.discovery.results.forEach((item) => {
@@ -424,32 +447,64 @@ el("discovery-start").addEventListener("click", async () => {
         domain: el("discovery-domain").value,
       }),
     });
+    state.discovery.jobId = null;
+    state.discovery.candidates = candidates.candidates;
+    state.discovery.results = [];
     const list = el("discovery-candidates");
-    list.replaceChildren(...candidates.candidates.map((email) => {
+    list.replaceChildren(...state.discovery.candidates.map((email) => {
       const tag = document.createElement("span");
       tag.textContent = email;
       return tag;
     }));
     list.classList.remove("hidden");
+    const verifyButton = el("discovery-verify");
+    verifyButton.disabled = false;
+    verifyButton.textContent = `验证候选邮箱 · ${state.discovery.candidates.length} 额度`;
+    el("discovery-title").textContent = `${state.discovery.candidates.length} 个候选邮箱`;
+    el("discovery-status").textContent = "已找到";
+    el("discovery-status").className = "status status-completed";
+    el("discovery-progress-percent").textContent = "0%";
+    el("discovery-progress-bar").style.width = "0%";
+    el("discovery-progress-copy").textContent = "等待验证";
+    el("discovery-verdict").className = "discovery-verdict";
+    el("discovery-verdict").textContent = `已生成 ${state.discovery.candidates.length} 个候选地址`;
+    renderDiscoveryResults();
+  } catch (requestError) {
+    error.textContent = requestError.message;
+  } finally {
+    button.disabled = false;
+  }
+});
+
+el("discovery-verify").addEventListener("click", async () => {
+  const error = el("discovery-error");
+  const button = el("discovery-verify");
+  error.textContent = "";
+  if (!state.discovery.candidates.length) return;
+  button.disabled = true;
+  let submitted = false;
+  try {
     const job = await api("/api/jobs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        emails: candidates.candidates,
+        emails: state.discovery.candidates,
         worker_count: 4,
         stop_on_deliverable: el("discovery-stop-on-match").checked,
       }),
     });
     state.discovery.jobId = job.id;
+    submitted = true;
     state.discovery.results = [];
     renderDiscoveryResults();
     showDiscoveryJob(job);
     updateDiscoveryVerdict(job);
+    await loadAccount();
     pollDiscovery();
   } catch (requestError) {
     error.textContent = requestError.message;
   } finally {
-    button.disabled = false;
+    button.disabled = submitted || !state.discovery.candidates.length;
   }
 });
 

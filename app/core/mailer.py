@@ -10,6 +10,10 @@ class MailNotConfiguredError(RuntimeError):
     pass
 
 
+class MailDeliveryError(RuntimeError):
+    pass
+
+
 def send_password_reset_email(recipient: str, code: str) -> None:
     _send_code(recipient, code, "重置密码")
 
@@ -29,8 +33,11 @@ def _send_code(recipient: str, code: str, purpose: str) -> None:
         f"验证码：{code}\n\n"
         f"{settings.password_reset_minutes} 分钟内有效。若不是你本人操作，请忽略此邮件。"
     )
-    with smtplib.SMTP(settings.mail_host, settings.mail_port, timeout=15) as server:
-        if settings.mail_starttls:
-            server.starttls()
-        server.login(settings.mail_username, settings.mail_password)
-        server.send_message(message)
+    try:
+        with smtplib.SMTP(settings.mail_host, settings.mail_port, timeout=15) as server:
+            if settings.mail_starttls:
+                server.starttls()
+            server.login(settings.mail_username, settings.mail_password)
+            server.send_message(message)
+    except (OSError, smtplib.SMTPException) as exc:
+        raise MailDeliveryError("邮件暂时无法发送") from exc

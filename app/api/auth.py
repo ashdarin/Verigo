@@ -10,7 +10,12 @@ from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field, field_validator
 
 from app.config import settings
-from app.core.mailer import MailNotConfiguredError, send_email_verification, send_password_reset_email
+from app.core.mailer import (
+    MailDeliveryError,
+    MailNotConfiguredError,
+    send_email_verification,
+    send_password_reset_email,
+)
 from app.db.auth import User, auth_store
 
 
@@ -129,11 +134,15 @@ def login(payload: Credentials, request: Request, response: Response) -> UserRes
 
 @auth_router.post("/email-verification/request", status_code=204)
 def request_email_verification(user: Annotated[User, Depends(require_user)]) -> None:
+    if not user.email:
+        raise HTTPException(status_code=409, detail="旧账号尚未绑定邮箱，请联系管理员")
     try:
         code = auth_store.create_email_verification(user.id)
-        send_email_verification(user.email or "", code)
+        send_email_verification(user.email, code)
     except MailNotConfiguredError as exc:
         raise HTTPException(status_code=503, detail="验证邮件服务尚未配置") from exc
+    except MailDeliveryError as exc:
+        raise HTTPException(status_code=503, detail="验证邮件暂时无法发送") from exc
 
 
 @auth_router.post("/email-verification/confirm", response_model=UserResponse)
@@ -156,7 +165,7 @@ def request_password_reset(payload: PasswordResetRequest, request: Request) -> N
             send_password_reset_email(payload.email, code)
     except MailNotConfiguredError as exc:
         raise HTTPException(status_code=503, detail="找回密码邮件服务尚未配置") from exc
-    except Exception as exc:
+    except MailDeliveryError as exc:
         raise HTTPException(status_code=503, detail="找回密码邮件暂时无法发送") from exc
 
 

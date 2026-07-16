@@ -8,6 +8,7 @@ import uuid
 from contextlib import closing
 from dataclasses import dataclass
 from datetime import timedelta
+from zoneinfo import ZoneInfo
 
 from app.config import settings
 from app.core.security import hash_password, new_token, token_hash, verify_password
@@ -22,6 +23,14 @@ class User:
     created_at: str
     email_verified: bool = False
     credits: int = 0
+
+
+class FreeUsageLimitError(ValueError):
+    pass
+
+
+def usage_period() -> str:
+    return utc_now().astimezone(ZoneInfo("Asia/Shanghai")).date().isoformat()
 
 
 class AuthStore:
@@ -108,6 +117,19 @@ class AuthStore:
                         expires_at TEXT NOT NULL,
                         attempts INTEGER NOT NULL DEFAULT 0,
                         created_at TEXT NOT NULL,
+                        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+                    )
+                    """
+                )
+                connection.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS free_usage (
+                        user_id TEXT NOT NULL,
+                        kind TEXT NOT NULL,
+                        period TEXT NOT NULL,
+                        count INTEGER NOT NULL DEFAULT 0,
+                        updated_at TEXT NOT NULL,
+                        PRIMARY KEY(user_id, kind, period),
                         FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
                     )
                     """
@@ -214,6 +236,80 @@ class AuthStore:
             connection.execute("UPDATE users SET credits=credits-? WHERE id=?", (amount, user_id))
             connection.commit()
             return row[1] - amount
+
+    def refund_credits(self, user_id: str, amount: int, reference: str) -> None:
+        """Refund a failed submission once, keyed by its original ledger reference."""
+        self.initialize()
+        now = utc_now().isoformat()
+        with closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            charged = connection.execute(
+                "SELECT 1 FROM credit_ledger WHERE user_id=? AND reference=? AND delta=?",
+                (user_id, reference, -amount),
+            ).fetchone()
+            refund_reference = f"refund:{reference}"
+            inserted = 0
+            if charged:
+                inserted = connection.execute(
+                    """
+                    INSERT OR IGNORE INTO credit_ledger(user_id, delta, kind, reference, created_at)
+                    VALUES (?, ?, 'verification_refund', ?, ?)
+                    """,
+                    (user_id, amount, refund_reference, now),
+                ).rowcount
+            if inserted:
+                connection.execute(
+                    "UPDATE users SET credits=credits+? WHERE id=?", (amount, user_id)
+                )
+            connection.commit()
+
+    def reserve_free_usage(self, user_id: str, kind: str, limit: int) -> int:
+        """Atomically reserve one daily free use and return the remaining allowance."""
+        self.initialize()
+        if limit < 1:
+            raise FreeUsageLimitError("今日免费单邮箱验证次数已用完")
+        now = utc_now()
+        period = usage_period()
+        with closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT email_verified FROM users WHERE id=?", (user_id,)
+            ).fetchone()
+            if row is None or not row[0]:
+                connection.rollback()
+                raise ValueError("请先验证注册邮箱")
+            usage = connection.execute(
+                "SELECT count FROM free_usage WHERE user_id=? AND kind=? AND period=?",
+                (user_id, kind, period),
+            ).fetchone()
+            current = int(usage[0]) if usage else 0
+            if current >= limit:
+                connection.rollback()
+                raise FreeUsageLimitError("今日免费单邮箱验证次数已用完")
+            connection.execute(
+                """
+                INSERT INTO free_usage(user_id, kind, period, count, updated_at)
+                VALUES (?, ?, ?, 1, ?)
+                ON CONFLICT(user_id, kind, period) DO UPDATE SET
+                    count=free_usage.count+1, updated_at=excluded.updated_at
+                """,
+                (user_id, kind, period, now.isoformat()),
+            )
+            connection.commit()
+        return limit - current - 1
+
+    def release_free_usage(self, user_id: str, kind: str) -> None:
+        """Release a reservation when the corresponding job could not be queued."""
+        self.initialize()
+        period = usage_period()
+        with closing(self._connect()) as connection:
+            connection.execute(
+                """
+                UPDATE free_usage SET count=MAX(count-1, 0), updated_at=?
+                WHERE user_id=? AND kind=? AND period=?
+                """,
+                (utc_now().isoformat(), user_id, kind, period),
+            )
 
     def create_payment_order(self, user_id: str, packages: int) -> dict[str, int | str]:
         if packages < 1 or packages > 1000: raise ValueError("充值数量无效")

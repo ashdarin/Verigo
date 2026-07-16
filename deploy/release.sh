@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-release_dir=/tmp/verigo-release
+release_dir=${VERIGO_RELEASE_DIR:-/tmp/verigo-release}
 app_dir=/opt/verigo
-backup_dir=/opt/verigo-backup-pre-auth
+backup_dir=/opt/verigo-backup-current
 
 rollback() {
     echo "Release failed; restoring previous application files" >&2
@@ -15,10 +15,17 @@ rollback() {
     chown -R verigo:verigo "$app_dir"
     systemctl start verigo
 }
-trap rollback ERR
-
 test -f "$release_dir/app/main.py"
 test -f "$release_dir/验证8.py"
+
+mkdir -p "$backup_dir"
+rsync -a --delete "$app_dir/app/" "$backup_dir/app/"
+rsync -a --delete "$app_dir/static/" "$backup_dir/static/"
+rsync -a --delete "$app_dir/deploy/" "$backup_dir/deploy/"
+cp "$app_dir/requirements.txt" "$backup_dir/requirements.txt"
+cp "$app_dir/验证8.py" "$backup_dir/验证8.py"
+
+trap rollback ERR
 
 systemctl stop verigo
 rsync -a --delete --exclude='__pycache__' "$release_dir/app/" "$app_dir/app/"
@@ -29,6 +36,7 @@ cp "$release_dir/验证8.py" "$app_dir/验证8.py"
 
 for setting in \
     'VERIGO_MAX_GUEST_EMAILS=100' \
+    'VERIGO_FREE_SINGLE_DAILY_LIMIT=10' \
     'VERIGO_MAX_IMPORT_BYTES=5242880' \
     'VERIGO_SESSION_TTL_DAYS=30' \
     'VERIGO_SECURE_COOKIES=true'

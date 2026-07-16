@@ -18,12 +18,13 @@ from app.api.schemas import (
     PaymentOrderRequest,
     PaymentOrderResponse,
     ResultsResponse,
+    SingleVerificationRequest,
 )
 from app.config import settings
 from app.core.imports import extract_emails
 from app.core.discovery import candidate_emails
 from app.core.security import token_hash
-from app.db.auth import User, auth_store
+from app.db.auth import FreeUsageLimitError, User, auth_store
 from app.db.jobs import Job, job_store
 from app.tasks.verification import (
     clean_emails,
@@ -111,8 +112,9 @@ def create_job(
     if len(emails) > job_limit:
         raise HTTPException(status_code=422, detail=f"单次最多 {job_limit} 个邮箱")
     job_id = uuid.uuid4().hex[:12]
+    charge_reference = f"verification:{job_id}"
     try:
-        auth_store.consume_credits(user.id, len(emails), f"verification:{job_id}")
+        auth_store.consume_credits(user.id, len(emails), charge_reference)
         job = verification_tasks.submit(
             emails,
             payload.worker_count,
@@ -120,7 +122,42 @@ def create_job(
             stop_on_deliverable=payload.stop_on_deliverable,
             job_id=job_id,
         )
-    except (RuntimeError, ValueError) as exc:
+    except RuntimeError as exc:
+        auth_store.refund_credits(user.id, len(emails), charge_reference)
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return serialize_job(job)
+
+
+@router.post("/verify/single", response_model=JobResponse, status_code=202)
+def verify_single_email(
+    payload: SingleVerificationRequest,
+    user: Annotated[User, Depends(require_user)],
+) -> JobResponse:
+    emails = clean_emails([payload.email])
+    if len(emails) != 1:
+        raise HTTPException(status_code=422, detail="请输入有效的邮箱地址")
+    if not user.email_verified:
+        raise HTTPException(status_code=403, detail="请先验证注册邮箱")
+
+    usage_kind = "single_verification"
+    try:
+        auth_store.reserve_free_usage(
+            user.id, usage_kind, settings.free_single_daily_limit
+        )
+        job = verification_tasks.submit(
+            emails,
+            worker_count=1,
+            owner_id=user.id,
+            job_id=uuid.uuid4().hex[:12],
+        )
+    except FreeUsageLimitError as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        auth_store.release_free_usage(user.id, usage_kind)
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return serialize_job(job)
 

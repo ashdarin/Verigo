@@ -41,7 +41,7 @@
       </div>
 
       <div class="segmented" role="tablist" aria-label="输入方式">
-        <button class="segment active" data-mode="paste" role="tab" aria-selected="true">批量输入</button>
+        <button class="segment active" data-mode="paste" role="tab" aria-selected="true">手动输入</button>
         <button class="segment" data-mode="file" role="tab" aria-selected="false">文件导入</button>
       </div>
 
@@ -148,7 +148,10 @@
       </div>
       <label for="discovery-domain">公司域名<input id="discovery-domain" inputmode="url" placeholder="company.com"></label>
       <label class="discovery-stop"><input id="discovery-stop-on-match" type="checkbox" checked><span>找到可投递邮箱后停止后续验证</span></label>
-      <button id="discovery-start" class="primary-action" type="button">查找并验证</button>
+      <div class="discovery-actions">
+        <button id="discovery-start" class="primary-action" type="button">查找邮箱</button>
+        <button id="discovery-verify" class="secondary-action" type="button" disabled>验证候选邮箱</button>
+      </div>
       <p id="discovery-error" class="form-error" role="alert"></p>
       <div id="discovery-candidates" class="candidate-list hidden"></div>
     </section>

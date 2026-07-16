@@ -39,11 +39,11 @@ async function checkAccountAndImport(browser) {
   await page.goto("http://127.0.0.1:8000", { waitUntil: "networkidle" });
   await page.click("#account-button");
   await page.click('[data-auth-mode="register"]');
-  const username = `ui_${Date.now()}`;
-  await page.fill("#auth-username", username);
+  const email = `ui_${Date.now()}@example.com`;
+  await page.fill("#auth-email", email);
   await page.fill("#auth-password", "browser-smoke-2026");
   await page.click("#auth-submit");
-  await page.waitForFunction((value) => document.querySelector("#account-button")?.textContent === value, username);
+  await page.waitForFunction((value) => document.querySelector("#account-button")?.textContent === value, email);
   if (await page.locator("#recent-block").evaluate((node) => node.classList.contains("hidden"))) {
     throw new Error("account: recent jobs should be visible after login");
   }
@@ -55,8 +55,32 @@ async function checkAccountAndImport(browser) {
     buffer: Buffer.from("name,email\nA,first@example.com\nB,second@example.cn"),
   });
   await page.waitForFunction(() => document.querySelector("#email-count")?.textContent === "2");
+  if (!(await page.textContent("#start-button")).includes("2 额度")) {
+    throw new Error("pricing: imported addresses must use paid verification");
+  }
+  await page.click('[data-mode="paste"]');
+  await page.fill("#email-input", "single@example.com");
+  if ((await page.textContent("#start-button")) !== "免费验证") {
+    throw new Error("pricing: one manually entered address should be free");
+  }
+  await page.fill("#email-input", "one@example.com\ntwo@example.com");
+  if (!(await page.textContent("#start-button")).includes("2 额度")) {
+    throw new Error("pricing: multiple manually entered addresses must be paid");
+  }
+  await page.click('[data-view="discovery"]');
+  await page.fill("#discovery-first-name", "Ming");
+  await page.fill("#discovery-last-name", "Wang");
+  await page.fill("#discovery-domain", "example.com");
+  await page.click("#discovery-start");
+  await page.waitForFunction(() => document.querySelectorAll("#discovery-candidates span").length > 0);
+  if (await page.isDisabled("#discovery-verify")) {
+    throw new Error("discovery: candidate verification should be available after free lookup");
+  }
+  if (!(await page.textContent("#discovery-verify")).includes("额度")) {
+    throw new Error("discovery: paid candidate verification must show its credit cost");
+  }
   await page.close();
-  return { account: true, importCount: 2 };
+  return { account: true, importCount: 2, discovery: true };
 }
 
 (async () => {
