@@ -34,11 +34,12 @@ button { cursor: pointer; }
 .state-dot { width: 7px; height: 7px; border-radius: 50%; background: #72d8a5; box-shadow: 0 0 0 3px rgba(114,216,165,.16); }
 .account-button { min-height: 36px; padding: 0 14px; border: 1px solid #50685d; border-radius: 5px; background: #1d382e; color: #fff; font-weight: 700; }
 .account-button:hover { border-color: #8cae9e; background: #28483b; }
+.claim-trial { min-height: 36px; padding: 0 12px; border: 1px solid #d9f267; border-radius: 5px; background: var(--lime); color: #163126; font-size: 12px; font-weight: 800; }
+.claim-trial:hover { background: #eff9b9; }
 .account-menu { position: absolute; z-index: 20; top: 43px; right: 0; min-width: 180px; padding: 8px; border: 1px solid var(--line); border-radius: 6px; background: #fff; box-shadow: var(--shadow); color: var(--ink); }
 .account-menu strong { display: block; padding: 8px 9px; overflow: hidden; text-overflow: ellipsis; }
 .account-credits { display: block; padding: 0 9px 8px; color: var(--accent); font-weight: 750; }
 .account-menu button { width: 100%; padding: 8px 9px; border: 0; border-radius: 4px; background: transparent; color: var(--bad); text-align: left; }
-.account-menu #verify-email-button { color: var(--accent); }
 .account-menu button:hover { background: #faefee; }
 
 .workspace { display: grid; grid-template-columns: minmax(310px, 370px) minmax(0, 1fr); min-height: calc(100vh - 72px); max-width: 1640px; margin: 0 auto; background: var(--paper); box-shadow: var(--shadow); }
@@ -166,8 +167,12 @@ th:nth-child(1) { width: 24%; } th:nth-child(2) { width: 12%; } th:nth-child(3) 
 .discovery-verdict.warn { border-left-color: var(--warn); background: #fff4df; color: #7d4d0b; }
 
 @media (max-width: 900px) {
-  .topbar { grid-template-columns: 1fr auto; }
-  .product-nav, .service-state { display: none; }
+  .topbar { height: auto; min-height: 108px; grid-template-columns: 1fr auto; grid-template-areas: "brand account" "nav nav"; padding: 10px 16px 8px; row-gap: 8px; }
+  .brand { grid-area: brand; }
+  .account-area { grid-area: account; }
+  .product-nav { grid-area: nav; width: 100%; }
+  .product-nav .nav-item { flex: 1; justify-content: center; min-width: 0; padding: 0 7px; }
+  .service-state { display: none; }
   .workspace { grid-template-columns: 1fr; }
   .discovery-workspace { grid-template-columns: 1fr; }
   .control-panel { border-right: 0; border-bottom: 1px solid var(--line); }
@@ -180,9 +185,13 @@ th:nth-child(1) { width: 24%; } th:nth-child(2) { width: 12%; } th:nth-child(3) 
 }
 
 @media (max-width: 560px) {
-  .topbar { height: 60px; padding: 0 16px; }
-  .workspace { min-height: calc(100vh - 60px); }
-  .discovery-workspace { min-height: calc(100vh - 60px); }
+  .topbar { min-height: 108px; padding: 10px 16px 8px; }
+  .account-area { gap: 6px; }
+  .claim-trial { flex: 0 0 104px; min-height: 36px; padding: 0 7px; font-size: 10px; line-height: 1.15; }
+  .account-button { flex: 0 0 52px; width: 52px; padding: 0; font-size: 0; }
+  .account-button::after { content: "账户"; font-size: 12px; }
+  .workspace { min-height: calc(100vh - 108px); }
+  .discovery-workspace { min-height: calc(100vh - 108px); }
   .control-panel, .results-panel { padding: 22px 16px; }
   .discovery-form-area, .discovery-results-area { padding: 22px 16px; }
   .discovery-fields { grid-template-columns: 1fr; }

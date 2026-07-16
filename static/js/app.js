@@ -1,4 +1,5 @@
 const state = {
+  view: "single",
   mode: "paste",
   fileEmails: [],
   user: null,
@@ -16,7 +17,8 @@ const state = {
 const pageSize = 50;
 
 const el = (id) => document.getElementById(id);
-const input = el("email-input");
+const batchInput = el("email-input");
+const singleInput = el("single-email-input");
 const count = el("email-count");
 const startButton = el("start-button");
 const errorBox = el("form-error");
@@ -33,13 +35,14 @@ function splitEmails(text) {
 }
 
 function currentEmails() {
-  return state.mode === "file" ? state.fileEmails : splitEmails(input.value);
+  if (state.view === "single") return splitEmails(singleInput.value);
+  return state.mode === "file" ? state.fileEmails : splitEmails(batchInput.value);
 }
 
 function updateCount() {
   const total = currentEmails().length;
   count.textContent = total.toLocaleString();
-  if (state.mode === "paste" && total === 1) {
+  if (state.view === "single") {
     startButton.textContent = "免费验证";
   } else if (total > 0) {
     startButton.textContent = `开始验证 · ${total.toLocaleString()} 额度`;
@@ -74,11 +77,19 @@ function switchView(view) {
     el("auth-error").textContent = "请先登录后使用工作邮箱查找";
     return;
   }
+  state.view = view;
   el("verify-workspace").classList.toggle("hidden", discovery);
   el("discovery-workspace").classList.toggle("hidden", !discovery);
+  el("single-panel").classList.toggle("hidden", view !== "single");
+  el("batch-panel").classList.toggle("hidden", view !== "batch");
+  if (!discovery) {
+    el("verify-eyebrow").textContent = view === "single" ? "免费单个验证" : "收费批量验证";
+    el("verify-heading").textContent = view === "single" ? "验证单个收件地址" : "批量验证收件地址";
+  }
   document.querySelectorAll("[data-view]").forEach((button) => {
     button.classList.toggle("active", button.dataset.view === view);
   });
+  updateCount();
 }
 
 document.querySelectorAll("[data-view]").forEach((button) => {
@@ -99,7 +110,8 @@ document.querySelectorAll("[data-mode]").forEach((button) => {
   });
 });
 
-input.addEventListener("input", updateCount);
+batchInput.addEventListener("input", updateCount);
+singleInput.addEventListener("input", updateCount);
 
 async function importFile(file) {
   state.fileEmails = [];
@@ -138,15 +150,19 @@ startButton.addEventListener("click", async () => {
   const emails = currentEmails();
   errorBox.textContent = "";
   if (!emails.length) {
-    errorBox.textContent = "请至少输入一个邮箱地址";
+    errorBox.textContent = state.view === "single" ? "请输入一个邮箱地址" : "请至少输入一个邮箱地址";
+    return;
+  }
+  if (state.view === "single" && emails.length !== 1) {
+    errorBox.textContent = "单个验证一次只能提交一个邮箱地址";
     return;
   }
   startButton.disabled = true;
   startButton.textContent = "正在提交…";
   try {
     state.guestToken = null;
-    const workerCount = Number(document.querySelector('input[name="speed"]:checked').value);
-    const isFreeSingle = state.mode === "paste" && emails.length === 1;
+    const isFreeSingle = state.view === "single";
+    const workerCount = isFreeSingle ? 1 : Number(document.querySelector('input[name="speed"]:checked').value);
     const job = await api(isFreeSingle ? "/api/verify/single" : "/api/jobs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -559,7 +575,7 @@ function updateAccount() {
     ? `体验额度有效至 ${new Date(state.user.trial_credit_expires_at).toLocaleString("zh-CN")}`
     : "";
   el("bind-email-button").classList.toggle("hidden", !state.user?.needs_email_binding);
-  el("verify-email-button").classList.toggle(
+  el("claim-trial-button").classList.toggle(
     "hidden", !state.user || state.user.needs_email_binding || state.user.email_verified,
   );
   el("recent-block").classList.toggle("hidden", !state.user);
@@ -581,7 +597,7 @@ el("logout-button").addEventListener("click", async () => {
   state.user = null;
   updateAccount();
 });
-el("verify-email-button").addEventListener("click", async () => {
+async function claimTrialCredits() {
   try {
     await api("/api/auth/email-verification/request", { method: "POST" });
     const code = window.prompt("请输入邮件中的六位验证码");
@@ -591,7 +607,9 @@ el("verify-email-button").addEventListener("click", async () => {
     });
     updateAccount();
   } catch (error) { errorBox.textContent = error.message; }
-});
+}
+
+el("claim-trial-button").addEventListener("click", claimTrialCredits);
 
 function openBindEmailDialog() {
   el("account-menu").classList.add("hidden");

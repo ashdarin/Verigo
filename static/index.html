@@ -15,17 +15,18 @@
       <span>Verigo</span>
     </a>
     <nav class="product-nav" aria-label="产品导航">
-      <button class="nav-item active" type="button" data-view="verify">邮箱验证</button>
+      <button class="nav-item active" type="button" data-view="single">单个验证</button>
+      <button class="nav-item" type="button" data-view="batch">批量验证</button>
       <button class="nav-item" type="button" data-view="discovery">查找工作邮箱</button>
     </nav>
     <div class="account-area">
       <span class="service-state"><span class="state-dot"></span>运行中</span>
+      <button id="claim-trial-button" class="claim-trial hidden" type="button">验证邮箱领取体验额度</button>
       <button id="account-button" class="account-button" type="button">登录</button>
       <div id="account-menu" class="account-menu hidden">
         <strong id="account-name"></strong>
         <small id="account-credits" class="account-credits"></small>
         <button id="bind-email-button" type="button" class="hidden">绑定邮箱</button>
-        <button id="verify-email-button" type="button">验证邮箱并领取体验额度</button>
         <button id="logout-button" type="button">退出登录</button>
       </div>
     </div>
@@ -35,43 +36,50 @@
     <aside class="control-panel">
       <div class="panel-heading">
         <div>
-          <p class="eyebrow">验证任务</p>
-          <h1>收件地址检查</h1>
+          <p id="verify-eyebrow" class="eyebrow">免费单个验证</p>
+          <h1 id="verify-heading">验证单个收件地址</h1>
         </div>
         <span id="email-count" class="count">0</span>
       </div>
 
-      <div class="segmented" role="tablist" aria-label="输入方式">
-        <button class="segment active" data-mode="paste" role="tab" aria-selected="true">手动输入</button>
-        <button class="segment" data-mode="file" role="tab" aria-selected="false">文件导入</button>
-      </div>
-
-      <section id="paste-panel" class="input-mode">
-        <label for="email-input">邮箱列表</label>
-        <textarea id="email-input" rows="11" placeholder="name@example.com&#10;hello@company.cn" spellcheck="false"></textarea>
+      <section id="single-panel" class="input-mode">
+        <label for="single-email-input">邮箱地址</label>
+        <input id="single-email-input" type="email" autocomplete="email" placeholder="name@example.com" spellcheck="false">
       </section>
 
-      <section id="file-panel" class="input-mode hidden">
-        <label for="file-input">导入数据</label>
-        <label id="file-dropzone" class="file-dropzone" for="file-input">
-          <input id="file-input" type="file" accept=".txt,.csv,.json,.xlsx,.xlsm,.xls">
-          <span class="file-symbol">↑</span>
-          <strong id="file-title">选择文件</strong>
-          <small id="file-meta">TXT · CSV · JSON · XLSX · XLSM · XLS</small>
-        </label>
-      </section>
-
-      <fieldset class="speed-control">
-        <legend>验证速度</legend>
-        <div class="speed-options">
-          <label><input type="radio" name="speed" value="1"><span>稳定</span></label>
-          <label><input type="radio" name="speed" value="2" checked><span>标准</span></label>
-          <label><input type="radio" name="speed" value="4"><span>快速</span></label>
-          <label><input type="radio" name="speed" value="8"><span>极速</span></label>
+      <section id="batch-panel" class="hidden">
+        <div class="segmented" role="tablist" aria-label="批量输入方式">
+          <button class="segment active" data-mode="paste" role="tab" aria-selected="true">手动输入</button>
+          <button class="segment" data-mode="file" role="tab" aria-selected="false">文件导入</button>
         </div>
-      </fieldset>
 
-      <button id="start-button" class="primary-action" type="button">开始验证</button>
+        <section id="paste-panel" class="input-mode">
+          <label for="email-input">邮箱列表</label>
+          <textarea id="email-input" rows="11" placeholder="name@example.com&#10;hello@company.cn" spellcheck="false"></textarea>
+        </section>
+
+        <section id="file-panel" class="input-mode hidden">
+          <label for="file-input">导入数据</label>
+          <label id="file-dropzone" class="file-dropzone" for="file-input">
+            <input id="file-input" type="file" accept=".txt,.csv,.json,.xlsx,.xlsm,.xls">
+            <span class="file-symbol">↑</span>
+            <strong id="file-title">选择文件</strong>
+            <small id="file-meta">TXT · CSV · JSON · XLSX · XLSM · XLS</small>
+          </label>
+        </section>
+
+        <fieldset class="speed-control">
+          <legend>验证速度</legend>
+          <div class="speed-options">
+            <label><input type="radio" name="speed" value="1"><span>稳定</span></label>
+            <label><input type="radio" name="speed" value="2" checked><span>标准</span></label>
+            <label><input type="radio" name="speed" value="4"><span>快速</span></label>
+            <label><input type="radio" name="speed" value="8"><span>极速</span></label>
+          </div>
+        </fieldset>
+      </section>
+
+      <button id="start-button" class="primary-action" type="button">免费验证</button>
       <p id="form-error" class="form-error" role="alert"></p>
 
       <section id="recent-block" class="recent-block hidden">
@@ -230,6 +238,6 @@
     </form>
   </dialog>
 
-  <script src="/static/js/app.js?v=731391d" defer></script>
+  <script src="/static/js/app.js?v=single-batch-v1" defer></script>
 </body>
 </html>

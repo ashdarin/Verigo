@@ -47,7 +47,11 @@ async function checkAccountAndImport(browser) {
   if (await page.locator("#recent-block").evaluate((node) => node.classList.contains("hidden"))) {
     throw new Error("account: recent jobs should be visible after login");
   }
+  if (await page.locator("#claim-trial-button").evaluate((node) => node.classList.contains("hidden"))) {
+    throw new Error("account: the trial-credit action should be prominent for unverified users");
+  }
 
+  await page.click('[data-view="batch"]');
   await page.click('[data-mode="file"]');
   await page.setInputFiles("#file-input", {
     name: "contacts.csv",
@@ -60,12 +64,17 @@ async function checkAccountAndImport(browser) {
   }
   await page.click('[data-mode="paste"]');
   await page.fill("#email-input", "single@example.com");
-  if ((await page.textContent("#start-button")) !== "免费验证") {
-    throw new Error("pricing: one manually entered address should be free");
+  if (!(await page.textContent("#start-button")).includes("1 额度")) {
+    throw new Error("pricing: a batch entry must be paid even when it has one address");
   }
   await page.fill("#email-input", "one@example.com\ntwo@example.com");
   if (!(await page.textContent("#start-button")).includes("2 额度")) {
     throw new Error("pricing: multiple manually entered addresses must be paid");
+  }
+  await page.click('[data-view="single"]');
+  await page.fill("#single-email-input", "single@example.com");
+  if ((await page.textContent("#start-button")) !== "免费验证") {
+    throw new Error("pricing: the single-verification view should remain free");
   }
   await page.click('[data-view="discovery"]');
   await page.fill("#discovery-first-name", "Ming");
@@ -86,13 +95,30 @@ async function checkAccountAndImport(browser) {
   return { account: true, importCount: 2, discovery: true };
 }
 
+async function checkMobileTrialAction(browser) {
+  const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  await page.goto("http://127.0.0.1:8000", { waitUntil: "networkidle" });
+  await page.click("#account-button");
+  await page.click('[data-auth-mode="register"]');
+  await page.fill("#auth-email", `mobile_${Date.now()}@example.com`);
+  await page.fill("#auth-password", "browser-smoke-2026");
+  await page.click("#auth-submit");
+  await page.waitForFunction(() => !document.querySelector("#claim-trial-button")?.classList.contains("hidden"));
+  if (await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth)) {
+    throw new Error("mobile trial action: page has horizontal overflow after login");
+  }
+  await page.close();
+  return { mobileTrialAction: true };
+}
+
 (async () => {
   const browser = await chromium.launch({ headless: true });
   try {
     const desktop = await checkViewport(browser, "desktop", 1440, 900);
     const mobile = await checkViewport(browser, "mobile", 390, 844);
     const interaction = await checkAccountAndImport(browser);
-    console.log(JSON.stringify([desktop, mobile, interaction]));
+    const mobileTrialAction = await checkMobileTrialAction(browser);
+    console.log(JSON.stringify([desktop, mobile, interaction, mobileTrialAction]));
   } finally {
     await browser.close();
   }
