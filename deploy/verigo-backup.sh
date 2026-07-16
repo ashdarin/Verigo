@@ -66,5 +66,15 @@ if [[ -n "${VERIGO_BACKUP_RSYNC_TARGET:-}" ]]; then
         "${VERIGO_BACKUP_RSYNC_TARGET%/}/$timestamp/"
 fi
 
+if [[ -n "${VERIGO_BACKUP_S3_BUCKET:-}" ]]; then
+    : "${VERIGO_BACKUP_S3_ENDPOINT:?VERIGO_BACKUP_S3_ENDPOINT is required for S3 backups}"
+    : "${AWS_ACCESS_KEY_ID:?AWS_ACCESS_KEY_ID is required for S3 backups}"
+    : "${AWS_SECRET_ACCESS_KEY:?AWS_SECRET_ACCESS_KEY is required for S3 backups}"
+    command -v aws >/dev/null || { echo "aws CLI is required for S3 backups" >&2; exit 1; }
+    AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION:-auto} aws s3 cp "$backup_dir/" \
+        "s3://${VERIGO_BACKUP_S3_BUCKET%/}/verigo/$timestamp/" --recursive --only-show-errors \
+        --endpoint-url "$VERIGO_BACKUP_S3_ENDPOINT"
+fi
+
 find "$backup_root" -mindepth 1 -maxdepth 1 -type d -name '20*' -mtime "+$keep_days" \
     -exec rm -rf -- {} +

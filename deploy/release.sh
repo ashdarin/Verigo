@@ -27,6 +27,10 @@ rollback() {
     systemctl restart verigo || true
 }
 
+if ! command -v aws >/dev/null && grep -q '^VERIGO_BACKUP_S3_BUCKET=.' /etc/verigo/backup.env 2>/dev/null; then
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install -y awscli
+fi
 systemctl start verigo-backup.service
 mkdir -p "$backup_dir"
 rsync -a --delete "$app_dir/app/" "$backup_dir/app/"
