@@ -71,6 +71,7 @@ if [[ -n "${VERIGO_BACKUP_S3_BUCKET:-}" ]]; then
     : "${AWS_ACCESS_KEY_ID:?AWS_ACCESS_KEY_ID is required for S3 backups}"
     : "${AWS_SECRET_ACCESS_KEY:?AWS_SECRET_ACCESS_KEY is required for S3 backups}"
     command -v aws >/dev/null || { echo "aws CLI is required for S3 backups" >&2; exit 1; }
+    export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
     AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION:-auto} aws s3 cp "$backup_dir/" \
         "s3://${VERIGO_BACKUP_S3_BUCKET%/}/verigo/$timestamp/" --recursive --only-show-errors \
         --endpoint-url "$VERIGO_BACKUP_S3_ENDPOINT"
