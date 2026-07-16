@@ -77,6 +77,9 @@ def sitemap() -> Response:
   <url><loc>https://verigo.site/</loc></url>
   <url><loc>https://verigo.site/privacy</loc></url>
   <url><loc>https://verigo.site/acceptable-use</loc></url>
+  <url><loc>https://verigo.site/email-verification</loc></url>
+  <url><loc>https://verigo.site/bulk-email-verification</loc></url>
+  <url><loc>https://verigo.site/email-list-cleaning</loc></url>
 </urlset>
 """
     return Response(content=body, media_type="application/xml")
@@ -97,3 +100,18 @@ def privacy() -> FileResponse:
 @app.get("/acceptable-use", include_in_schema=False)
 def acceptable_use() -> FileResponse:
     return FileResponse(STATIC_DIR / "acceptable-use.html")
+
+
+@app.get("/email-verification", include_in_schema=False)
+def email_verification_page() -> FileResponse:
+    return FileResponse(STATIC_DIR / "email-verification.html")
+
+
+@app.get("/bulk-email-verification", include_in_schema=False)
+def bulk_email_verification_page() -> FileResponse:
+    return FileResponse(STATIC_DIR / "bulk-email-verification.html")
+
+
+@app.get("/email-list-cleaning", include_in_schema=False)
+def email_list_cleaning_page() -> FileResponse:
+    return FileResponse(STATIC_DIR / "email-list-cleaning.html")

@@ -1,0 +1,7 @@
+[Unit]
+Description=Verigo data retention cleanup
+After=verigo.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/verigo-retention

@@ -55,6 +55,12 @@ async function checkAccountAndImport(browser) {
     throw new Error("account: email verification should use the in-app dialog");
   }
   await page.click("#close-email-verification");
+  await page.click("#account-button");
+  await page.click("#delete-account-button");
+  if (!(await page.locator("#delete-account-dialog").evaluate((node) => node.open))) {
+    throw new Error("account: deletion must require an in-app confirmation dialog");
+  }
+  await page.click("#close-delete-account");
 
   await page.click('[data-view="batch"]');
   await page.click('[data-mode="file"]');

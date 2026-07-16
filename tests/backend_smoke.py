@@ -54,6 +54,9 @@ with TestClient(app) as guest:
     assert sitemap.status_code == 200 and "https://verigo.site/privacy" in sitemap.text
     assert guest.get("/privacy").status_code == 200
     assert guest.get("/acceptable-use").status_code == 200
+    assert guest.get("/email-verification").status_code == 200
+    assert guest.get("/bulk-email-verification").status_code == 200
+    assert guest.get("/email-list-cleaning").status_code == 200
     assert guest.get("/api/admin/metrics").status_code == 401
     assert guest.get("/api/jobs").status_code == 401
 
@@ -253,6 +256,16 @@ with TestClient(app) as legacy_account:
         json={"account": "legacy@example.com", "password": "legacy-password"},
     )
     assert rebound_login.status_code == 200, rebound_login.text
+
+
+with TestClient(app) as deletion_account:
+    registered = deletion_account.post(
+        "/api/auth/register",
+        json={"email": "delete-me@example.com", "password": "correct-horse-2026"},
+    )
+    assert registered.status_code == 201, registered.text
+    assert deletion_account.delete("/api/auth/account").status_code == 204
+    assert deletion_account.get("/api/auth/me").json() is None
 
 
 legacy = load_legacy_module()

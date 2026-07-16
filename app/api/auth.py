@@ -6,6 +6,7 @@ import time
 import hashlib
 import hmac
 import json
+from pathlib import Path
 from urllib.error import URLError
 from urllib.parse import urlencode
 from urllib.request import Request as UrlRequest, urlopen
@@ -330,6 +331,22 @@ def logout(
     session: Annotated[str | None, Cookie(alias=settings.session_cookie_name)] = None,
 ) -> None:
     auth_store.delete_session(session)
+    response.delete_cookie(settings.session_cookie_name, path="/")
+
+
+@auth_router.delete("/account", status_code=204)
+def delete_account(
+    response: Response, user: Annotated[User, Depends(require_user)]
+) -> None:
+    try:
+        csv_paths = auth_store.delete_user(user.id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    results_root = settings.results_dir.resolve()
+    for csv_path in csv_paths:
+        path = Path(csv_path).resolve()
+        if path.is_relative_to(results_root):
+            path.unlink(missing_ok=True)
     response.delete_cookie(settings.session_cookie_name, path="/")
 
 

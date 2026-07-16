@@ -41,6 +41,11 @@ button { cursor: pointer; }
 .account-credits { display: block; padding: 0 9px 8px; color: var(--accent); font-weight: 750; }
 .account-menu button { width: 100%; padding: 8px 9px; border: 0; border-radius: 4px; background: transparent; color: var(--bad); text-align: left; }
 .account-menu button:hover { background: #faefee; }
+.account-menu .account-delete { color: var(--bad); }
+.confirm-delete { display: flex; align-items: flex-start; gap: 8px; margin: 16px 0; font-weight: 500; line-height: 1.45; }
+.confirm-delete input { width: auto; min-height: 0; margin-top: 3px; }
+.danger-primary { background: var(--bad); }
+.danger-primary:hover { background: #9f302c; }
 
 .workspace { display: grid; grid-template-columns: minmax(310px, 370px) minmax(0, 1fr); min-height: calc(100vh - 72px); max-width: 1640px; margin: 0 auto; background: var(--paper); box-shadow: var(--shadow); }
 .control-panel { padding: 28px; border-right: 1px solid var(--line); background: #fafcfb; }

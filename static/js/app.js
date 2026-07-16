@@ -674,6 +674,29 @@ el("logout-button").addEventListener("click", async () => {
   state.user = null;
   updateAccount();
 });
+el("delete-account-button").addEventListener("click", () => {
+  el("account-menu").classList.add("hidden");
+  el("delete-account-confirm").checked = false;
+  el("delete-account-error").textContent = "";
+  el("delete-account-dialog").showModal();
+});
+el("close-delete-account").addEventListener("click", () => el("delete-account-dialog").close());
+el("delete-account-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const submit = event.currentTarget.querySelector("button[type='submit']");
+  submit.disabled = true;
+  el("delete-account-error").textContent = "";
+  try {
+    await api("/api/auth/account", { method: "DELETE" });
+    state.user = null;
+    el("delete-account-dialog").close();
+    updateAccount();
+  } catch (error) {
+    el("delete-account-error").textContent = error.message;
+  } finally {
+    submit.disabled = false;
+  }
+});
 function claimTrialCredits() {
   el("email-verification-request-form").classList.remove("hidden");
   el("email-verification-confirm-form").classList.add("hidden");

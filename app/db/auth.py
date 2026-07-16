@@ -684,5 +684,61 @@ class AuthStore:
         with closing(self._connect()) as connection:
             connection.execute("DELETE FROM sessions WHERE token_hash = ?", (token_hash(token),))
 
+    def delete_user(self, user_id: str) -> list[str]:
+        """Delete account-owned records and return result files that may be removed."""
+        self.initialize()
+        with closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            active_jobs = connection.execute(
+                "SELECT COUNT(*) FROM jobs WHERE owner_id=? AND status IN ('queued', 'running')",
+                (user_id,),
+            ).fetchone()[0]
+            if active_jobs:
+                connection.rollback()
+                raise ValueError("仍有正在处理的任务，请完成后再删除账户")
+            jobs = connection.execute(
+                "SELECT id, csv_path FROM jobs WHERE owner_id=?", (user_id,)
+            ).fetchall()
+            job_ids = [str(job_id) for job_id, _ in jobs]
+            if job_ids:
+                placeholders = ", ".join("?" for _ in job_ids)
+                connection.execute(
+                    f"DELETE FROM catch_all_emails WHERE job_id IN ({placeholders})", job_ids
+                )
+                connection.execute(
+                    f"DELETE FROM jobs WHERE id IN ({placeholders})", job_ids
+                )
+            debit_references = [
+                str(row[0])
+                for row in connection.execute(
+                    "SELECT reference FROM credit_debits WHERE user_id=?", (user_id,)
+                ).fetchall()
+            ]
+            if debit_references:
+                placeholders = ", ".join("?" for _ in debit_references)
+                connection.execute(
+                    f"DELETE FROM credit_debit_grants WHERE reference IN ({placeholders})",
+                    debit_references,
+                )
+            for table in (
+                "sessions",
+                "email_verifications",
+                "email_bindings",
+                "password_resets",
+                "free_usage",
+                "trial_network_grants",
+                "promo_credit_grants",
+                "credit_debits",
+                "credit_ledger",
+                "payment_orders",
+            ):
+                connection.execute(f"DELETE FROM {table} WHERE user_id=?", (user_id,))
+            deleted = connection.execute("DELETE FROM users WHERE id=?", (user_id,)).rowcount
+            if deleted != 1:
+                connection.rollback()
+                raise ValueError("账户不存在")
+            connection.commit()
+        return [str(csv_path) for _, csv_path in jobs if csv_path]
+
 
 auth_store = AuthStore()

@@ -38,6 +38,7 @@
         <strong id="account-name"></strong>
         <small id="account-credits" class="account-credits"></small>
         <button id="bind-email-button" type="button" class="hidden">绑定邮箱</button>
+        <button id="delete-account-button" type="button" class="account-delete">删除账户</button>
         <button id="logout-button" type="button">退出登录</button>
       </div>
     </div>
@@ -254,6 +255,9 @@
   <footer class="site-footer">
     <span>Verigo</span>
     <nav aria-label="网站政策">
+      <a href="/email-verification">邮箱验证指南</a>
+      <a href="/bulk-email-verification">批量验证</a>
+      <a href="/email-list-cleaning">名单清洗</a>
       <a href="/privacy">隐私与数据说明</a>
       <a href="/acceptable-use">使用边界</a>
     </nav>
@@ -310,6 +314,16 @@
       <input id="email-verification-code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required>
       <p id="email-verification-confirm-error" class="form-error" role="alert"></p>
       <button class="primary-action" type="submit">完成验证并领取额度</button>
+    </form>
+  </dialog>
+
+  <dialog id="delete-account-dialog" class="auth-dialog">
+    <form id="delete-account-form" method="dialog">
+      <div class="dialog-heading"><div><p class="eyebrow">账户与数据</p><h2>删除账户</h2></div><button id="close-delete-account" class="dialog-close" type="button" aria-label="关闭">×</button></div>
+      <p class="dialog-copy">此操作会删除账户、任务记录、额度流水和可下载结果，无法撤销。正在处理的任务必须先完成。</p>
+      <label class="confirm-delete"><input id="delete-account-confirm" type="checkbox" required><span>我确认永久删除此账户及其数据</span></label>
+      <p id="delete-account-error" class="form-error" role="alert"></p>
+      <button class="primary-action danger-primary" type="submit">永久删除账户</button>
     </form>
   </dialog>
 
