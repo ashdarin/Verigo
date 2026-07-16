@@ -7,7 +7,7 @@ from collections import defaultdict, deque
 from typing import Annotated
 
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.config import settings
 from app.core.mailer import (
@@ -42,13 +42,17 @@ class RegistrationCredentials(Credentials):
 
 
 class LoginCredentials(BaseModel):
-    account: str = Field(min_length=1, max_length=254)
+    account: str | None = Field(default=None, max_length=254)
+    email: str | None = Field(default=None, max_length=254)
     password: str = Field(min_length=6, max_length=128)
 
-    @field_validator("account")
-    @classmethod
-    def valid_account(cls, value: str) -> str:
-        return value.strip().lower()
+    @model_validator(mode="after")
+    def select_account(self) -> "LoginCredentials":
+        value = (self.account or self.email or "").strip().lower()
+        if not value:
+            raise ValueError("请输入邮箱或旧用户名")
+        self.account = value
+        return self
 
 
 class PasswordResetRequest(BaseModel):

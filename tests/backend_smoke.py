@@ -174,6 +174,12 @@ with TestClient(app) as legacy_account:
     assert legacy_login.json()["needs_email_binding"] is True
     assert legacy_login.json()["credits"] == 7
 
+    legacy_login_compatibility = legacy_account.post(
+        "/api/auth/login",
+        json={"email": "legacy_user", "password": "legacy-password"},
+    )
+    assert legacy_login_compatibility.status_code == 200, legacy_login_compatibility.text
+
     original_send_email_binding = auth_api.send_email_binding
     auth_api.send_email_binding = lambda *_args, **_kwargs: None
     try:
