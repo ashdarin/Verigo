@@ -1,0 +1,17 @@
+verigo.site, www.verigo.site {
+    encode zstd gzip
+
+    request_body {
+        max_size 8MB
+    }
+
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        -Server
+    }
+
+    reverse_proxy 127.0.0.1:8000
+}

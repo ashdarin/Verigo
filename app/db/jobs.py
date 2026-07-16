@@ -1,0 +1,397 @@
+from __future__ import annotations
+
+import json
+import sqlite3
+import threading
+import time
+from contextlib import closing
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any
+
+from app.config import settings
+
+
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+@dataclass
+class Job:
+    id: str
+    emails: list[str]
+    worker_count: int
+    status: str = "queued"
+    created_at: datetime = field(default_factory=utc_now)
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    error: str | None = None
+    results: list[dict[str, Any]] = field(default_factory=list)
+    csv_path: Path | None = None
+    verifier: Any = None
+    owner_id: str | None = None
+    guest_token_hash: str | None = None
+    guest_token: str | None = None
+    worker_id: str | None = None
+    heartbeat_at: datetime | None = None
+    stop_on_deliverable: bool = False
+
+
+class JobStore:
+    """SQLite-backed queue, history store, result cache, and Catch-all archive."""
+
+    _columns = (
+        "id", "emails_json", "worker_count", "status", "created_at",
+        "started_at", "finished_at", "error", "results_json", "csv_path",
+        "owner_id", "guest_token_hash", "worker_id", "heartbeat_at", "stop_on_deliverable",
+    )
+
+    def __init__(self, keep: int = 100) -> None:
+        self._keep = keep
+        self._lock = threading.RLock()
+        self._initialized = False
+
+    def _connect(self) -> sqlite3.Connection:
+        connection = sqlite3.connect(settings.database_path, timeout=30, isolation_level=None)
+        connection.execute("PRAGMA journal_mode=WAL")
+        return connection
+
+    @classmethod
+    def _select_columns(cls) -> str:
+        return ", ".join(cls._columns)
+
+    @classmethod
+    def _job_from_row(cls, raw_row: tuple[Any, ...]) -> Job:
+        row = dict(zip(cls._columns, raw_row))
+        return Job(
+            id=row["id"],
+            emails=json.loads(row["emails_json"]),
+            worker_count=row["worker_count"],
+            status=row["status"],
+            created_at=datetime.fromisoformat(row["created_at"]),
+            started_at=datetime.fromisoformat(row["started_at"]) if row["started_at"] else None,
+            finished_at=datetime.fromisoformat(row["finished_at"]) if row["finished_at"] else None,
+            error=row["error"],
+            results=json.loads(row["results_json"]),
+            csv_path=Path(row["csv_path"]) if row["csv_path"] else None,
+            owner_id=row["owner_id"],
+            guest_token_hash=row["guest_token_hash"],
+            worker_id=row["worker_id"],
+            heartbeat_at=datetime.fromisoformat(row["heartbeat_at"]) if row["heartbeat_at"] else None,
+            stop_on_deliverable=bool(row["stop_on_deliverable"]),
+        )
+
+    def initialize(self) -> None:
+        with self._lock:
+            if self._initialized:
+                return
+            settings.database_path.parent.mkdir(parents=True, exist_ok=True)
+            with closing(self._connect()) as connection:
+                connection.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS jobs (
+                        id TEXT PRIMARY KEY,
+                        emails_json TEXT NOT NULL,
+                        worker_count INTEGER NOT NULL,
+                        status TEXT NOT NULL,
+                        created_at TEXT NOT NULL,
+                        started_at TEXT,
+                        finished_at TEXT,
+                        error TEXT,
+                        results_json TEXT NOT NULL DEFAULT '[]',
+                        csv_path TEXT,
+                        owner_id TEXT,
+                        guest_token_hash TEXT,
+                        worker_id TEXT,
+                        heartbeat_at TEXT,
+                        stop_on_deliverable INTEGER NOT NULL DEFAULT 0
+                    )
+                    """
+                )
+                existing = {row[1] for row in connection.execute("PRAGMA table_info(jobs)")}
+                for name, kind in (("owner_id", "TEXT"), ("guest_token_hash", "TEXT"), ("worker_id", "TEXT"), ("heartbeat_at", "TEXT"), ("stop_on_deliverable", "INTEGER NOT NULL DEFAULT 0")):
+                    if name not in existing:
+                        connection.execute(f"ALTER TABLE jobs ADD COLUMN {name} {kind}")
+                connection.execute("CREATE INDEX IF NOT EXISTS idx_jobs_queue ON jobs(status, created_at)")
+                connection.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS verification_cache (
+                        email TEXT PRIMARY KEY,
+                        result_json TEXT NOT NULL,
+                        expires_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL
+                    )
+                    """
+                )
+                connection.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS verified_emails (
+                        email TEXT PRIMARY KEY,
+                        first_confirmed_at TEXT NOT NULL,
+                        last_confirmed_at TEXT NOT NULL,
+                        result_json TEXT NOT NULL
+                    )
+                    """
+                )
+                connection.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS catch_all_emails (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        job_id TEXT NOT NULL,
+                        email TEXT NOT NULL,
+                        domain TEXT NOT NULL,
+                        verified_at TEXT NOT NULL,
+                        result_json TEXT NOT NULL,
+                        UNIQUE(job_id, email)
+                    )
+                    """
+                )
+                connection.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_catch_all_domain ON catch_all_emails(domain, verified_at DESC)"
+                )
+            self._initialized = True
+
+    def add(self, job: Job, max_active: int | None = None) -> None:
+        self.initialize()
+        with self._lock, closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            active = connection.execute(
+                "SELECT COUNT(*) FROM jobs WHERE status IN ('queued', 'running')"
+            ).fetchone()[0]
+            if max_active is not None and active >= max_active:
+                connection.rollback()
+                raise RuntimeError("任务队列已满，请等待已有任务完成")
+            connection.commit()
+        self.persist(job)
+
+    def persist(self, job: Job) -> None:
+        self.initialize()
+        values = (
+            job.id,
+            json.dumps(job.emails, ensure_ascii=False),
+            job.worker_count,
+            job.status,
+            job.created_at.isoformat(),
+            job.started_at.isoformat() if job.started_at else None,
+            job.finished_at.isoformat() if job.finished_at else None,
+            job.error,
+            json.dumps(job.results, ensure_ascii=False, default=str),
+            str(job.csv_path) if job.csv_path else None,
+            job.owner_id,
+            job.guest_token_hash,
+            job.worker_id,
+            job.heartbeat_at.isoformat() if job.heartbeat_at else None,
+            int(job.stop_on_deliverable),
+        )
+        with self._lock, closing(self._connect()) as connection:
+            connection.execute(
+                """
+                INSERT INTO jobs (
+                    id, emails_json, worker_count, status, created_at, started_at, finished_at,
+                    error, results_json, csv_path, owner_id, guest_token_hash, worker_id, heartbeat_at,
+                    stop_on_deliverable
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    emails_json=excluded.emails_json, worker_count=excluded.worker_count,
+                    status=excluded.status, started_at=excluded.started_at,
+                    finished_at=excluded.finished_at, error=excluded.error,
+                    results_json=excluded.results_json, csv_path=excluded.csv_path,
+                    owner_id=excluded.owner_id, guest_token_hash=excluded.guest_token_hash,
+                    worker_id=excluded.worker_id, heartbeat_at=excluded.heartbeat_at,
+                    stop_on_deliverable=excluded.stop_on_deliverable
+                """,
+                values,
+            )
+
+    def get(self, job_id: str) -> Job | None:
+        self.initialize()
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                f"SELECT {self._select_columns()} FROM jobs WHERE id = ?", (job_id,)
+            ).fetchone()
+        return self._job_from_row(row) if row else None
+
+    def list_recent(self, owner_id: str, limit: int = 20) -> list[Job]:
+        self.initialize()
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                f"SELECT {self._select_columns()} FROM jobs WHERE owner_id = ? ORDER BY created_at DESC LIMIT ?",
+                (owner_id, limit),
+            ).fetchall()
+        return [self._job_from_row(row) for row in rows]
+
+    def claim_next(self, worker_id: str) -> Job | None:
+        """Atomically claim the next task; expired worker leases are returned to the queue."""
+        self.initialize()
+        now = utc_now()
+        stale_before = now - timedelta(seconds=settings.worker_lease_seconds)
+        with self._lock, closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                """
+                UPDATE jobs SET status = 'queued', worker_id = NULL, heartbeat_at = NULL,
+                    error = '工作节点已重新领取任务'
+                WHERE status = 'running' AND heartbeat_at IS NOT NULL AND heartbeat_at < ?
+                """,
+                (stale_before.isoformat(),),
+            )
+            row = connection.execute(
+                f"SELECT {self._select_columns()} FROM jobs WHERE status = 'queued' ORDER BY created_at LIMIT 1"
+            ).fetchone()
+            if row is None:
+                connection.commit()
+                return None
+            job = self._job_from_row(row)
+            job.status = "running"
+            job.worker_id = worker_id
+            job.started_at = job.started_at or now
+            job.heartbeat_at = now
+            connection.execute(
+                """
+                UPDATE jobs SET status = 'running', worker_id = ?, started_at = ?, heartbeat_at = ?, error = NULL
+                WHERE id = ?
+                """,
+                (worker_id, job.started_at.isoformat(), now.isoformat(), job.id),
+            )
+            connection.commit()
+        return job
+
+    def heartbeat(self, job: Job) -> None:
+        job.heartbeat_at = utc_now()
+        with closing(self._connect()) as connection:
+            connection.execute(
+                "UPDATE jobs SET heartbeat_at = ? WHERE id = ? AND worker_id = ?",
+                (job.heartbeat_at.isoformat(), job.id, job.worker_id),
+            )
+
+    def queue_position(self, job_id: str) -> int | None:
+        self.initialize()
+        with closing(self._connect()) as connection:
+            row = connection.execute("SELECT status, created_at FROM jobs WHERE id = ?", (job_id,)).fetchone()
+            if row is None or row[0] != "queued":
+                return None
+            return connection.execute(
+                "SELECT COUNT(*) FROM jobs WHERE status = 'queued' AND created_at <= ?", (row[1],)
+            ).fetchone()[0]
+
+    def cached_results(self, emails: list[str]) -> dict[str, dict[str, Any]]:
+        self.initialize()
+        now = utc_now().isoformat()
+        found: dict[str, dict[str, Any]] = {}
+        with closing(self._connect()) as connection:
+            for start in range(0, len(emails), 900):
+                batch = [email.lower() for email in emails[start : start + 900]]
+                placeholders = ", ".join("?" for _ in batch)
+                rows = connection.execute(
+                    f"SELECT email, result_json FROM verification_cache WHERE expires_at > ? AND email IN ({placeholders})",
+                    (now, *batch),
+                ).fetchall()
+                for email, result_json in rows:
+                    result = json.loads(result_json)
+                    result["cache_hit"] = True
+                    found[email] = result
+            cutoff = (utc_now() - timedelta(days=settings.verified_email_recheck_days)).isoformat()
+            unresolved = [email.lower() for email in emails if email.lower() not in found]
+            for start in range(0, len(unresolved), 900):
+                batch = unresolved[start : start + 900]
+                if not batch:
+                    continue
+                placeholders = ", ".join("?" for _ in batch)
+                rows = connection.execute(
+                    f"SELECT email, result_json FROM verified_emails WHERE last_confirmed_at > ? AND email IN ({placeholders})",
+                    (cutoff, *batch),
+                ).fetchall()
+                for email, result_json in rows:
+                    result = json.loads(result_json)
+                    result["cache_hit"] = True
+                    result["verified_record"] = True
+                    found[email] = result
+        return found
+
+    def cache_results(self, results: list[dict[str, Any]]) -> None:
+        self.initialize()
+        now = utc_now()
+        rows: list[tuple[str, str, str, str]] = []
+        verified_rows: list[tuple[str, str, str, str]] = []
+        for result in results:
+            checks = result.get("checks") or {}
+            detail = str(result.get("smtp_result") or "")
+            cacheable = result.get("deliverable") is True
+            cacheable = cacheable or (
+                result.get("deliverable") is False
+                and ("RCPT TO" in detail or "邮箱不存在" in detail)
+            )
+            cacheable = cacheable or checks.get("domain") is False or checks.get("mx") is False
+            if cacheable and result.get("email"):
+                rows.append(
+                    (
+                        str(result["email"]).lower(),
+                        json.dumps(result, ensure_ascii=False, default=str),
+                        (now + timedelta(hours=settings.verification_cache_hours)).isoformat(),
+                        now.isoformat(),
+                    )
+                )
+            if result.get("deliverable") is True and result.get("email"):
+                verified_rows.append(
+                    (
+                        str(result["email"]).lower(),
+                        now.isoformat(),
+                        now.isoformat(),
+                        json.dumps(result, ensure_ascii=False, default=str),
+                    )
+                )
+        if not rows and not verified_rows:
+            return
+        with closing(self._connect()) as connection:
+            if rows:
+                connection.executemany(
+                    """
+                    INSERT INTO verification_cache(email, result_json, expires_at, updated_at) VALUES (?, ?, ?, ?)
+                    ON CONFLICT(email) DO UPDATE SET result_json=excluded.result_json,
+                        expires_at=excluded.expires_at, updated_at=excluded.updated_at
+                    """,
+                    rows,
+                )
+            if verified_rows:
+                connection.executemany(
+                    """
+                    INSERT INTO verified_emails(email, first_confirmed_at, last_confirmed_at, result_json)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(email) DO UPDATE SET last_confirmed_at=excluded.last_confirmed_at,
+                        result_json=excluded.result_json
+                    """,
+                    verified_rows,
+                )
+
+    def record_catch_all(self, job: Job) -> None:
+        rows = []
+        for result in job.results:
+            if result.get("domain_type") != "catch-all" or not result.get("email"):
+                continue
+            email = str(result["email"])
+            rows.append(
+                (
+                    job.id,
+                    email,
+                    email.rsplit("@", 1)[-1].lower(),
+                    str(result.get("timestamp") or utc_now().isoformat()),
+                    json.dumps(result, ensure_ascii=False, default=str),
+                )
+            )
+        if not rows:
+            return
+        self.initialize()
+        with closing(self._connect()) as connection:
+            connection.executemany(
+                """
+                INSERT INTO catch_all_emails(job_id, email, domain, verified_at, result_json)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(job_id, email) DO UPDATE SET result_json=excluded.result_json,
+                    verified_at=excluded.verified_at
+                """,
+                rows,
+            )
+
+
+job_store = JobStore()

@@ -1,0 +1,23 @@
+[Unit]
+Description=Verigo email verification web service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=verigo
+Group=verigo
+WorkingDirectory=/opt/verigo
+EnvironmentFile=/etc/verigo/verigo.env
+ExecStart=/opt/verigo/.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/opt/verigo/data /opt/verigo/domain_type_cache.json
+
+[Install]
+WantedBy=multi-user.target
