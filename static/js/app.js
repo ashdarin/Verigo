@@ -490,7 +490,7 @@ el("discovery-verify").addEventListener("click", async () => {
       body: JSON.stringify({
         emails: state.discovery.candidates,
         worker_count: 4,
-        stop_on_deliverable: el("discovery-stop-on-match").checked,
+        stop_on_deliverable: true,
       }),
     });
     state.discovery.jobId = job.id;
@@ -558,7 +558,10 @@ function updateAccount() {
   el("account-credits").title = state.user?.trial_credit_expires_at
     ? `体验额度有效至 ${new Date(state.user.trial_credit_expires_at).toLocaleString("zh-CN")}`
     : "";
-  el("verify-email-button").classList.toggle("hidden", !state.user || state.user.email_verified);
+  el("bind-email-button").classList.toggle("hidden", !state.user?.needs_email_binding);
+  el("verify-email-button").classList.toggle(
+    "hidden", !state.user || state.user.needs_email_binding || state.user.email_verified,
+  );
   el("recent-block").classList.toggle("hidden", !state.user);
   el("account-menu").classList.add("hidden");
   if (state.user) loadRecentJobs();
@@ -590,10 +593,54 @@ el("verify-email-button").addEventListener("click", async () => {
   } catch (error) { errorBox.textContent = error.message; }
 });
 
+function openBindEmailDialog() {
+  el("account-menu").classList.add("hidden");
+  el("bind-email-request-form").classList.remove("hidden");
+  el("bind-email-confirm-form").classList.add("hidden");
+  el("bind-email-error").textContent = "";
+  el("bind-email-confirm-error").textContent = "";
+  el("bind-email-dialog").showModal();
+}
+
+el("bind-email-button").addEventListener("click", openBindEmailDialog);
+el("close-bind-email").addEventListener("click", () => el("bind-email-dialog").close());
+document.querySelectorAll("[data-close-bind-email]").forEach((button) => {
+  button.addEventListener("click", () => el("bind-email-dialog").close());
+});
+el("bind-email-request-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  el("bind-email-error").textContent = "";
+  try {
+    await api("/api/auth/email-binding/request", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: el("bind-email").value }),
+    });
+    el("bind-email-request-form").classList.add("hidden");
+    el("bind-email-confirm-form").classList.remove("hidden");
+  } catch (error) { el("bind-email-error").textContent = error.message; }
+});
+el("bind-email-confirm-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  el("bind-email-confirm-error").textContent = "";
+  try {
+    state.user = await api("/api/auth/email-binding/confirm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code: el("bind-email-code").value }),
+    });
+    el("bind-email-dialog").close();
+    updateAccount();
+  } catch (error) { el("bind-email-confirm-error").textContent = error.message; }
+});
+
 function setAuthMode(mode) {
   state.authMode = mode;
   el("auth-title").textContent = mode === "login" ? "登录" : "创建账户";
   el("auth-submit").textContent = mode === "login" ? "登录" : "注册";
+  el("auth-account-label").textContent = mode === "login" ? "邮箱或旧用户名" : "邮箱";
+  el("auth-email").type = mode === "login" ? "text" : "email";
+  el("auth-email").autocomplete = mode === "login" ? "username" : "email";
   el("auth-password").autocomplete = mode === "login" ? "current-password" : "new-password";
   document.querySelectorAll("[data-auth-mode]").forEach((button) => button.classList.toggle("active", button.dataset.authMode === mode));
   el("auth-error").textContent = "";
@@ -611,7 +658,7 @@ el("auth-form").addEventListener("submit", async (event) => {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        email: el("auth-email").value,
+        [state.authMode === "login" ? "account" : "email"]: el("auth-email").value,
         password: el("auth-password").value,
       }),
     });
@@ -663,6 +710,7 @@ el("reset-confirm-form").addEventListener("submit", async (event) => {
 el("refresh-jobs").addEventListener("click", loadRecentJobs);
 
 (async function init() {
+  setAuthMode(state.authMode);
   updateCount();
   await loadAccount();
   if (state.jobId) {

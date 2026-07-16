@@ -22,6 +22,10 @@ def send_email_verification(recipient: str, code: str) -> None:
     _send_code(recipient, code, "验证邮箱")
 
 
+def send_email_binding(recipient: str, code: str) -> None:
+    _send_code(recipient, code, "绑定邮箱")
+
+
 def _send_code(recipient: str, code: str, purpose: str) -> None:
     if not all((settings.mail_host, settings.mail_username, settings.mail_password, settings.mail_from)):
         raise MailNotConfiguredError("邮件服务尚未配置")

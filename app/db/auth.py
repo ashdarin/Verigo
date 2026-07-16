@@ -83,6 +83,19 @@ class AuthStore:
                 )
                 connection.execute(
                     """
+                    CREATE TABLE IF NOT EXISTS email_bindings (
+                        user_id TEXT PRIMARY KEY,
+                        email TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                        code_hash TEXT NOT NULL,
+                        expires_at TEXT NOT NULL,
+                        attempts INTEGER NOT NULL DEFAULT 0,
+                        created_at TEXT NOT NULL,
+                        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+                    )
+                    """
+                )
+                connection.execute(
+                    """
                     CREATE TABLE IF NOT EXISTS credit_ledger (
                         id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, delta INTEGER NOT NULL,
                         kind TEXT NOT NULL, reference TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL
@@ -178,6 +191,7 @@ class AuthStore:
                 )
                 connection.execute("DELETE FROM sessions WHERE expires_at <= ?", (utc_now().isoformat(),))
                 connection.execute("DELETE FROM password_resets WHERE expires_at <= ?", (utc_now().isoformat(),))
+                connection.execute("DELETE FROM email_bindings WHERE expires_at <= ?", (utc_now().isoformat(),))
             self._initialized = True
 
     @staticmethod
@@ -222,15 +236,16 @@ class AuthStore:
             raise ValueError("账号或邮箱已被注册") from exc
         return user
 
-    def authenticate(self, email: str, password: str) -> User | None:
+    def authenticate(self, account: str, password: str) -> User | None:
         self.initialize()
         with closing(self._connect()) as connection:
             row = connection.execute(
                 """
                 SELECT id, username, email, email_verified, credits, created_at, password_hash FROM users
                 WHERE email = ? COLLATE NOCASE
+                    OR (email IS NULL AND username = ? COLLATE NOCASE)
                 """,
-                (email,),
+                (account, account),
             ).fetchone()
         if row is None or not verify_password(password, row[6]):
             return None
@@ -271,6 +286,102 @@ class AuthStore:
                 (user_id, token_hash(code), (now + timedelta(minutes=settings.password_reset_minutes)).isoformat(), now.isoformat()),
             )
         return code
+
+    def create_email_binding(self, user_id: str, email: str) -> str:
+        """Issue a code for a legacy account that has no bound email address."""
+        self.initialize()
+        now = utc_now()
+        normalized_email = email.strip().lower()
+        code = f"{secrets.randbelow(1_000_000):06d}"
+        with closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            user = connection.execute(
+                "SELECT email FROM users WHERE id=?", (user_id,)
+            ).fetchone()
+            if user is None:
+                connection.rollback()
+                raise ValueError("账号不存在")
+            if user[0] is not None:
+                connection.rollback()
+                raise ValueError("该账号已绑定邮箱")
+            in_use = connection.execute(
+                "SELECT 1 FROM users WHERE email=? COLLATE NOCASE", (normalized_email,)
+            ).fetchone()
+            if in_use:
+                connection.rollback()
+                raise ValueError("该邮箱已被注册")
+            try:
+                connection.execute(
+                    """
+                    INSERT INTO email_bindings(user_id, email, code_hash, expires_at, attempts, created_at)
+                    VALUES (?, ?, ?, ?, 0, ?)
+                    ON CONFLICT(user_id) DO UPDATE SET
+                        email=excluded.email, code_hash=excluded.code_hash, expires_at=excluded.expires_at,
+                        attempts=0, created_at=excluded.created_at
+                    """,
+                    (
+                        user_id,
+                        normalized_email,
+                        token_hash(code),
+                        (now + timedelta(minutes=settings.password_reset_minutes)).isoformat(),
+                        now.isoformat(),
+                    ),
+                )
+            except sqlite3.IntegrityError as exc:
+                connection.rollback()
+                raise ValueError("该邮箱正在被其他账号绑定") from exc
+            connection.commit()
+        return code
+
+    def confirm_email_binding(self, user_id: str, code: str) -> User:
+        """Persist a verified email for a legacy account without granting new credits."""
+        self.initialize()
+        now = utc_now().isoformat()
+        with closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            binding = connection.execute(
+                "SELECT email, code_hash, expires_at, attempts FROM email_bindings WHERE user_id=?",
+                (user_id,),
+            ).fetchone()
+            if (
+                binding is None
+                or binding[2] <= now
+                or binding[3] >= 5
+                or not hmac.compare_digest(binding[1], token_hash(code))
+            ):
+                if binding is not None and binding[2] > now:
+                    connection.execute(
+                        "UPDATE email_bindings SET attempts=attempts+1 WHERE user_id=?",
+                        (user_id,),
+                    )
+                    connection.commit()
+                else:
+                    connection.rollback()
+                raise ValueError("验证码无效或已过期")
+            user = connection.execute(
+                "SELECT email FROM users WHERE id=?", (user_id,)
+            ).fetchone()
+            if user is None:
+                connection.rollback()
+                raise ValueError("账号不存在")
+            if user[0] is not None:
+                connection.rollback()
+                raise ValueError("该账号已绑定邮箱")
+            try:
+                connection.execute(
+                    "UPDATE users SET email=?, email_verified=1 WHERE id=?",
+                    (binding[0], user_id),
+                )
+            except sqlite3.IntegrityError as exc:
+                connection.rollback()
+                raise ValueError("该邮箱已被注册") from exc
+            connection.execute("DELETE FROM email_bindings WHERE user_id=?", (user_id,))
+            row = connection.execute(
+                "SELECT id, username, email, email_verified, credits, created_at FROM users WHERE id=?",
+                (user_id,),
+            ).fetchone()
+            connection.commit()
+            return self._user_from_row(connection, row)
 
     def confirm_email_verification(self, user_id: str, code: str) -> User:
         self.initialize()

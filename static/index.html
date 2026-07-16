@@ -24,7 +24,8 @@
       <div id="account-menu" class="account-menu hidden">
         <strong id="account-name"></strong>
         <small id="account-credits" class="account-credits"></small>
-        <button id="verify-email-button" type="button">验证邮箱并领取 100 额度</button>
+        <button id="bind-email-button" type="button" class="hidden">绑定邮箱</button>
+        <button id="verify-email-button" type="button">验证邮箱并领取体验额度</button>
         <button id="logout-button" type="button">退出登录</button>
       </div>
     </div>
@@ -147,7 +148,6 @@
         <label>姓氏<input id="discovery-last-name" autocomplete="family-name" placeholder="wang"></label>
       </div>
       <label for="discovery-domain">公司域名<input id="discovery-domain" inputmode="url" placeholder="company.com"></label>
-      <label class="discovery-stop"><input id="discovery-stop-on-match" type="checkbox" checked><span>找到可投递邮箱后停止后续验证</span></label>
       <div class="discovery-actions">
         <button id="discovery-start" class="primary-action" type="button">查找邮箱</button>
         <button id="discovery-verify" class="secondary-action" type="button" disabled>验证候选邮箱</button>
@@ -184,13 +184,30 @@
         <button class="segment active" data-auth-mode="login" type="button">登录</button>
         <button class="segment" data-auth-mode="register" type="button">注册</button>
       </div>
-      <label for="auth-email">邮箱</label>
-      <input id="auth-email" name="email" type="email" autocomplete="email" required>
+      <label for="auth-email" id="auth-account-label">邮箱或旧用户名</label>
+      <input id="auth-email" name="email" type="text" autocomplete="email" required>
       <label for="auth-password">密码</label>
       <input id="auth-password" name="password" type="password" autocomplete="current-password" minlength="6" maxlength="128" required>
       <button id="open-reset" class="text-action" type="button">忘记密码？</button>
       <p id="auth-error" class="form-error" role="alert"></p>
       <button id="auth-submit" class="primary-action" type="submit">登录</button>
+    </form>
+  </dialog>
+
+  <dialog id="bind-email-dialog" class="auth-dialog">
+    <form id="bind-email-request-form" method="dialog">
+      <div class="dialog-heading"><div><p class="eyebrow">旧账号迁移</p><h2>绑定邮箱</h2></div><button id="close-bind-email" class="dialog-close" type="button" aria-label="关闭">×</button></div>
+      <label for="bind-email">新邮箱</label>
+      <input id="bind-email" type="email" autocomplete="email" required>
+      <p id="bind-email-error" class="form-error" role="alert"></p>
+      <button class="primary-action" type="submit">发送验证码</button>
+    </form>
+    <form id="bind-email-confirm-form" method="dialog" class="hidden">
+      <div class="dialog-heading"><div><p class="eyebrow">旧账号迁移</p><h2>确认邮箱</h2></div><button class="dialog-close" type="button" data-close-bind-email aria-label="关闭">×</button></div>
+      <label for="bind-email-code">邮箱验证码</label>
+      <input id="bind-email-code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required>
+      <p id="bind-email-confirm-error" class="form-error" role="alert"></p>
+      <button class="primary-action" type="submit">完成绑定</button>
     </form>
   </dialog>
 

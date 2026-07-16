@@ -22,8 +22,9 @@ os.environ["VERIGO_MAX_PENDING_JOBS"] = "50"
 from fastapi.testclient import TestClient
 from openpyxl import Workbook
 
+import app.api.auth as auth_api
 from app.core.legacy import load_legacy_module
-from app.core.security import token_hash
+from app.core.security import hash_password, token_hash
 from app.db.auth import auth_store
 from app.db.jobs import Job, job_store
 from app.main import app
@@ -152,6 +153,54 @@ with TestClient(app) as account:
 
     assert account.post("/api/auth/logout").status_code == 204
     assert account.get("/api/jobs/ownedjob0001").status_code == 404
+
+
+legacy_id = "legacy-smoke-user"
+with auth_store._connect() as connection:
+    connection.execute(
+        """
+        INSERT INTO users(id, username, email, email_verified, credits, password_hash, created_at)
+        VALUES (?, ?, NULL, 0, 7, ?, '2026-01-01T00:00:00+00:00')
+        """,
+        (legacy_id, "legacy_user", hash_password("legacy-password")),
+    )
+
+with TestClient(app) as legacy_account:
+    legacy_login = legacy_account.post(
+        "/api/auth/login",
+        json={"account": "legacy_user", "password": "legacy-password"},
+    )
+    assert legacy_login.status_code == 200, legacy_login.text
+    assert legacy_login.json()["needs_email_binding"] is True
+    assert legacy_login.json()["credits"] == 7
+
+    original_send_email_binding = auth_api.send_email_binding
+    auth_api.send_email_binding = lambda *_args, **_kwargs: None
+    try:
+        binding_request = legacy_account.post(
+            "/api/auth/email-binding/request", json={"email": "legacy@example.com"}
+        )
+    finally:
+        auth_api.send_email_binding = original_send_email_binding
+    assert binding_request.status_code == 204, binding_request.text
+
+    binding_code = auth_store.create_email_binding(legacy_id, "legacy@example.com")
+    bound = legacy_account.post(
+        "/api/auth/email-binding/confirm", json={"code": binding_code}
+    )
+    assert bound.status_code == 200, bound.text
+    assert bound.json()["email"] == "legacy@example.com"
+    assert bound.json()["email_verified"] is True
+    assert bound.json()["needs_email_binding"] is False
+    assert bound.json()["credits"] == 7
+    assert bound.json()["trial_credits"] == 0
+
+    assert legacy_account.post("/api/auth/logout").status_code == 204
+    rebound_login = legacy_account.post(
+        "/api/auth/login",
+        json={"account": "legacy@example.com", "password": "legacy-password"},
+    )
+    assert rebound_login.status_code == 200, rebound_login.text
 
 
 legacy = load_legacy_module()

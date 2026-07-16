@@ -79,6 +79,9 @@ async function checkAccountAndImport(browser) {
   if (!(await page.textContent("#discovery-verify")).includes("额度")) {
     throw new Error("discovery: paid candidate verification must show its credit cost");
   }
+  if (await page.locator("#discovery-stop-on-match").count()) {
+    throw new Error("discovery: stop-after-match must be the fixed default, not a user option");
+  }
   await page.close();
   return { account: true, importCount: 2, discovery: true };
 }

@@ -155,8 +155,6 @@ th:nth-child(1) { width: 24%; } th:nth-child(2) { width: 12%; } th:nth-child(3) 
 .discovery-form-area { padding: 30px 28px; border-right: 1px solid var(--line); background: #fafcfb; }
 .discovery-form-area h1 { margin-bottom: 24px; }
 .discovery-form-area > label { margin-top: 16px; }
-.discovery-stop { display: flex; align-items: center; gap: 8px; margin: 16px 0 0; color: var(--ink); font-size: 12px; cursor: pointer; }
-.discovery-stop input { width: 16px; height: 16px; margin: 0; accent-color: var(--accent); }
 .discovery-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .discovery-fields label { min-width: 0; }
 .discovery-actions { display: grid; gap: 8px; margin-top: 22px; }

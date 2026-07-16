@@ -13,6 +13,7 @@ from app.config import settings
 from app.core.mailer import (
     MailDeliveryError,
     MailNotConfiguredError,
+    send_email_binding,
     send_email_verification,
     send_password_reset_email,
 )
@@ -40,6 +41,16 @@ class RegistrationCredentials(Credentials):
     pass
 
 
+class LoginCredentials(BaseModel):
+    account: str = Field(min_length=1, max_length=254)
+    password: str = Field(min_length=6, max_length=128)
+
+    @field_validator("account")
+    @classmethod
+    def valid_account(cls, value: str) -> str:
+        return value.strip().lower()
+
+
 class PasswordResetRequest(BaseModel):
     email: str = Field(max_length=254)
 
@@ -61,6 +72,18 @@ class VerificationCode(BaseModel):
     code: str = Field(pattern=r"^\d{6}$")
 
 
+class EmailBindingRequest(BaseModel):
+    email: str = Field(max_length=254)
+
+    @field_validator("email")
+    @classmethod
+    def valid_email(cls, value: str) -> str:
+        value = value.strip().lower()
+        if not EMAIL_PATTERN.fullmatch(value):
+            raise ValueError("请输入有效的邮箱地址")
+        return value
+
+
 class UserResponse(BaseModel):
     id: str
     email: str
@@ -69,6 +92,7 @@ class UserResponse(BaseModel):
     paid_credits: int
     trial_credits: int
     trial_credit_expires_at: str | None
+    needs_email_binding: bool
 
 
 class AttemptLimiter:
@@ -99,6 +123,7 @@ def serialize_user(user: User) -> UserResponse:
         paid_credits=user.paid_credits,
         trial_credits=user.trial_credits,
         trial_credit_expires_at=user.trial_credit_expires_at,
+        needs_email_binding=user.email is None,
     )
 
 
@@ -138,11 +163,11 @@ def register(payload: RegistrationCredentials, request: Request, response: Respo
 
 
 @auth_router.post("/login", response_model=UserResponse)
-def login(payload: Credentials, request: Request, response: Response) -> UserResponse:
+def login(payload: LoginCredentials, request: Request, response: Response) -> UserResponse:
     attempt_limiter.check(f"login:{request.client.host if request.client else 'unknown'}")
-    user = auth_store.authenticate(payload.email, payload.password)
+    user = auth_store.authenticate(payload.account, payload.password)
     if user is None:
-        raise HTTPException(status_code=401, detail="邮箱或密码错误")
+        raise HTTPException(status_code=401, detail="账号或密码错误")
     set_session_cookie(response, auth_store.create_session(user.id))
     return serialize_user(user)
 
@@ -169,6 +194,33 @@ def confirm_email_verification(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return serialize_user(verified)
+
+
+@auth_router.post("/email-binding/request", status_code=204)
+def request_email_binding(
+    payload: EmailBindingRequest, user: Annotated[User, Depends(require_user)]
+) -> None:
+    attempt_limiter.check(f"binding:{user.id}", limit=5, window=900)
+    try:
+        code = auth_store.create_email_binding(user.id, payload.email)
+        send_email_binding(payload.email, code)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except MailNotConfiguredError as exc:
+        raise HTTPException(status_code=503, detail="验证邮件服务尚未配置") from exc
+    except MailDeliveryError as exc:
+        raise HTTPException(status_code=503, detail="验证邮件暂时无法发送") from exc
+
+
+@auth_router.post("/email-binding/confirm", response_model=UserResponse)
+def confirm_email_binding(
+    payload: VerificationCode, user: Annotated[User, Depends(require_user)]
+) -> UserResponse:
+    try:
+        bound = auth_store.confirm_email_binding(user.id, payload.code)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return serialize_user(bound)
 
 
 @auth_router.post("/password-reset/request", status_code=204)
