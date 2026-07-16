@@ -25,9 +25,9 @@ if (( disk_used >= disk_limit )); then
     issues+=("disk usage is ${disk_used}%")
 fi
 
-latest_backup=$(find /var/backups/verigo -mindepth 1 -maxdepth 1 -type d -name '20*' -printf '%T@\n' 2>/dev/null | sort -nr | head -n 1)
-if [[ -z "$latest_backup" ]] || (( $(date +%s) - ${latest_backup%.*} > backup_max_age_hours * 3600 )); then
-    issues+=("latest backup is older than ${backup_max_age_hours} hours")
+backup_success=/var/lib/verigo-backup/last-success
+if [[ ! -f "$backup_success" ]] || (( $(date +%s) - $(stat -c %Y "$backup_success") > backup_max_age_hours * 3600 )); then
+    issues+=("latest completed backup is older than ${backup_max_age_hours} hours")
 fi
 
 queued=$(/opt/verigo/.venv/bin/python - <<'PY'

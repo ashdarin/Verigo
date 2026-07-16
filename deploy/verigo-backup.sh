@@ -79,3 +79,6 @@ fi
 
 find "$backup_root" -mindepth 1 -maxdepth 1 -type d -name '20*' -mtime "+$keep_days" \
     -exec rm -rf -- {} +
+
+install -d -m 700 /var/lib/verigo-backup
+date -u +%Y-%m-%dT%H:%M:%SZ > /var/lib/verigo-backup/last-success
