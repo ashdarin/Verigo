@@ -39,6 +39,19 @@ class CloudShellLifecycle:
     def record_worker_seen(self, worker_id: str) -> None:
         job_store.record_worker_seen(GMAIL_TARGET, worker_id)
 
+    @staticmethod
+    def _worker_command() -> str:
+        """Start exactly one Gmail worker without conflating it with a QQ worker."""
+        return (
+            "cd ~/verigo-worker && python3 -m venv .venv && "
+            ".venv/bin/pip -q install 'dnspython>=2.6,<3' && "
+            "if test -s .gmail-worker.pid && "
+            "kill -0 \"$(cat .gmail-worker.pid)\" 2>/dev/null; then true; "
+            "else nohup sh -c '. .worker.env; exec .venv/bin/python -m "
+            "app.tencent_qq_worker' >/tmp/verigo-gmail-worker.log 2>&1 & "
+            "echo $! > .gmail-worker.pid; fi"
+        )
+
     def _token(self) -> str:
         credentials = json.loads(settings.google_cloudshell_adc_path.read_text())
         data = urllib.parse.urlencode({
@@ -79,8 +92,7 @@ class CloudShellLifecycle:
                 "VERIGO_TENCENT_QQ_WORKER_ID=cloudshell-gmail-1",
             )) + "\n"
             subprocess.run(base + ["cat > ~/verigo-worker/.worker.env && chmod 600 ~/verigo-worker/.worker.env"], input=environment_file.encode(), check=True, timeout=30)
-            command = "cd ~/verigo-worker && python3 -m venv .venv && .venv/bin/pip -q install 'dnspython>=2.6,<3' && (pgrep -f 'app.tencent_qq_worker' || nohup sh -c '. .worker.env; exec .venv/bin/python -m app.tencent_qq_worker' >/tmp/verigo-gmail-worker.log 2>&1 & )"
-            subprocess.run(base + [command], check=True, timeout=120)
+            subprocess.run(base + [self._worker_command()], check=True, timeout=120)
             logger.info("Cloud Shell Gmail worker bootstrap completed")
         except Exception as exc:
             logger.exception("Cloud Shell Gmail worker bootstrap failed: %s", exc)
