@@ -19,6 +19,7 @@ script = worker_start_script()
 assert "CloudStudio-Probe-Token" in script
 assert "app.tencent_qq_worker" in script
 assert "[a]pp.tencent_qq_worker" in script
+assert "git pull --ff-only" in script
 assert "setsid -f" in script
 
 command = worker_start_command()

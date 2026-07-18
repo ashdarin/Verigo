@@ -14,6 +14,7 @@ def worker_start_script() -> str:
     return """set -eu
 curl -fsS --retry 3 --retry-delay 2 -X POST -H \"X-Verigo-CloudStudio-Probe-Token: ${VERIGO_CLOUDSTUDIO_PROBE_TOKEN}\" -H \"X-Verigo-CloudStudio-Workspace-Key: ${VERIGO_CLOUDSTUDIO_SPACE_KEY}\" https://verigo.site/api/workers/cloudstudio/probe >/tmp/verigo-cloudstudio-probe.log 2>&1 || true
 cd /workspace/Verigo
+git pull --ff-only >/tmp/verigo-qq-git.log 2>&1 || true
 if [ ! -x .venv/bin/python ]; then python3 -m venv .venv; fi
 .venv/bin/python -m pip install --disable-pip-version-check \"dnspython>=2.6,<3\" >/tmp/verigo-qq-pip.log 2>&1
 if pgrep -f '[a]pp.tencent_qq_worker' >/dev/null; then exit 0; fi
