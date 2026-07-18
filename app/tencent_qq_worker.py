@@ -16,7 +16,8 @@ TOKEN = os.getenv("VERIGO_TENCENT_QQ_WORKER_TOKEN", "")
 WORKER_ID = os.getenv(
     "VERIGO_TENCENT_QQ_WORKER_ID", f"cloudstudio-{socket.gethostname()}-{os.getpid()}"
 )
-POLL_SECONDS = max(1.0, float(os.getenv("VERIGO_TENCENT_QQ_POLL_SECONDS", "5")))
+POLL_SECONDS = max(0.1, float(os.getenv("VERIGO_TENCENT_QQ_POLL_SECONDS", "0.25")))
+RETRY_SECONDS = max(1.0, float(os.getenv("VERIGO_TENCENT_QQ_RETRY_SECONDS", "5")))
 
 
 class WorkerRequestError(RuntimeError):
@@ -131,7 +132,7 @@ def main() -> None:
     print(f"Verigo Tencent QQ worker {WORKER_ID} polling {SERVER_URL}", flush=True)
     while True:
         try:
-            claim = request_json("/api/workers/tencent-qq/claim")
+            claim = request_json("/api/workers/tencent-qq/claim?wait_seconds=20")
             job = claim.get("job")
             if not job:
                 time.sleep(POLL_SECONDS)
@@ -150,7 +151,7 @@ def main() -> None:
                 print(f"Tencent QQ job {job_id} failed: {exc}", file=sys.stderr, flush=True)
         except WorkerRequestError as exc:
             print(f"Tencent QQ worker connection failed: {exc}", file=sys.stderr, flush=True)
-            time.sleep(POLL_SECONDS)
+            time.sleep(RETRY_SECONDS)
 
 
 if __name__ == "__main__":

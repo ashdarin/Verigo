@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import hmac
 import json
+import time
 import uuid
 from typing import Annotated
 
@@ -137,25 +139,31 @@ def health() -> dict[str, str]:
 
 
 @router.post("/workers/tencent-qq/claim")
-def claim_tencent_qq_job(
+async def claim_tencent_qq_job(
     token: Annotated[str | None, Header(alias="X-Verigo-Worker-Token")] = None,
     worker_id: Annotated[str | None, Header(alias="X-Verigo-Worker-Id")] = None,
+    wait_seconds: int = Query(default=20, ge=0, le=25),
 ) -> dict[str, object]:
     require_tencent_worker(token)
     worker_name = (worker_id or "").strip()
     if not worker_name or len(worker_name) > 128:
         raise HTTPException(status_code=422, detail="腾讯 QQ 验证节点标识无效")
-    job = job_store.claim_next(worker_name, execution_target="tencent_qq")
-    if job is None:
-        return {"job": None}
-    return {
-        "job": {
-            "id": job.id,
-            "emails": job.emails,
-            "worker_count": min(job.worker_count, 4),
-            "stop_on_deliverable": job.stop_on_deliverable,
-        }
-    }
+    deadline = time.monotonic() + wait_seconds
+    while True:
+        job = job_store.claim_next(worker_name, execution_target="tencent_qq")
+        if job is not None:
+            return {
+                "job": {
+                    "id": job.id,
+                    "emails": job.emails,
+                    "worker_count": min(job.worker_count, 4),
+                    "stop_on_deliverable": job.stop_on_deliverable,
+                }
+            }
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return {"job": None}
+        await asyncio.sleep(min(0.25, remaining))
 
 
 @router.post("/workers/tencent-qq/jobs/{job_id}/heartbeat")
