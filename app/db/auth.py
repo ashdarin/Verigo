@@ -655,6 +655,31 @@ class AuthStore:
             connection.execute("DELETE FROM sessions WHERE user_id = ?", (row[0],))
             connection.commit()
 
+    def change_password(
+        self, user_id: str, current_password: str, new_password: str, current_session: str | None
+    ) -> None:
+        self.initialize()
+        with closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT password_hash FROM users WHERE id=?", (user_id,)
+            ).fetchone()
+            if row is None or not verify_password(current_password, row[0]):
+                connection.rollback()
+                raise ValueError("原密码不正确")
+            connection.execute(
+                "UPDATE users SET password_hash=? WHERE id=?",
+                (hash_password(new_password), user_id),
+            )
+            if current_session:
+                connection.execute(
+                    "DELETE FROM sessions WHERE user_id=? AND token_hash<>?",
+                    (user_id, token_hash(current_session)),
+                )
+            else:
+                connection.execute("DELETE FROM sessions WHERE user_id=?", (user_id,))
+            connection.commit()
+
     def create_session(self, user_id: str) -> str:
         self.initialize()
         token = new_token()

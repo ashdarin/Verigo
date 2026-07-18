@@ -549,7 +549,7 @@ el("discovery-start").addEventListener("click", async () => {
     list.classList.remove("hidden");
     const verifyButton = el("discovery-verify");
     verifyButton.disabled = false;
-    verifyButton.textContent = `验证候选邮箱 · ${state.discovery.candidates.length} 额度`;
+    verifyButton.textContent = `免费验证候选邮箱 · ${state.discovery.candidates.length} 个地址`;
     el("discovery-title").textContent = `${state.discovery.candidates.length} 个候选邮箱`;
     el("discovery-status").textContent = "已找到";
     el("discovery-status").className = "status status-completed";
@@ -574,13 +574,13 @@ el("discovery-verify").addEventListener("click", async () => {
   button.disabled = true;
   let submitted = false;
   try {
-    const job = await api("/api/jobs", {
+    const job = await api("/api/discovery/verify", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        emails: state.discovery.candidates,
-        worker_count: 4,
-        stop_on_deliverable: true,
+        first_name: el("discovery-first-name").value,
+        last_name: el("discovery-last-name").value,
+        domain: el("discovery-domain").value,
       }),
     });
     state.discovery.jobId = job.id;
@@ -681,6 +681,34 @@ el("delete-account-button").addEventListener("click", () => {
   el("delete-account-confirm").checked = false;
   el("delete-account-error").textContent = "";
   el("delete-account-dialog").showModal();
+});
+el("change-password-button").addEventListener("click", () => {
+  el("account-menu").classList.add("hidden");
+  el("change-password-form").reset();
+  el("change-password-error").textContent = "";
+  el("change-password-dialog").showModal();
+});
+el("close-change-password").addEventListener("click", () => el("change-password-dialog").close());
+el("change-password-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const submit = event.currentTarget.querySelector('button[type="submit"]');
+  submit.disabled = true;
+  el("change-password-error").textContent = "";
+  try {
+    await api("/api/auth/password/change", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        current_password: el("current-password").value,
+        new_password: el("new-password").value,
+      }),
+    });
+    el("change-password-dialog").close();
+  } catch (error) {
+    el("change-password-error").textContent = error.message;
+  } finally {
+    submit.disabled = false;
+  }
 });
 el("close-delete-account").addEventListener("click", () => el("delete-account-dialog").close());
 el("delete-account-form").addEventListener("submit", async (event) => {

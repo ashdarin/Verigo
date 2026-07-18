@@ -112,6 +112,25 @@ with TestClient(app) as account:
     assert account.get("/api/auth/me").json()["email"] == "smoke@example.com"
     assert account.get("/api/admin/metrics").status_code == 403
     assert account.post(
+        "/api/auth/password/change",
+        json={"current_password": "incorrect-password", "new_password": "new-password-2026"},
+    ).status_code == 422
+    changed = account.post(
+        "/api/auth/password/change",
+        json={"current_password": "correct-horse-2026", "new_password": "new-password-2026"},
+    )
+    assert changed.status_code == 204, changed.text
+    assert account.get("/api/auth/me").json()["id"] == user_id
+    assert account.post("/api/auth/logout").status_code == 204
+    assert account.post(
+        "/api/auth/login",
+        json={"account": "smoke@example.com", "password": "correct-horse-2026"},
+    ).status_code == 401
+    assert account.post(
+        "/api/auth/login",
+        json={"account": "smoke@example.com", "password": "new-password-2026"},
+    ).status_code == 200
+    assert account.post(
         "/api/auth/register",
         json={"email": "blocked@mailinator.com", "password": "correct-horse-2026"},
     ).status_code == 422
@@ -134,6 +153,13 @@ with TestClient(app) as account:
     )
     assert candidates.status_code == 200, candidates.text
     assert candidates.json()["candidates"]
+    assert account.get("/api/auth/me").json()["credits"] == 10
+    discovery_job = account.post(
+        "/api/discovery/verify",
+        json={"first_name": "Ming", "last_name": "Wang", "domain": "example.com"},
+    )
+    assert discovery_job.status_code == 202, discovery_job.text
+    assert discovery_job.json()["stop_on_deliverable"] is True
     assert account.get("/api/auth/me").json()["credits"] == 10
 
     first_free = account.post(

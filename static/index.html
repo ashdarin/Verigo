@@ -38,6 +38,7 @@
         <strong id="account-name"></strong>
         <small id="account-credits" class="account-credits"></small>
         <button id="bind-email-button" type="button" class="hidden">绑定邮箱</button>
+        <button id="change-password-button" type="button" class="account-action">修改密码</button>
         <button id="delete-account-button" type="button" class="account-delete">删除账户</button>
         <button id="logout-button" type="button">退出登录</button>
       </div>
@@ -170,7 +171,7 @@
       <label for="discovery-domain">公司域名<input id="discovery-domain" inputmode="url" placeholder="company.com"></label>
       <div class="discovery-actions">
         <button id="discovery-start" class="primary-action" type="button">查找邮箱</button>
-        <button id="discovery-verify" class="secondary-action" type="button" disabled>验证候选邮箱</button>
+        <button id="discovery-verify" class="secondary-action" type="button" disabled>免费验证候选邮箱</button>
       </div>
       <p id="discovery-error" class="form-error" role="alert"></p>
       <div id="discovery-candidates" class="candidate-list hidden"></div>
@@ -324,6 +325,18 @@
       <label class="confirm-delete"><input id="delete-account-confirm" type="checkbox" required><span>我确认永久删除此账户及其数据</span></label>
       <p id="delete-account-error" class="form-error" role="alert"></p>
       <button class="primary-action danger-primary" type="submit">永久删除账户</button>
+    </form>
+  </dialog>
+
+  <dialog id="change-password-dialog" class="auth-dialog">
+    <form id="change-password-form" method="dialog">
+      <div class="dialog-heading"><div><p class="eyebrow">账户安全</p><h2>修改密码</h2></div><button id="close-change-password" class="dialog-close" type="button" aria-label="关闭">×</button></div>
+      <label for="current-password">原密码</label>
+      <input id="current-password" type="password" autocomplete="current-password" minlength="6" maxlength="128" required>
+      <label for="new-password">新密码</label>
+      <input id="new-password" type="password" autocomplete="new-password" minlength="6" maxlength="128" required>
+      <p id="change-password-error" class="form-error" role="alert"></p>
+      <button class="primary-action" type="submit">更新密码</button>
     </form>
   </dialog>
 

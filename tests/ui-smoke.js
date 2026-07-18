@@ -56,6 +56,15 @@ async function checkAccountAndImport(browser) {
   }
   await page.click("#close-email-verification");
   await page.click("#account-button");
+  await page.click("#change-password-button");
+  if (!(await page.locator("#change-password-dialog").evaluate((node) => node.open))) {
+    throw new Error("account: password changes should use the in-app dialog");
+  }
+  await page.fill("#current-password", "browser-smoke-2026");
+  await page.fill("#new-password", "browser-smoke-updated-2026");
+  await page.click("#change-password-form button[type=submit]");
+  await page.waitForFunction(() => !document.querySelector("#change-password-dialog")?.open);
+  await page.click("#account-button");
   await page.click("#delete-account-button");
   if (!(await page.locator("#delete-account-dialog").evaluate((node) => node.open))) {
     throw new Error("account: deletion must require an in-app confirmation dialog");
@@ -96,8 +105,8 @@ async function checkAccountAndImport(browser) {
   if (await page.isDisabled("#discovery-verify")) {
     throw new Error("discovery: candidate verification should be available after free lookup");
   }
-  if (!(await page.textContent("#discovery-verify")).includes("额度")) {
-    throw new Error("discovery: paid candidate verification must show its credit cost");
+  if (!(await page.textContent("#discovery-verify")).includes("免费验证候选邮箱")) {
+    throw new Error("discovery: candidate verification must be visibly free");
   }
   if (await page.locator("#discovery-stop-on-match").count()) {
     throw new Error("discovery: stop-after-match must be the fixed default, not a user option");

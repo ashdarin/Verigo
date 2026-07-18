@@ -81,6 +81,11 @@ class PasswordResetConfirm(PasswordResetRequest):
     password: str = Field(min_length=6, max_length=128)
 
 
+class PasswordChange(BaseModel):
+    current_password: str = Field(min_length=6, max_length=128)
+    new_password: str = Field(min_length=6, max_length=128)
+
+
 class VerificationCode(BaseModel):
     code: str = Field(pattern=r"^\d{6}$")
 
@@ -321,6 +326,22 @@ def confirm_password_reset(payload: PasswordResetConfirm, request: Request) -> N
     attempt_limiter.check(f"reset-confirm:{request.client.host if request.client else 'unknown'}", limit=8, window=900)
     try:
         auth_store.reset_password(payload.email, payload.code, payload.password)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@auth_router.post("/password/change", status_code=204)
+def change_password(
+    payload: PasswordChange,
+    request: Request,
+    user: Annotated[User, Depends(require_user)],
+    session: Annotated[str | None, Cookie(alias=settings.session_cookie_name)] = None,
+) -> None:
+    attempt_limiter.check(f"password-change:{user.id}", limit=5, window=900)
+    try:
+        auth_store.change_password(
+            user.id, payload.current_password, payload.new_password, session
+        )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 

@@ -106,6 +106,29 @@ def discovery_candidates(
     return DiscoveryResponse(candidates=candidates)
 
 
+@router.post("/discovery/verify", response_model=JobResponse, status_code=202)
+def verify_discovery_candidates(
+    payload: DiscoveryRequest,
+    user: Annotated[User, Depends(require_user)],
+) -> JobResponse:
+    if not user.email_verified:
+        raise HTTPException(status_code=403, detail="请先验证注册邮箱")
+    try:
+        candidates = candidate_emails(payload.first_name, payload.last_name, payload.domain)
+        job = verification_tasks.submit(
+            candidates,
+            worker_count=4,
+            owner_id=user.id,
+            stop_on_deliverable=True,
+            job_id=uuid.uuid4().hex[:12],
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    return serialize_job(job)
+
+
 @router.post("/jobs", response_model=JobResponse, status_code=202)
 def create_job(
     payload: CreateJobRequest,
