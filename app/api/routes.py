@@ -5,10 +5,10 @@ import json
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Body, Depends, File, Header, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse
 
-from app.api.auth import optional_user, require_admin, require_user
+from app.api.auth import optional_user, require_admin, require_user, request_network_hash
 from app.api.schemas import (
     CreateJobRequest,
     DiscoveryRequest,
@@ -24,7 +24,7 @@ from app.config import settings
 from app.core.imports import extract_emails
 from app.core.discovery import candidate_emails
 from app.core.security import token_hash
-from app.db.auth import FreeUsageLimitError, User, auth_store
+from app.db.auth import User, auth_store
 from app.db.jobs import Job, job_store
 from app.db.metrics import metrics_store
 from app.tasks.verification import (
@@ -63,7 +63,7 @@ def require_job_access(job: Job, user: User | None, guest_token: str | None) -> 
 
 def serialize_job(job: Job) -> JobResponse:
     completed, total, progress = job_progress(job)
-    is_done = job.status == "completed"
+    is_done = job.status in {"completed", "stopped"}
     return JobResponse(
         id=job.id,
         status=job.status,
@@ -89,6 +89,16 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@router.post("/analytics/engage", status_code=204)
+def record_analytics_engagement(
+    request: Request,
+    seconds: int = Body(default=0, embed=True, ge=0, le=1800),
+) -> None:
+    session_id = request.cookies.get("verigo_analytics")
+    if session_id:
+        metrics_store.record_engagement(session_id, seconds)
+
+
 @router.get("/admin/metrics")
 def admin_metrics(_: Annotated[User, Depends(require_admin)]) -> dict[str, object]:
     return metrics_store.snapshot()
@@ -109,6 +119,7 @@ def discovery_candidates(
 @router.post("/discovery/verify", response_model=JobResponse, status_code=202)
 def verify_discovery_candidates(
     payload: DiscoveryRequest,
+    request: Request,
     user: Annotated[User, Depends(require_user)],
 ) -> JobResponse:
     if not user.email_verified:
@@ -126,12 +137,14 @@ def verify_discovery_candidates(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=429, detail=str(exc)) from exc
+    metrics_store.record_conversion(request.cookies.get("verigo_analytics"), "free")
     return serialize_job(job)
 
 
 @router.post("/jobs", response_model=JobResponse, status_code=202)
 def create_job(
     payload: CreateJobRequest,
+    request: Request,
     user: Annotated[User, Depends(require_user)],
 ) -> JobResponse:
     emails = clean_emails(payload.emails)
@@ -156,38 +169,35 @@ def create_job(
         raise HTTPException(status_code=429, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    metrics_store.record_conversion(request.cookies.get("verigo_analytics"), "batch")
     return serialize_job(job)
 
 
 @router.post("/verify/single", response_model=JobResponse, status_code=202)
 def verify_single_email(
     payload: SingleVerificationRequest,
-    user: Annotated[User, Depends(require_user)],
+    request: Request,
+    user: Annotated[User | None, Depends(optional_user)],
 ) -> JobResponse:
     emails = clean_emails([payload.email])
     if len(emails) != 1:
         raise HTTPException(status_code=422, detail="请输入有效的邮箱地址")
-    if not user.email_verified:
-        raise HTTPException(status_code=403, detail="请先验证注册邮箱")
-
-    usage_kind = "single_verification"
     try:
-        auth_store.reserve_free_usage(
-            user.id, usage_kind, settings.free_single_daily_limit
+        metrics_store.reserve_free_single(
+            request_network_hash(request), settings.anonymous_free_single_daily_limit
         )
         job = verification_tasks.submit(
             emails,
             worker_count=1,
-            owner_id=user.id,
+            owner_id=user.id if user else None,
             job_id=uuid.uuid4().hex[:12],
         )
-    except FreeUsageLimitError as exc:
-        raise HTTPException(status_code=429, detail=str(exc)) from exc
     except RuntimeError as exc:
-        auth_store.release_free_usage(user.id, usage_kind)
+        metrics_store.release_free_single(request_network_hash(request))
         raise HTTPException(status_code=429, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    metrics_store.record_conversion(request.cookies.get("verigo_analytics"), "free")
     return serialize_job(job)
 
 
@@ -214,6 +224,24 @@ def get_job(
     guest_token: Annotated[str | None, Header(alias="X-Job-Token")] = None,
 ) -> JobResponse:
     return serialize_job(require_job_access(require_job(job_id), user, guest_token))
+
+
+@router.post("/jobs/{job_id}/stop", response_model=JobResponse)
+def stop_job(
+    job_id: str,
+    user: Annotated[User | None, Depends(optional_user)],
+    guest_token: Annotated[str | None, Header(alias="X-Job-Token")] = None,
+) -> JobResponse:
+    require_job_access(require_job(job_id), user, guest_token)
+    job = job_store.stop(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if job.status != "stopped":
+        raise HTTPException(status_code=409, detail="任务已结束，无法停止")
+    if job.results:
+        write_csv(job)
+        job_store.persist(job)
+    return serialize_job(job)
 
 
 @router.get("/jobs/{job_id}/results", response_model=ResultsResponse)
@@ -255,7 +283,7 @@ def download_results(
     guest_token: Annotated[str | None, Header(alias="X-Job-Token")] = None,
 ) -> FileResponse:
     job = require_job_access(require_job(job_id), user, guest_token)
-    if job.status != "completed" or job.csv_path is None or not job.csv_path.exists():
+    if job.status not in {"completed", "stopped"} or job.csv_path is None or not job.csv_path.exists():
         raise HTTPException(status_code=409, detail="结果文件尚未生成")
     return FileResponse(
         job.csv_path,

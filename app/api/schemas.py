@@ -35,7 +35,7 @@ class JobSummary(BaseModel):
 
 class JobResponse(BaseModel):
     id: str
-    status: Literal["queued", "running", "completed", "failed"]
+    status: Literal["queued", "running", "completed", "failed", "stopped"]
     worker_count: int
     completed: int
     total: int

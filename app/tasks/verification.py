@@ -162,6 +162,8 @@ def verify_until_deliverable(
     by_index: dict[int, dict[str, Any]] = {}
     verifier: Any = None
     for index, email in enumerate(job.emails):
+        if job_store.is_stopped(job.id):
+            return by_index
         cached = cached_by_email.get(email.lower())
         if cached is not None:
             result = dict(cached)
@@ -171,7 +173,11 @@ def verify_until_deliverable(
             if verifier is None:
                 verifier = create_verifier(1)
                 job.verifier = verifier
-            batch_results = verifier.verify_batch_distributed([email], num_processes=1)
+            batch_results = verifier.verify_batch_distributed(
+                [email], num_processes=1, should_stop=lambda: job_store.is_stopped(job.id)
+            )
+            if job_store.is_stopped(job.id):
+                return by_index
             result = normalize_result(dict(batch_results[0])) if batch_results else {
                 "email": email,
                 "deliverable": None,
@@ -197,9 +203,13 @@ def run_job(job: Job) -> None:
     job.heartbeat_at = utc_now()
     job_store.persist(job)
     try:
+        if job_store.is_stopped(job.id):
+            return
         cached_by_email = job_store.cached_results(job.emails)
         if job.stop_on_deliverable:
             by_index = verify_until_deliverable(job, cached_by_email)
+            if job_store.is_stopped(job.id):
+                return
             job.results = [by_index[index] for index in sorted(by_index)]
             job_store.cache_results(job.results)
             job_store.record_catch_all(job)
@@ -232,6 +242,8 @@ def run_job(job: Job) -> None:
 
             def on_result(result: dict[str, Any]) -> None:
                 nonlocal last_persist
+                if job_store.is_stopped(job.id):
+                    return
                 result = dict(result)
                 relative_index = int(result.get("original_index", 0))
                 result["original_index"] = missing_indices[relative_index]
@@ -244,8 +256,13 @@ def run_job(job: Job) -> None:
                     last_persist = now
 
             final_results = verifier.verify_batch_distributed(
-                missing_emails, num_processes=job.worker_count, result_callback=on_result
+                missing_emails,
+                num_processes=job.worker_count,
+                result_callback=on_result,
+                should_stop=lambda: job_store.is_stopped(job.id),
             )
+            if job_store.is_stopped(job.id):
+                return
             for result in final_results:
                 result = dict(result)
                 relative_index = int(result.get("original_index", 0))

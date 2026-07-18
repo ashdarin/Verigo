@@ -97,9 +97,16 @@ with TestClient(app) as guest:
         "/api/jobs",
         json={"emails": ["api-check@example.com"], "worker_count": 1},
     ).status_code == 401
-    assert guest.post(
+    guest_single = guest.post(
         "/api/verify/single", json={"email": "api-check@example.com"}
-    ).status_code == 401
+    )
+    assert guest_single.status_code == 202, guest_single.text
+    stopped_guest_job = guest.post(
+        f"/api/jobs/{guest_single.json()['id']}/stop",
+        headers={"X-Job-Token": guest_single.json()["access_token"]},
+    )
+    assert stopped_guest_job.status_code == 200, stopped_guest_job.text
+    assert stopped_guest_job.json()["status"] == "stopped"
 
 
 with TestClient(app) as account:
@@ -136,7 +143,7 @@ with TestClient(app) as account:
     ).status_code == 422
     assert account.post(
         "/api/verify/single", json={"email": "first@example.com"}
-    ).status_code == 403
+    ).status_code == 202
 
     verification_code = auth_store.create_email_verification(user_id)
     auth_store.confirm_email_verification(user_id, verification_code)
@@ -171,10 +178,10 @@ with TestClient(app) as account:
     assert first_free.status_code == 202, first_free.text
     assert second_free.status_code == 202, second_free.text
     assert account.get("/api/auth/me").json()["credits"] == 10
-    exhausted = account.post(
+    third_free = account.post(
         "/api/verify/single", json={"email": "third@example.com"}
     )
-    assert exhausted.status_code == 429, exhausted.text
+    assert third_free.status_code == 202, third_free.text
 
     paid = account.post(
         "/api/jobs",
@@ -188,6 +195,14 @@ with TestClient(app) as account:
     assert after_paid["credits"] == 8
     assert after_paid["paid_credits"] == 0
     assert after_paid["trial_credits"] == 8
+    stopped_paid = account.post(f"/api/jobs/{paid.json()['id']}/stop")
+    assert stopped_paid.status_code == 200, stopped_paid.text
+    assert stopped_paid.json()["status"] == "stopped"
+    stale_worker_copy = job_store.get(paid.json()["id"])
+    assert stale_worker_copy is not None
+    stale_worker_copy.status = "completed"
+    job_store.persist(stale_worker_copy)
+    assert job_store.get(paid.json()["id"]).status == "stopped"
     auth_store.refund_credits(user_id, 2, f"verification:{paid.json()['id']}")
     assert account.get("/api/auth/me").json()["credits"] == 10
 
@@ -231,7 +246,7 @@ with TestClient(app) as admin_account:
     metrics = admin_account.get("/api/admin/metrics")
     assert metrics.status_code == 200, metrics.text
     assert metrics.json()["today"]["page_views"] >= 1
-    assert len(metrics.json()["daily"]) == 7
+    assert len(metrics.json()["daily"]) == 14
 
 
 for number in range(3):

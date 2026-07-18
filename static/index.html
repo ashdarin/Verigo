@@ -16,7 +16,7 @@
   <meta name="twitter:card" content="summary">
   <script type="application/ld+json">{"@context":"https://schema.org","@type":"WebApplication","name":"Verigo","url":"https://verigo.site/","applicationCategory":"BusinessApplication","operatingSystem":"Web","description":"邮箱验证、批量验证与工作邮箱查找工具。"}</script>
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
-  <link rel="stylesheet" href="/static/css/app.css">
+  <link rel="stylesheet" href="/static/css/app.css?v=report-v5">
 </head>
 <body>
   <header class="topbar">
@@ -139,7 +139,7 @@
             <option value="unknown">待确认</option>
           </select>
         </div>
-        <button id="download-button" class="download-action" type="button" disabled>下载 CSV</button>
+        <div class="table-actions"><button id="stop-job-button" class="stop-action hidden" type="button">停止验证</button><button id="download-button" class="download-action" type="button" disabled>下载 CSV</button></div>
       </div>
 
       <div class="table-wrap">
@@ -179,7 +179,7 @@
     <section class="discovery-results-area">
       <div class="results-header">
         <div><p class="eyebrow">查找结果</p><h2 id="discovery-title">等待查找</h2></div>
-        <span id="discovery-status" class="status status-idle">未开始</span>
+        <div class="job-state"><span id="discovery-status" class="status status-idle">未开始</span><button id="discovery-stop-button" class="stop-action hidden" type="button">停止验证</button></div>
       </div>
       <section class="progress-section" aria-live="polite">
         <div class="progress-meta"><span id="discovery-progress-copy">0 / 0 已处理</span><strong id="discovery-progress-percent">0%</strong></div>
@@ -196,58 +196,81 @@
   </main>
 
   <main id="dashboard-workspace" class="dashboard-workspace hidden">
-    <section class="dashboard-heading">
+    <section class="report-heading">
       <div>
-        <p class="eyebrow">运营监控</p>
-        <h1>网站实时概览</h1>
-        <p id="dashboard-updated" class="dashboard-updated">正在加载数据</p>
+        <p class="eyebrow">报告快照</p>
+        <h1>网站运营概览</h1>
+        <p id="dashboard-updated" class="report-updated">正在加载数据</p>
       </div>
-      <button id="dashboard-refresh" class="download-action" type="button">刷新数据</button>
+      <div class="report-actions"><span class="report-period">最近 14 天</span><button id="dashboard-refresh" class="download-action" type="button">刷新</button></div>
     </section>
 
-    <section class="dashboard-section" aria-labelledby="today-metrics-title">
-      <div class="dashboard-section-heading">
-        <h2 id="today-metrics-title">今日</h2>
-        <span>按中国标准时间统计</span>
-      </div>
-      <div class="dashboard-metrics">
-        <article class="dashboard-metric"><span>页面访问</span><strong id="metric-today-views">0</strong></article>
-        <article class="dashboard-metric"><span>独立访客</span><strong id="metric-today-visitors">0</strong></article>
-        <article class="dashboard-metric"><span>新增用户</span><strong id="metric-today-users">0</strong></article>
-        <article class="dashboard-metric"><span>新建任务</span><strong id="metric-today-jobs">0</strong></article>
-        <article class="dashboard-metric"><span>消耗额度</span><strong id="metric-today-credits">0</strong></article>
-        <article class="dashboard-metric dashboard-revenue"><span>已支付收入</span><strong id="metric-today-revenue">¥0.00</strong><small id="metric-today-orders">0 笔订单</small></article>
-      </div>
+    <section class="report-scorecards" aria-label="今日关键指标">
+      <article class="report-scorecard"><span>独立访客</span><strong id="metric-report-users">0</strong><small>今日</small></article>
+      <article class="report-scorecard"><span>互动会话</span><strong id="metric-report-engaged">0</strong><small id="metric-report-engagement-rate">互动率 0%</small></article>
+      <article class="report-scorecard"><span>验证提交</span><strong id="metric-report-submissions">0</strong><small id="metric-report-submission-rate">会话转化 0%</small></article>
+      <article class="report-scorecard"><span>平均互动时长</span><strong id="metric-report-engagement-time">0 秒</strong><small>已互动会话</small></article>
     </section>
 
-    <section class="dashboard-layout">
-      <section class="dashboard-section">
-        <div class="dashboard-section-heading"><h2>访问趋势</h2><span>最近 7 天</span></div>
-        <div class="dashboard-table-wrap">
-          <table class="dashboard-table">
-            <thead><tr><th>日期</th><th>页面访问</th><th>独立访客</th></tr></thead>
-            <tbody id="dashboard-traffic-body"><tr><td colspan="3" class="dashboard-empty">正在加载</td></tr></tbody>
-          </table>
-        </div>
+    <section class="report-primary-grid">
+      <section class="report-card report-traffic-card">
+        <div class="report-card-heading"><div><h2>流量趋势</h2><p>独立访客与互动会话</p></div><span>最近 14 天</span></div>
+        <div class="report-legend" aria-hidden="true"><span class="report-legend-users">独立访客</span><span class="report-legend-engaged">互动会话</span></div>
+        <svg id="dashboard-traffic-chart" class="report-chart" role="img" aria-label="最近十四天独立访客和互动会话趋势"></svg>
       </section>
-      <section class="dashboard-section">
-        <div class="dashboard-section-heading"><h2>运营累计</h2><span>自统计启用以来</span></div>
-        <dl class="dashboard-totals">
-          <div><dt>页面访问</dt><dd id="metric-total-views">0</dd></div>
-          <div><dt>独立访客</dt><dd id="metric-total-visitors">0</dd></div>
-          <div><dt>注册用户</dt><dd id="metric-total-users">0</dd></div>
-          <div><dt>已验证用户</dt><dd id="metric-total-verified-users">0</dd></div>
-          <div><dt>验证任务</dt><dd id="metric-total-jobs">0</dd></div>
-          <div><dt>已支付收入</dt><dd id="metric-total-revenue">¥0.00</dd></div>
+      <section class="report-card report-quality-card">
+        <div class="report-card-heading"><div><h2>流量质量</h2><p>已识别的访问会话</p></div></div>
+        <div class="quality-summary"><div id="quality-ring" class="quality-ring"><strong id="metric-quality-human-rate">0%</strong><span>非 Bot</span></div><div><strong id="metric-today-bounce">0%</strong><span>互动跳出率</span></div></div>
+        <dl class="quality-list">
+          <div><dt><i class="quality-dot quality-dot-human"></i>已互动</dt><dd id="metric-today-engaged">0</dd></div>
+          <div><dt><i class="quality-dot quality-dot-bot"></i>疑似 Bot</dt><dd id="metric-today-bots">0</dd></div>
+          <div><dt>Bot 占比</dt><dd id="metric-today-bot-rate">0%</dd></div>
         </dl>
       </section>
-      <section class="dashboard-section">
-        <div class="dashboard-section-heading"><h2>任务队列</h2><span>当前状态</span></div>
-        <dl class="dashboard-totals dashboard-job-statuses">
-          <div><dt>排队中</dt><dd id="metric-jobs-queued">0</dd></div>
-          <div><dt>处理中</dt><dd id="metric-jobs-running">0</dd></div>
-          <div><dt>已完成</dt><dd id="metric-jobs-completed">0</dd></div>
-          <div><dt>失败</dt><dd id="metric-jobs-failed">0</dd></div>
+    </section>
+
+    <section class="report-secondary-grid">
+      <section class="report-card report-conversion-card">
+        <div class="report-card-heading"><div><h2>转化与注册</h2><p>今日从访问到产品动作</p></div><span>真实会话</span></div>
+        <div class="funnel-list">
+          <div><div><span>独立访客</span><strong id="metric-today-visitors">0</strong></div><i class="funnel-track"><i id="funnel-users" class="funnel-fill funnel-fill-users"></i></i></div>
+          <div><div><span>互动会话</span><strong id="metric-funnel-engaged">0</strong></div><i class="funnel-track"><i id="funnel-engaged" class="funnel-fill funnel-fill-engaged"></i></i></div>
+          <div><div><span>免费验证提交</span><strong id="metric-today-free-submissions">0</strong></div><i class="funnel-track"><i id="funnel-free" class="funnel-fill funnel-fill-free"></i></i></div>
+          <div><div><span>批量验证提交</span><strong id="metric-today-batch-submissions">0</strong></div><i class="funnel-track"><i id="funnel-batch" class="funnel-fill funnel-fill-batch"></i></i></div>
+        </div>
+        <div class="conversion-footer"><span>新增注册 <strong id="metric-today-users">0</strong></span><span>完成邮箱验证 <strong id="metric-today-verified">0</strong></span></div>
+      </section>
+      <section class="report-card report-operations-card">
+        <div class="report-card-heading"><div><h2>验证服务表现</h2><p>今日创建任务</p></div><span class="service-ready">运行正常</span></div>
+        <dl class="operations-list">
+          <div><dt>任务完成率</dt><dd id="metric-job-completion">0%</dd></div>
+          <div><dt>平均处理时长</dt><dd id="metric-job-duration">0 秒</dd></div>
+          <div><dt>可投递率</dt><dd id="metric-deliverable-rate">0%</dd></div>
+          <div><dt>已处理邮箱</dt><dd id="metric-results-processed">0</dd></div>
+        </dl>
+        <div class="operations-footer"><span>排队 <strong id="metric-jobs-queued">0</strong></span><span>处理中 <strong id="metric-jobs-running">0</strong></span><span>失败 <strong id="metric-jobs-failed">0</strong></span></div>
+      </section>
+    </section>
+
+    <section class="report-tertiary-grid">
+      <section class="report-card report-audience-card">
+        <div class="report-card-heading"><div><h2>用户与活跃度</h2><p>用户规模与今日真实访问</p></div><span>账户活跃</span></div>
+        <dl class="audience-list">
+          <div><dt>注册用户</dt><dd id="metric-total-users">0</dd><small>累计</small></div>
+          <div><dt>已验证用户</dt><dd id="metric-total-verified-users">0</dd><small>可使用验证服务</small></div>
+          <div><dt>今日独立访客</dt><dd id="metric-audience-visitors">0</dd><small>去重访问</small></div>
+          <div><dt>今日互动会话</dt><dd id="metric-audience-engaged">0</dd><small id="metric-audience-engagement-rate">互动率 0%</small></div>
+          <div><dt>今日新增注册</dt><dd id="metric-audience-signups">0</dd><small>新账户</small></div>
+          <div><dt>今日完成验证</dt><dd id="metric-audience-verified">0</dd><small>邮箱确认</small></div>
+        </dl>
+      </section>
+      <section class="report-card report-revenue-card">
+        <div class="report-card-heading"><div><h2>收入</h2><p>仅统计已支付订单</p></div><span>人民币</span></div>
+        <div class="revenue-primary"><span>今日实际收入</span><strong id="metric-today-revenue">¥0.00</strong><small id="metric-today-orders">0 笔已支付订单</small></div>
+        <dl class="revenue-list">
+          <div><dt>累计实际收入</dt><dd id="metric-total-revenue">¥0.00</dd></div>
+          <div><dt>累计已支付订单</dt><dd id="metric-total-paid-orders">0</dd></div>
+          <div><dt>平均客单价</dt><dd id="metric-average-order-value">¥0.00</dd></div>
         </dl>
       </section>
     </section>
@@ -359,6 +382,6 @@
     </form>
   </dialog>
 
-  <script src="/static/js/app.js?v=dashboard-v1" defer></script>
+  <script src="/static/js/app.js?v=report-v6" defer></script>
 </body>
 </html>

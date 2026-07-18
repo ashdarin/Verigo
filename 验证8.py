@@ -1613,7 +1613,7 @@ class DistributedEmailVerifier:
 
         return cleaned
 
-    def verify_batch_distributed(self, emails, num_processes=None, result_callback=None):
+    def verify_batch_distributed(self, emails, num_processes=None, result_callback=None, should_stop=None):
         """分布式批量验证 - 优化版：预先检测域名类型，避免重复检测"""
         if not emails:
             print("❌ 没有邮箱需要验证")
@@ -1770,6 +1770,10 @@ class DistributedEmailVerifier:
         try:
             while completed_processes < num_processes:
                 try:
+                    if should_stop and should_stop():
+                        for p in processes:
+                            p.terminate()
+                        break
                     # 检查进度更新
                     while True:
                         try:

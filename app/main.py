@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+import secrets
 
 from fastapi import FastAPI
 from fastapi.responses import FileResponse, PlainTextResponse, Response
@@ -45,6 +46,17 @@ async def collect_page_views(request, call_next):
                 request.client.host if request.client else "unknown"
             )
             metrics_store.record_page_view(client_host, request.headers.get("user-agent", ""))
+            existing_session = request.cookies.get("verigo_analytics")
+            session_id = (
+                existing_session
+                if existing_session and metrics_store.session_is_active(existing_session)
+                else secrets.token_urlsafe(24)
+            )
+            metrics_store.record_session_page_view(session_id, request.headers.get("user-agent", ""))
+            response.set_cookie(
+                key="verigo_analytics", value=session_id, max_age=1800, httponly=True,
+                secure=settings.secure_cookies, samesite="lax", path="/",
+            )
         except Exception:
             # Statistics must never make the public application unavailable.
             pass

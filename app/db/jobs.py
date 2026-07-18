@@ -200,6 +200,7 @@ class JobStore:
                     owner_id=excluded.owner_id, guest_token_hash=excluded.guest_token_hash,
                     worker_id=excluded.worker_id, heartbeat_at=excluded.heartbeat_at,
                     stop_on_deliverable=excluded.stop_on_deliverable
+                WHERE jobs.status != 'stopped' OR excluded.status = 'stopped'
                 """,
                 values,
             )
@@ -261,9 +262,44 @@ class JobStore:
         job.heartbeat_at = utc_now()
         with closing(self._connect()) as connection:
             connection.execute(
-                "UPDATE jobs SET heartbeat_at = ? WHERE id = ? AND worker_id = ?",
+                "UPDATE jobs SET heartbeat_at = ? WHERE id = ? AND worker_id = ? AND status = 'running'",
                 (job.heartbeat_at.isoformat(), job.id, job.worker_id),
             )
+
+    def is_stopped(self, job_id: str) -> bool:
+        self.initialize()
+        with closing(self._connect()) as connection:
+            row = connection.execute("SELECT status FROM jobs WHERE id=?", (job_id,)).fetchone()
+        return row is not None and row[0] == "stopped"
+
+    def stop(self, job_id: str) -> Job | None:
+        """Stop a queued or running job without discarding completed results."""
+        self.initialize()
+        with self._lock, closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                f"SELECT {self._select_columns()} FROM jobs WHERE id=?", (job_id,)
+            ).fetchone()
+            if row is None:
+                connection.rollback()
+                return None
+            job = self._job_from_row(row)
+            if job.status not in {"queued", "running"}:
+                connection.commit()
+                return job
+            connection.execute(
+                """
+                UPDATE jobs SET status='stopped', finished_at=?, error=?,
+                    worker_id=NULL, heartbeat_at=NULL
+                WHERE id=?
+                """,
+                (utc_now().isoformat(), "已由用户停止验证", job_id),
+            )
+            row = connection.execute(
+                f"SELECT {self._select_columns()} FROM jobs WHERE id=?", (job_id,)
+            ).fetchone()
+            connection.commit()
+        return self._job_from_row(row)
 
     def queue_position(self, job_id: str) -> int | None:
         self.initialize()

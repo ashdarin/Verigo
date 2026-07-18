@@ -25,7 +25,7 @@ const singleInput = el("single-email-input");
 const count = el("email-count");
 const startButton = el("start-button");
 const errorBox = el("form-error");
-const statusLabels = { queued: "排队中", running: "验证中", completed: "已完成", failed: "失败" };
+const statusLabels = { queued: "排队中", running: "验证中", completed: "已完成", failed: "失败", stopped: "已停止" };
 const modeLabels = {
   1: ["稳定模式", "mode-stable"],
   2: ["标准模式", "mode-standard"],
@@ -125,40 +125,100 @@ function setMetric(id, value) {
   el(id).textContent = Number(value || 0).toLocaleString("zh-CN");
 }
 
+function formatDuration(seconds) {
+  const total = Math.round(Number(seconds || 0));
+  if (total < 60) return `${total} 秒`;
+  return `${Math.floor(total / 60)} 分 ${total % 60} 秒`;
+}
+
 function renderTraffic(days) {
-  const body = el("dashboard-traffic-body");
-  body.replaceChildren();
-  days.forEach((item) => {
-    const row = document.createElement("tr");
-    const date = document.createElement("td");
-    const views = document.createElement("td");
-    const visitors = document.createElement("td");
-    date.textContent = item.day.slice(5).replace("-", "/");
-    views.textContent = Number(item.page_views || 0).toLocaleString("zh-CN");
-    visitors.textContent = Number(item.unique_visitors || 0).toLocaleString("zh-CN");
-    row.append(date, views, visitors);
-    body.append(row);
-  });
+  const chart = el("dashboard-traffic-chart");
+  const width = 760;
+  const height = 270;
+  const padding = { top: 18, right: 16, bottom: 34, left: 38 };
+  const plotWidth = width - padding.left - padding.right;
+  const plotHeight = height - padding.top - padding.bottom;
+  const series = [
+    { key: "unique_visitors", color: "#1a73e8", label: "独立访客" },
+    { key: "engaged_sessions", color: "#34a853", label: "互动会话" },
+  ];
+  const maximum = Math.max(1, ...days.flatMap((item) => series.map((itemSeries) => Number(item[itemSeries.key] || 0))));
+  const point = (value, index) => {
+    const x = padding.left + (days.length > 1 ? index * plotWidth / (days.length - 1) : plotWidth / 2);
+    const y = padding.top + plotHeight - Number(value || 0) / maximum * plotHeight;
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  };
+  const grid = [0, 0.5, 1].map((step) => {
+    const y = padding.top + plotHeight * step;
+    const label = Math.round(maximum * (1 - step));
+    return `<line x1="${padding.left}" y1="${y}" x2="${width - padding.right}" y2="${y}" class="traffic-grid" /><text x="0" y="${y + 4}" class="traffic-axis">${label}</text>`;
+  }).join("");
+  const labels = days.map((item, index) => {
+    if (index % 2 && days.length > 8) return "";
+    const x = padding.left + (days.length > 1 ? index * plotWidth / (days.length - 1) : plotWidth / 2);
+    return `<text x="${x}" y="${height - 8}" text-anchor="middle" class="traffic-axis">${item.day.slice(5).replace("-", "/")}</text>`;
+  }).join("");
+  const lines = series.map((itemSeries) => {
+    const points = days.map((item, index) => point(item[itemSeries.key], index)).join(" ");
+    const dots = days.map((item, index) => {
+      const [x, y] = point(item[itemSeries.key], index).split(",");
+      return `<circle cx="${x}" cy="${y}" r="3" fill="${itemSeries.color}"><title>${item.day} ${itemSeries.label}：${Number(item[itemSeries.key] || 0).toLocaleString("zh-CN")}</title></circle>`;
+    }).join("");
+    return `<polyline points="${points}" fill="none" stroke="${itemSeries.color}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" />${dots}`;
+  }).join("");
+  chart.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  chart.innerHTML = `${grid}${lines}${labels}`;
 }
 
 async function loadDashboardMetrics() {
   if (!state.user?.is_admin || state.view !== "dashboard") return;
   try {
     const data = await api("/api/admin/metrics");
-    setMetric("metric-today-views", data.today.page_views);
+    const today = data.today;
+    const realSessions = Math.max(0, Number(today.sessions || 0) - Number(today.suspected_bots || 0));
+    const submissions = Number(today.free_submissions || 0) + Number(today.batch_submissions || 0);
+    const engagementRate = realSessions ? Number(today.engaged_sessions || 0) / realSessions * 100 : 0;
+    const submissionRate = realSessions ? submissions / realSessions * 100 : 0;
+    setMetric("metric-report-users", today.unique_visitors);
+    setMetric("metric-report-engaged", today.engaged_sessions);
+    el("metric-report-engagement-rate").textContent = `互动率 ${engagementRate.toFixed(1)}%`;
+    setMetric("metric-report-submissions", submissions);
+    el("metric-report-submission-rate").textContent = `会话转化 ${submissionRate.toFixed(1)}%`;
+    el("metric-report-engagement-time").textContent = formatDuration(today.average_engagement_seconds);
     setMetric("metric-today-visitors", data.today.unique_visitors);
-    setMetric("metric-today-users", data.today.new_users);
-    setMetric("metric-today-jobs", data.today.new_jobs);
-    setMetric("metric-today-credits", data.today.credits_consumed);
-    el("metric-today-revenue").textContent = formatMoney(data.today.revenue_fen);
-    el("metric-today-orders").textContent = `${Number(data.today.paid_orders || 0).toLocaleString("zh-CN")} 笔订单`;
-    setMetric("metric-total-views", data.totals.page_views);
-    setMetric("metric-total-visitors", data.totals.unique_visitors);
+    setMetric("metric-today-engaged", today.engaged_sessions);
+    setMetric("metric-today-bots", today.suspected_bots);
+    el("metric-today-bounce").textContent = `${Number(today.bounce_rate || 0).toFixed(1)}%`;
+    el("metric-today-bot-rate").textContent = `${Number(today.bot_rate || 0).toFixed(1)}%`;
+    el("metric-quality-human-rate").textContent = `${(100 - Number(today.bot_rate || 0)).toFixed(1)}%`;
+    el("quality-ring").style.setProperty("--quality-human", `${Math.max(0, 100 - Number(today.bot_rate || 0))}%`);
+    setMetric("metric-today-free-submissions", today.free_submissions);
+    setMetric("metric-today-batch-submissions", today.batch_submissions);
+    setMetric("metric-funnel-engaged", today.engaged_sessions);
+    setMetric("metric-today-users", today.new_users);
+    setMetric("metric-today-verified", today.verified_users);
+    const userBase = Math.max(1, Number(today.unique_visitors || 0));
+    [["funnel-users", today.unique_visitors], ["funnel-engaged", today.engaged_sessions], ["funnel-free", today.free_submissions], ["funnel-batch", today.batch_submissions]].forEach(([id, value]) => {
+      el(id).style.width = `${Math.max(3, Number(value || 0) / userBase * 100)}%`;
+    });
+    el("metric-job-completion").textContent = `${Number(today.job_completion_rate || 0).toFixed(1)}%`;
+    el("metric-job-duration").textContent = formatDuration(today.average_job_seconds);
+    el("metric-deliverable-rate").textContent = `${Number(today.deliverable_rate || 0).toFixed(1)}%`;
+    setMetric("metric-results-processed", today.results_processed);
     setMetric("metric-total-users", data.totals.users);
     setMetric("metric-total-verified-users", data.totals.verified_users);
-    setMetric("metric-total-jobs", data.totals.jobs);
+    setMetric("metric-audience-visitors", today.unique_visitors);
+    setMetric("metric-audience-engaged", today.engaged_sessions);
+    setMetric("metric-audience-signups", today.new_users);
+    setMetric("metric-audience-verified", today.verified_users);
+    el("metric-audience-engagement-rate").textContent = `互动率 ${engagementRate.toFixed(1)}%`;
+    el("metric-today-revenue").textContent = formatMoney(today.revenue_fen);
+    el("metric-today-orders").textContent = `${Number(today.paid_orders || 0).toLocaleString("zh-CN")} 笔已支付订单`;
     el("metric-total-revenue").textContent = formatMoney(data.totals.revenue_fen);
-    ["queued", "running", "completed", "failed"].forEach((status) => setMetric(`metric-jobs-${status}`, data.jobs[status]));
+    setMetric("metric-total-paid-orders", data.totals.paid_orders);
+    const averageOrderFen = Number(data.totals.paid_orders || 0) ? Number(data.totals.revenue_fen || 0) / Number(data.totals.paid_orders) : 0;
+    el("metric-average-order-value").textContent = formatMoney(averageOrderFen);
+    ["queued", "running", "failed"].forEach((status) => setMetric(`metric-jobs-${status}`, data.jobs[status]));
     renderTraffic(data.daily);
     el("dashboard-updated").textContent = `最近更新：${new Date(data.updated_at).toLocaleString("zh-CN")}`;
   } catch (error) {
@@ -186,6 +246,26 @@ document.querySelectorAll("[data-mode]").forEach((button) => {
 
 batchInput.addEventListener("input", updateCount);
 singleInput.addEventListener("input", updateCount);
+let engagementRecorded = false;
+const analyticsStartedAt = performance.now();
+function sendEngagement(seconds) {
+  fetch("/api/analytics/engage", {
+    method: "POST", credentials: "same-origin", keepalive: true,
+    headers: { "Content-Type": "application/json" }, body: JSON.stringify({ seconds }),
+  }).catch(() => {});
+}
+function recordEngagement() {
+  if (engagementRecorded) return;
+  engagementRecorded = true;
+  sendEngagement(Math.max(10, Math.round((performance.now() - analyticsStartedAt) / 1000)));
+}
+window.setTimeout(recordEngagement, 10000);
+["pointerdown", "keydown", "scroll"].forEach((eventName) => {
+  window.addEventListener(eventName, recordEngagement, { once: true, passive: true });
+});
+window.addEventListener("pagehide", () => {
+  if (engagementRecorded) sendEngagement(Math.round((performance.now() - analyticsStartedAt) / 1000));
+});
 
 async function importFile(file) {
   state.fileEmails = [];
@@ -275,6 +355,9 @@ function showJob(job) {
   const [modeLabel, modeClass] = modeLabels[job.worker_count] || ["自定义模式", "mode-standard"];
   mode.textContent = modeLabel;
   mode.className = `mode-badge ${modeClass}`;
+  const isActive = job.status === "queued" || job.status === "running";
+  el("stop-job-button").classList.toggle("hidden", !isActive);
+  el("stop-job-button").disabled = !isActive;
   el("progress-percent").textContent = `${job.progress}%`;
   el("progress-bar").style.width = `${job.progress}%`;
   el("progress-copy").textContent = job.error
@@ -309,7 +392,7 @@ async function pollJob() {
     const job = await api(`/api/jobs/${state.jobId}`);
     showJob(job);
     await loadResults();
-    if (job.status === "completed") {
+    if (job.status === "completed" || job.status === "stopped") {
       if (state.user) await loadRecentJobs();
     } else if (job.status !== "failed") {
       schedulePoll();
@@ -423,6 +506,22 @@ el("download-button").addEventListener("click", async () => {
     errorBox.textContent = error.message;
   }
 });
+el("stop-job-button").addEventListener("click", async () => {
+  if (!state.jobId) return;
+  const button = el("stop-job-button");
+  button.disabled = true;
+  try {
+    const job = await api(`/api/jobs/${state.jobId}/stop`, { method: "POST" });
+    clearTimeout(state.pollTimer);
+    showJob(job);
+    await loadResults();
+    if (state.user) await loadRecentJobs();
+  } catch (error) {
+    errorBox.textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+});
 
 function resultType(item) {
   return resultMeta(item)[2];
@@ -472,6 +571,9 @@ function showDiscoveryJob(job) {
   const status = el("discovery-status");
   status.textContent = statusLabels[job.status] || job.status;
   status.className = `status status-${job.status}`;
+  const isActive = job.status === "queued" || job.status === "running";
+  el("discovery-stop-button").classList.toggle("hidden", !isActive);
+  el("discovery-stop-button").disabled = !isActive;
   el("discovery-progress-percent").textContent = `${job.progress}%`;
   el("discovery-progress-bar").style.width = `${job.progress}%`;
   el("discovery-progress-copy").textContent = job.status === "queued" && job.queue_position
@@ -481,6 +583,11 @@ function showDiscoveryJob(job) {
 
 function updateDiscoveryVerdict(job) {
   const verdict = el("discovery-verdict");
+  if (job.status === "stopped") {
+    verdict.className = "discovery-verdict warn";
+    verdict.textContent = "验证已停止，已保留当前结果。";
+    return;
+  }
   if (job.status !== "completed") {
     verdict.className = "discovery-verdict";
     verdict.textContent = "正在从候选地址中确认结果";
@@ -516,7 +623,7 @@ async function pollDiscovery() {
     showDiscoveryJob(job);
     await loadDiscoveryResults();
     updateDiscoveryVerdict(job);
-    if (job.status !== "completed" && job.status !== "failed") setTimeout(pollDiscovery, 1200);
+    if (job.status !== "completed" && job.status !== "failed" && job.status !== "stopped") setTimeout(pollDiscovery, 1200);
   } catch (error) {
     el("discovery-error").textContent = error.message;
   }
@@ -595,6 +702,22 @@ el("discovery-verify").addEventListener("click", async () => {
     error.textContent = requestError.message;
   } finally {
     button.disabled = submitted || !state.discovery.candidates.length;
+  }
+});
+el("discovery-stop-button").addEventListener("click", async () => {
+  if (!state.discovery.jobId) return;
+  const button = el("discovery-stop-button");
+  button.disabled = true;
+  try {
+    const job = await api(`/api/jobs/${state.discovery.jobId}/stop`, { method: "POST" });
+    showDiscoveryJob(job);
+    await loadDiscoveryResults();
+    updateDiscoveryVerdict(job);
+    await loadRecentJobs();
+  } catch (error) {
+    el("discovery-error").textContent = error.message;
+  } finally {
+    button.disabled = false;
   }
 });
 

@@ -23,6 +23,9 @@ class Settings:
     free_single_daily_limit: int = int(
         os.getenv("VERIGO_FREE_SINGLE_DAILY_LIMIT", "20")
     )
+    anonymous_free_single_daily_limit: int = int(
+        os.getenv("VERIGO_ANONYMOUS_FREE_SINGLE_DAILY_LIMIT", "10")
+    )
     email_verification_trial_credits: int = int(
         os.getenv("VERIGO_EMAIL_VERIFICATION_TRIAL_CREDITS", "10")
     )
