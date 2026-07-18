@@ -28,6 +28,12 @@ from app.config import settings
 from app.core.imports import extract_emails
 from app.core.discovery import candidate_emails
 from app.core.security import token_hash
+from app.core.provider_policy import (
+    YAHOO_UNSUPPORTED_MESSAGE,
+    is_qq_email,
+    is_yahoo_domain,
+    yahoo_addresses,
+)
 from app.db.auth import User, auth_store
 from app.db.jobs import Job, job_store, utc_now
 from app.db.metrics import metrics_store
@@ -43,9 +49,6 @@ from app.tasks.verification import (
 
 
 router = APIRouter(prefix="/api")
-TENCENT_QQ_DOMAINS = frozenset({"qq.com", "vip.qq.com", "foxmail.com"})
-
-
 def require_job(job_id: str) -> Job:
     job = job_store.get(job_id)
     if job is None:
@@ -54,18 +57,17 @@ def require_job(job_id: str) -> Job:
 
 
 def tencent_qq_target(emails: list[str]) -> str:
-    if not settings.tencent_qq_worker_enabled or not emails:
-        return "local"
-    domains = {email.rsplit("@", 1)[-1].lower() for email in emails if "@" in email}
-    return "tencent_qq" if domains and domains <= TENCENT_QQ_DOMAINS else "local"
+    """Compatibility shim for jobs created before CloudStudio was retired."""
+    return "local"
 
 
 def require_tencent_worker(token: str | None) -> None:
-    configured_token = settings.tencent_qq_worker_token
-    if not configured_token:
-        raise HTTPException(status_code=503, detail="腾讯 QQ 验证节点尚未配置")
-    if not token or not hmac.compare_digest(token, configured_token):
-        raise HTTPException(status_code=401, detail="腾讯 QQ 验证节点认证失败")
+    raise HTTPException(status_code=410, detail="CloudStudio QQ 验证节点已下线")
+
+
+def reject_yahoo_addresses(emails: list[str]) -> None:
+    if yahoo_addresses(emails):
+        raise HTTPException(status_code=422, detail=YAHOO_UNSUPPORTED_MESSAGE)
 
 
 def require_tencent_job(job_id: str, worker_id: str) -> Job:
@@ -129,6 +131,7 @@ def serialize_job(job: Job) -> JobResponse:
         download_name=verification_filename(job) if is_done else None,
         queue_position=job_store.queue_position(job.id),
         stop_on_deliverable=job.stop_on_deliverable,
+        qq_slow=any(is_qq_email(email) for email in job.emails),
         access_token=job.guest_token,
     )
 
@@ -268,6 +271,8 @@ def discovery_candidates(
     payload: DiscoveryRequest,
     _: Annotated[User, Depends(require_user)],
 ) -> DiscoveryResponse:
+    if is_yahoo_domain(payload.domain):
+        raise HTTPException(status_code=422, detail=YAHOO_UNSUPPORTED_MESSAGE)
     try:
         candidates = candidate_emails(payload.first_name, payload.last_name, payload.domain)
     except ValueError as exc:
@@ -285,6 +290,7 @@ def verify_discovery_candidates(
         raise HTTPException(status_code=403, detail="请先验证注册邮箱")
     try:
         candidates = candidate_emails(payload.first_name, payload.last_name, payload.domain)
+        reject_yahoo_addresses(candidates)
         job = verification_tasks.submit(
             candidates,
             worker_count=4,
@@ -310,6 +316,7 @@ def create_job(
     emails = clean_emails(payload.emails)
     if not emails:
         raise HTTPException(status_code=422, detail="邮箱包含空格、非 ASCII 或非法字符")
+    reject_yahoo_addresses(emails)
     job_limit = settings.max_emails_per_job
     if len(emails) > job_limit:
         raise HTTPException(status_code=422, detail=f"单次最多 {job_limit} 个邮箱")
@@ -343,6 +350,7 @@ def verify_single_email(
     emails = clean_emails([payload.email])
     if len(emails) != 1:
         raise HTTPException(status_code=422, detail="请输入有效的邮箱地址")
+    reject_yahoo_addresses(emails)
     try:
         metrics_store.reserve_free_single(
             request_network_hash(request), settings.anonymous_free_single_daily_limit

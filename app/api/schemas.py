@@ -49,6 +49,7 @@ class JobResponse(BaseModel):
     download_name: str | None = None
     queue_position: int | None = None
     stop_on_deliverable: bool = False
+    qq_slow: bool = False
     access_token: str | None = None
 
 

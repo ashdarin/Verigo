@@ -91,6 +91,10 @@ async function checkAccountAndImport(browser) {
   if (!(await page.textContent("#start-button")).includes("2 额度")) {
     throw new Error("pricing: multiple manually entered addresses must be paid");
   }
+  await page.fill("#email-input", "demo@qq.com");
+  if (await page.locator("#qq-rate-notice").evaluate((node) => node.classList.contains("hidden"))) {
+    throw new Error("qq: low-concurrency notice should appear before submission");
+  }
   await page.click('[data-view="single"]');
   await page.fill("#single-email-input", "single@example.com");
   if ((await page.textContent("#start-button")) !== "免费验证") {

@@ -154,6 +154,17 @@ class JobStore:
                 connection.execute(
                     "CREATE INDEX IF NOT EXISTS idx_catch_all_domain ON catch_all_emails(domain, verified_at DESC)"
                 )
+                # CloudStudio QQ workers have been retired. Requeue any job
+                # that had been leased by that worker so the local worker can
+                # finish it with the conservative QQ policy.
+                connection.execute(
+                    """
+                    UPDATE jobs
+                    SET execution_target = 'local', worker_id = NULL, heartbeat_at = NULL,
+                        status = 'queued', error = 'CloudStudio QQ 节点已下线，任务已转为本机专属策略'
+                    WHERE execution_target = 'tencent_qq' AND status IN ('queued', 'running')
+                    """
+                )
             self._initialized = True
 
     def add(self, job: Job, max_active: int | None = None) -> None:

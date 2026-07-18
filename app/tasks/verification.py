@@ -33,6 +33,7 @@ DELIVERABILITY_LABELS = {True: "可投递", False: "不可投递", None: "未知
 METHOD_LABELS = {
     "standard": "邮箱服务器验证",
     "qq_rcpt": "邮箱服务器验证",
+    "qq_avatar": "QQ 头像辅助证据",
     "microsoft_api": "微软账号验证",
     "catch-all_detected": "域名通用收件",
 }

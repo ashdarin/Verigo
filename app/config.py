@@ -54,10 +54,24 @@ class Settings:
     max_workers_per_job: int = int(os.getenv("VERIGO_MAX_WORKERS", "8"))
     max_parallel_jobs: int = int(os.getenv("VERIGO_MAX_PARALLEL_JOBS", "2"))
     max_pending_jobs: int = int(os.getenv("VERIGO_MAX_PENDING_JOBS", "20"))
-    tencent_qq_worker_enabled: bool = env_bool("VERIGO_TENCENT_QQ_WORKER_ENABLED", False)
-    tencent_qq_worker_token: str = os.getenv("VERIGO_TENCENT_QQ_WORKER_TOKEN", "")
-    tencent_qq_worker_lease_seconds: int = int(
-        os.getenv("VERIGO_TENCENT_QQ_WORKER_LEASE_SECONDS", "180")
+    qq_smtp_per_mx: int = max(1, int(os.getenv("VERIGO_QQ_SMTP_PER_MX", "1")))
+    qq_smtp_wait_seconds: float = max(
+        1.0, float(os.getenv("VERIGO_QQ_SMTP_WAIT_SECONDS", "300"))
+    )
+    qq_backoff_base_seconds: float = max(
+        1.0, float(os.getenv("VERIGO_QQ_BACKOFF_BASE_SECONDS", "30"))
+    )
+    qq_backoff_max_seconds: float = max(
+        1.0, float(os.getenv("VERIGO_QQ_BACKOFF_MAX_SECONDS", "900"))
+    )
+    qq_avatar_timeout_seconds: float = max(
+        1.0, float(os.getenv("VERIGO_QQ_AVATAR_TIMEOUT_SECONDS", "8"))
+    )
+    qq_avatar_wait_seconds: float = max(
+        1.0, float(os.getenv("VERIGO_QQ_AVATAR_WAIT_SECONDS", "20"))
+    )
+    qq_avatar_min_interval_seconds: float = max(
+        0.0, float(os.getenv("VERIGO_QQ_AVATAR_MIN_INTERVAL_SECONDS", "1"))
     )
     results_dir: Path = Path(
         os.getenv("VERIGO_RESULTS_DIR", str(BASE_DIR / "data" / "results"))

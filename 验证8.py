@@ -49,11 +49,11 @@ from email.mime.base import MIMEBase
 from email import encoders
 
 from app.config import settings
+from app.core.qq_evidence import qq_avatar_evidence
 from app.core.smtp_limiter import SMTPDeliveryLimiter
 
 
 SMTP_MAX_CONCURRENT_PER_MX = max(1, int(os.getenv('VERIGO_SMTP_PER_MX', '8')))
-QQ_SMTP_MAX_CONCURRENT_PER_MX = max(1, int(os.getenv('VERIGO_QQ_SMTP_PER_MX', '4')))
 SMTP_HELO_HOST = settings.smtp_helo_host
 SMTP_MAIL_FROM = settings.smtp_mail_from
 
@@ -62,7 +62,7 @@ def smtp_gate_capacity(mx_host):
     """Keep the full job concurrency except for QQ's more sensitive MX hosts."""
     host = str(mx_host).lower().rstrip('.')
     if host.endswith('.qq.com') or host.endswith('.foxmail.com'):
-        return min(SMTP_MAX_CONCURRENT_PER_MX, QQ_SMTP_MAX_CONCURRENT_PER_MX)
+        return min(SMTP_MAX_CONCURRENT_PER_MX, settings.qq_smtp_per_mx)
     return SMTP_MAX_CONCURRENT_PER_MX
 
 # ============================================================================
@@ -326,8 +326,9 @@ class EmailVerifier:
             'qq.com': {
                 'provider': 'QQ',
                 'timeout': 25,
-                'max_attempts': 2,
+                'max_attempts': 1,
                 'mx_delay': 1.5,
+                'max_mx_hosts': 1,
                 'helo_domains': [
                     SMTP_HELO_HOST
                 ],
@@ -346,8 +347,9 @@ class EmailVerifier:
             'vip.qq.com': {
                 'provider': 'QQ_VIP',
                 'timeout': 25,
-                'max_attempts': 2,  # 🎯 优化：减少尝试次数
+                'max_attempts': 1,
                 'mx_delay': 1.5,    # 🎯 优化：减少延迟
+                'max_mx_hosts': 1,
                 'helo_domains': [
                     SMTP_HELO_HOST
                 ],
@@ -366,8 +368,9 @@ class EmailVerifier:
             'foxmail.com': {
                 'provider': 'Foxmail',
                 'timeout': 25,
-                'max_attempts': 2,  # 🎯 优化：减少尝试次数
+                'max_attempts': 1,
                 'mx_delay': 1.5,    # 🎯 优化：减少延迟
+                'max_mx_hosts': 1,
                 'helo_domains': [
                     SMTP_HELO_HOST
                 ],
@@ -404,17 +407,49 @@ class EmailVerifier:
 
     @contextmanager
     def smtp_gate(self, mx_host):
+        host = str(mx_host).lower().rstrip('.')
+        if host.endswith('.qq.com') or host.endswith('.foxmail.com'):
+            # Separate QQ MX records must still share one provider-wide lease.
+            with self.smtp_limiter.permit(
+                'qq-smtp-global', 1, wait_seconds=settings.qq_smtp_wait_seconds
+            ) as global_acquired:
+                if not global_acquired:
+                    yield False
+                    return
+                with self.smtp_limiter.permit(
+                    mx_host,
+                    smtp_gate_capacity(mx_host),
+                    wait_seconds=settings.qq_smtp_wait_seconds,
+                ) as acquired:
+                    yield acquired
+            return
         with self.smtp_limiter.permit(mx_host, smtp_gate_capacity(mx_host)) as acquired:
             yield acquired
 
     def record_smtp_response(self, mx_host, code):
-        if 200 <= code < 400 or 500 <= code < 600:
+        host = str(mx_host).lower().rstrip('.')
+        if 200 <= code < 400:
             self.smtp_limiter.record_success(mx_host)
+            if host.endswith('.qq.com') or host.endswith('.foxmail.com'):
+                self.smtp_limiter.record_success('qq-smtp-global')
         elif 400 <= code < 500:
-            self.smtp_limiter.record_temporary_failure(mx_host)
+            if not (host.endswith('.qq.com') or host.endswith('.foxmail.com')):
+                self.smtp_limiter.record_temporary_failure(mx_host)
 
     def record_smtp_failure(self, mx_host):
+        host = str(mx_host).lower().rstrip('.')
+        if host.endswith('.qq.com') or host.endswith('.foxmail.com'):
+            self.record_qq_policy_failure(mx_host)
+            return
         self.smtp_limiter.record_temporary_failure(mx_host)
+
+    def record_qq_policy_failure(self, mx_host):
+        for host in (mx_host, 'qq-smtp-global'):
+            self.smtp_limiter.record_temporary_failure(
+                host,
+                base_delay=settings.qq_backoff_base_seconds,
+                max_delay=settings.qq_backoff_max_seconds,
+            )
 
     def is_valid_email_format(self, email):
         """邮箱格式验证 - 保持原有逻辑"""
@@ -508,6 +543,8 @@ class EmailVerifier:
 
         with self.smtp_gate(mx_host) as gate_acquired:
             if not gate_acquired:
+                if config['strategy_type'] in ('qq_aggressive', 'qq_optimized'):
+                    return None, f"QQ 验证节点正在退避等待: {mx_host}"
                 return False, f"SMTP连接排队超时: {mx_host}"
 
             for attempt in range(config['max_attempts']):
@@ -542,6 +579,8 @@ class EmailVerifier:
                     code, response = server.rcpt(email)
                     self.record_smtp_response(mx_host, code)
                     if config['strategy_type'] in ('qq_aggressive', 'qq_optimized'):
+                        if self._is_qq_policy_response(code, response):
+                            self.record_qq_policy_failure(mx_host)
                         verdict, message = self._handle_qq_response(code, response, config, attempt)
                         if verdict != 'continue':
                             return verdict, message
@@ -571,7 +610,24 @@ class EmailVerifier:
                         except Exception:
                             pass
 
+        if config['strategy_type'] in ('qq_aggressive', 'qq_optimized'):
+            return None, f"{config['provider']} SMTP 暂时无法确认: {last_failure or '无有效响应'}"
         return False, f"{config['provider']}多次SMTP尝试失败: {last_failure or '无有效响应'}"
+
+    @staticmethod
+    def _is_qq_policy_response(code, response):
+        if code in (421, 451, 452, 553, 554):
+            return True
+        if code != 550:
+            return False
+        response_text = response.decode('utf-8', 'replace') if isinstance(response, bytes) else str(response)
+        response_text = response_text.lower()
+        mailbox_missing = (
+            'user unknown', 'not found', 'does not exist', 'no such user',
+            'invalid recipient', 'recipient unknown', 'user not found',
+            'mailbox not found', 'address not found',
+        )
+        return not any(keyword in response_text for keyword in mailbox_missing)
 
     def _handle_qq_response(self, code, response, config, attempt):
         """QQ邮箱响应处理：只依据 RCPT TO，不进入 DATA 阶段。"""
@@ -592,23 +648,23 @@ class EmailVerifier:
                 if attempt < config['max_attempts'] - 1:
                     return 'continue', f"550 {config['provider']}策略保护，等待后重试"
                 else:
-                    return False, f"550 {config['provider']}策略拒绝，多次尝试失败: {response_text[:160]}"
+                    return None, f"550 {config['provider']}策略拒绝，暂时无法确认: {response_text[:160]}"
         elif code in [451, 452, 421]:
             # 临时失败，继续重试
             if attempt < config['max_attempts'] - 1:
                 return 'continue', f"{code} {config['provider']}临时失败，重试"
             else:
-                return False, f"{code} {config['provider']}临时失败，多次尝试失败"
+                return None, f"{code} {config['provider']}临时失败，暂时无法确认"
         elif code in [553, 554]:
             # 邮箱策略拒绝，但继续尝试
             if attempt < config['max_attempts'] - 1:
                 return 'continue', f"{code} {config['provider']}策略拒绝，等待后重试"
             else:
-                return False, f"{code} {config['provider']}策略拒绝，多次尝试失败: {response_text[:160]}"
+                return None, f"{code} {config['provider']}策略拒绝，暂时无法确认: {response_text[:160]}"
         else:
             if attempt < config['max_attempts'] - 1:
                 return 'continue', f"{code} {config['provider']}未明确响应，重试"
-            return False, f"{code} {config['provider']}多次尝试失败: {response_text[:160]}"
+            return None, f"{code} {config['provider']}响应不明确，暂时无法确认: {response_text[:160]}"
 
     def _verify_with_expn_command(self, server, email, config):
         """🆕 使用EXPN命令进行邮箱验证 - RFC推荐的方法"""
@@ -948,7 +1004,12 @@ class EmailVerifier:
             result['mx_records'] = mx_records
 
             # 🆕 第四步：域名类型检测 (catch-all检测)
-            domain_type = self.detect_catch_all_domain(domain)
+            if fix_strategy and fix_strategy.get('strategy_type') in ('qq_aggressive', 'qq_optimized'):
+                # QQ does not need a random catch-all probe. Avoid generating
+                # additional recipient traffic against its protected MX hosts.
+                domain_type = 'consumer'
+            else:
+                domain_type = self.detect_catch_all_domain(domain)
             result['domain_type'] = domain_type
 
             # 如果是catch-all域名，直接标记并跳过详细验证
@@ -970,8 +1031,9 @@ class EmailVerifier:
             smtp_success = None
             smtp_message = "无SMTP响应"
 
-            # 🔧 优化：只尝试前2个MX记录（大多数情况下第一个就够了）
-            for i, mx_host in enumerate(mx_records[:2]):
+            max_mx_hosts = fix_strategy.get('max_mx_hosts', 2) if fix_strategy else 2
+            mx_hosts_to_try = mx_records[:max_mx_hosts]
+            for i, mx_host in enumerate(mx_hosts_to_try):
                 if result['consumer_fix_applied']:
                     # 🆕 使用修复版SMTP检查
                     smtp_result = self.check_smtp_delivery_fixed(email, mx_host, fix_strategy)
@@ -988,7 +1050,7 @@ class EmailVerifier:
                     break
 
                 # 🔧 优化：减少MX间隔延迟
-                if i < len(mx_records[:2]) - 1:
+                if i < len(mx_hosts_to_try) - 1:
                     if result['consumer_fix_applied']:
                         time.sleep(fix_strategy['mx_delay'] * 0.5)  # 🔧 优化：减半
                     else:
@@ -998,13 +1060,31 @@ class EmailVerifier:
             result['checks']['smtp'] = smtp_success
             result['smtp_result'] = smtp_message
 
+            if (
+                smtp_success is None
+                and fix_strategy
+                and fix_strategy.get('strategy_type') in ('qq_aggressive', 'qq_optimized')
+            ):
+                avatar = qq_avatar_evidence(email)
+                if avatar:
+                    smtp_success = True
+                    result['checks']['smtp'] = True
+                    result['verification_method'] = 'qq_avatar'
+                    result['qq_avatar_evidence'] = avatar
+                    result['smtp_result'] = (
+                        f"{smtp_message}；检测到非默认 QQ 头像，作为账号存在的辅助证据"
+                    )
+
             # 综合判断 - 保持原版本逻辑
             if result['checks']['format'] and result['checks']['domain'] and result['checks']['mx']:
                 if smtp_success is True:
                     result['valid'] = True
                     result['deliverable'] = True
                     if result['consumer_fix_applied']:
-                        if str(result['consumer_provider']).startswith(('QQ', 'Foxmail')):
+                        if (
+                            str(result['consumer_provider']).startswith(('QQ', 'Foxmail'))
+                            and result.get('verification_method') != 'qq_avatar'
+                        ):
                             result['verification_method'] = 'qq_rcpt'
                         result['message'] = f'✅ {result["consumer_provider"]}邮箱验证通过(修复策略)'
                     else:

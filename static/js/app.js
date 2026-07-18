@@ -42,8 +42,33 @@ function currentEmails() {
   return state.mode === "file" ? state.fileEmails : splitEmails(batchInput.value);
 }
 
+function emailDomain(email) {
+  return String(email).trim().toLowerCase().split("@").pop() || "";
+}
+
+function isQqEmail(email) {
+  return ["qq.com", "vip.qq.com", "foxmail.com"].includes(emailDomain(email));
+}
+
+function isYahooEmail(email) {
+  const domain = emailDomain(email);
+  return domain.startsWith("yahoo.") || domain === "ymail.com" || domain === "rocketmail.com";
+}
+
+const yahooUnsupportedMessage = "暂不支持 Yahoo 邮箱验证（含所有国家或地区后缀，以及 ymail.com、rocketmail.com）。Yahoo 的反验证策略非常严格，当前全网常规验证均难以稳定通过，暂时没有可靠解决方案。";
+
+function updateProviderNotice(emails) {
+  const notice = el("qq-rate-notice");
+  const hasQq = emails.some(isQqEmail);
+  notice.classList.toggle("hidden", !hasQq);
+  notice.textContent = hasQq
+    ? "检测到 QQ 邮箱：将采用专属低并发与自动退避策略，验证速度会较慢，请耐心等待。"
+    : "";
+}
+
 function updateCount() {
   const total = currentEmails().length;
+  updateProviderNotice(currentEmails());
   count.textContent = total.toLocaleString();
   if (state.view === "single") {
     startButton.textContent = "免费验证";
@@ -311,6 +336,10 @@ startButton.addEventListener("click", async () => {
     errorBox.textContent = "单个验证一次只能提交一个邮箱地址";
     return;
   }
+  if (emails.some(isYahooEmail)) {
+    errorBox.textContent = yahooUnsupportedMessage;
+    return;
+  }
   startButton.disabled = true;
   startButton.textContent = "正在提交…";
   try {
@@ -352,7 +381,9 @@ function showJob(job) {
   status.textContent = statusLabels[job.status] || job.status;
   status.className = `status status-${job.status}`;
   const mode = el("job-mode");
-  const [modeLabel, modeClass] = modeLabels[job.worker_count] || ["自定义模式", "mode-standard"];
+  const [modeLabel, modeClass] = job.qq_slow
+    ? ["QQ 专属低并发", "mode-qq"]
+    : (modeLabels[job.worker_count] || ["自定义模式", "mode-standard"]);
   mode.textContent = modeLabel;
   mode.className = `mode-badge ${modeClass}`;
   const isActive = job.status === "queued" || job.status === "running";
@@ -360,8 +391,11 @@ function showJob(job) {
   el("stop-job-button").disabled = !isActive;
   el("progress-percent").textContent = `${job.progress}%`;
   el("progress-bar").style.width = `${job.progress}%`;
-  el("progress-copy").textContent = job.error
+  const progressCopy = job.error
     || (job.status === "queued" && job.queue_position ? `排队中，前方还有 ${job.queue_position - 1} 个任务` : `${job.completed} / ${job.total} 已处理`);
+  el("progress-copy").textContent = job.qq_slow
+    ? `${progressCopy}；QQ 邮箱采用低并发和自动退避策略，请耐心等待。`
+    : progressCopy;
   if (job.summary) renderSummary(job.summary);
   el("download-button").disabled = !job.download_url;
 }
@@ -576,9 +610,12 @@ function showDiscoveryJob(job) {
   el("discovery-stop-button").disabled = !isActive;
   el("discovery-progress-percent").textContent = `${job.progress}%`;
   el("discovery-progress-bar").style.width = `${job.progress}%`;
-  el("discovery-progress-copy").textContent = job.status === "queued" && job.queue_position
+  const progressCopy = job.status === "queued" && job.queue_position
     ? `排队中，前方还有 ${job.queue_position - 1} 个任务`
     : `${job.completed} / ${job.total} 已处理`;
+  el("discovery-progress-copy").textContent = job.qq_slow
+    ? `${progressCopy}；QQ 邮箱采用低并发和自动退避策略，请耐心等待。`
+    : progressCopy;
 }
 
 function updateDiscoveryVerdict(job) {
@@ -632,6 +669,10 @@ async function pollDiscovery() {
 el("discovery-start").addEventListener("click", async () => {
   const error = el("discovery-error");
   error.textContent = "";
+  if (isYahooEmail(`probe@${el("discovery-domain").value}`)) {
+    error.textContent = yahooUnsupportedMessage;
+    return;
+  }
   const button = el("discovery-start");
   button.disabled = true;
   try {
@@ -663,8 +704,11 @@ el("discovery-start").addEventListener("click", async () => {
     el("discovery-progress-percent").textContent = "0%";
     el("discovery-progress-bar").style.width = "0%";
     el("discovery-progress-copy").textContent = "等待验证";
-    el("discovery-verdict").className = "discovery-verdict";
-    el("discovery-verdict").textContent = `已生成 ${state.discovery.candidates.length} 个候选地址`;
+    const hasQqCandidate = state.discovery.candidates.some(isQqEmail);
+    el("discovery-verdict").className = hasQqCandidate ? "discovery-verdict warn" : "discovery-verdict";
+    el("discovery-verdict").textContent = hasQqCandidate
+      ? `已生成 ${state.discovery.candidates.length} 个候选地址。QQ 邮箱验证采用专属低并发策略，验证速度较慢，请耐心等待。`
+      : `已生成 ${state.discovery.candidates.length} 个候选地址`;
     renderDiscoveryResults();
   } catch (requestError) {
     error.textContent = requestError.message;
@@ -678,6 +722,10 @@ el("discovery-verify").addEventListener("click", async () => {
   const button = el("discovery-verify");
   error.textContent = "";
   if (!state.discovery.candidates.length) return;
+  if (state.discovery.candidates.some(isYahooEmail)) {
+    error.textContent = yahooUnsupportedMessage;
+    return;
+  }
   button.disabled = true;
   let submitted = false;
   try {

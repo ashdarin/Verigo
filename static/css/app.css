@@ -87,6 +87,8 @@ textarea:focus, input:focus, select:focus { border-color: var(--accent); box-sha
 .secondary-action:hover:not(:disabled) { border-color: var(--accent); color: var(--accent-dark); }
 .secondary-action:disabled { color: var(--muted); background: var(--soft); cursor: not-allowed; }
 .form-error { min-height: 20px; margin: 8px 0 0; color: var(--bad); font-size: 12px; }
+.provider-notice, .provider-policy { margin: 10px 0 0; padding: 9px 10px; border-left: 3px solid #d49b34; background: #fff7e7; color: #76501a; font-size: 12px; line-height: 1.5; }
+.provider-policy { border-left-color: #a95a54; background: #fff1ef; color: #7d3c37; }
 
 .recent-block { margin-top: 22px; padding-top: 19px; border-top: 1px solid var(--line); }
 .recent-block h2 { font-size: 13px; }
@@ -105,6 +107,7 @@ textarea:focus, input:focus, select:focus { border-color: var(--accent); box-sha
 .mode-standard { border-color: #73ad98; background: #eaf7f1; color: #0b7251; }
 .mode-fast { border-color: #df9a55; background: #fff3e7; color: #a4510a; }
 .mode-extreme { border-color: #d78b9d; background: #fcedf1; color: #ae3958; }
+.mode-qq { border-color: #d49b34; background: #fff7e7; color: #80540e; }
 .status-idle { background: #edf1ef; color: var(--muted); }
 .status-queued, .status-running { background: #fff0d4; color: #85500b; }
 .status-completed { background: #ddf3e8; color: #086447; }

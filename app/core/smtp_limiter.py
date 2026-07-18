@@ -88,7 +88,9 @@ class SMTPDeliveryLimiter:
                 with closing(self._connect()) as connection:
                     connection.execute("DELETE FROM smtp_leases WHERE token = ?", (token,))
 
-    def record_temporary_failure(self, mx_host: str) -> None:
+    def record_temporary_failure(
+        self, mx_host: str, base_delay: float = 2.0, max_delay: float = 60.0
+    ) -> None:
         self._initialize()
         host = mx_host.lower().rstrip(".")
         now = time.time()
@@ -98,7 +100,7 @@ class SMTPDeliveryLimiter:
                 "SELECT failures FROM smtp_backoff WHERE mx_host = ?", (host,)
             ).fetchone()
             failures = min((row[0] if row else 0) + 1, 6)
-            delay = min(60.0, 2.0 ** (failures - 1))
+            delay = min(max_delay, base_delay * (2.0 ** (failures - 1)))
             connection.execute(
                 """
                 INSERT INTO smtp_backoff(mx_host, failures, blocked_until) VALUES (?, ?, ?)
