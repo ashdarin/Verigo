@@ -16,12 +16,8 @@ curl -fsS --retry 3 --retry-delay 2 -X POST -H \"X-Verigo-CloudStudio-Probe-Toke
 cd /workspace/Verigo
 if [ ! -x .venv/bin/python ]; then python3 -m venv .venv; fi
 .venv/bin/python -m pip install --disable-pip-version-check \"dnspython>=2.6,<3\" >/tmp/verigo-qq-pip.log 2>&1
-pid_file=/tmp/verigo-qq-worker.pid
-if test -s \"$pid_file\" && kill -0 \"$(cat \"$pid_file\")\" 2>/dev/null; then exit 0; fi
 if pgrep -f '[a]pp.tencent_qq_worker' >/dev/null; then exit 0; fi
-rm -f \"$pid_file\"
-nohup .venv/bin/python -m app.tencent_qq_worker >/tmp/verigo-qq-worker.log 2>&1 </dev/null &
-echo $! > \"$pid_file\"
+setsid -f .venv/bin/python -m app.tencent_qq_worker >/tmp/verigo-qq-worker.log 2>&1 </dev/null
 """
 
 

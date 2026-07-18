@@ -19,13 +19,13 @@ script = worker_start_script()
 assert "CloudStudio-Probe-Token" in script
 assert "app.tencent_qq_worker" in script
 assert "[a]pp.tencent_qq_worker" in script
-assert "nohup" in script
+assert "setsid -f" in script
 
 command = worker_start_command()
 assert command.startswith("echo ") and command.endswith(" | base64 -d | bash")
 encoded = command.removeprefix("echo ").removesuffix(" | base64 -d | bash")
 assert base64.b64decode(encoded).decode() == script
-assert "nohup" not in command
+assert "setsid" not in command
 
 settings = SimpleNamespace(
     tencent_qq_worker_token="worker-token",
