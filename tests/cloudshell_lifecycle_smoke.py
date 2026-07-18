@@ -12,7 +12,8 @@ command = CloudShellLifecycle._worker_command()
 assert ".gmail-worker.pid" in command
 assert "kill -0" in command
 assert "pgrep" not in command
-assert "VERIGO_REMOTE_WORKER_TARGET=gmail" not in command
+assert 'cd \"$HOME/verigo-worker\"' in command
+assert 'VERIGO_REMOTE_WORKER_TARGET=gmail' in command
 lifecycle = CloudShellLifecycle()
 lifecycle.start()
 assert lifecycle._thread is not None and lifecycle._thread.is_alive()

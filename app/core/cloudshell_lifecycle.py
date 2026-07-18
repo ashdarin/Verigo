@@ -72,11 +72,14 @@ class CloudShellLifecycle:
         return (
             "cd ~/verigo-worker && python3 -m venv .venv && "
             ".venv/bin/pip -q install 'dnspython>=2.6,<3' && "
-            "if test -s .gmail-worker.pid && "
-            "kill -0 \"$(cat .gmail-worker.pid)\" 2>/dev/null; then true; "
-            "else nohup sh -c '. .worker.env; exec .venv/bin/python -m "
-            "app.tencent_qq_worker' >/tmp/verigo-gmail-worker.log 2>&1 & "
-            "echo $! > .gmail-worker.pid; fi"
+            "pid_file=.gmail-worker.pid; "
+            "if test -s \"$pid_file\" && kill -0 \"$(cat \"$pid_file\")\" "
+            "2>/dev/null && tr '\\0' '\\n' < \"/proc/$(cat \"$pid_file\")/environ\" "
+            "| grep -qx 'VERIGO_REMOTE_WORKER_TARGET=gmail'; then exit 0; fi; "
+            "rm -f \"$pid_file\"; "
+            "nohup sh -c 'cd \"$HOME/verigo-worker\" && . .worker.env && exec "
+            ".venv/bin/python -m app.tencent_qq_worker' "
+            ">/tmp/verigo-gmail-worker.log 2>&1 </dev/null & echo $! > \"$pid_file\""
         )
 
     def _token(self) -> str:
