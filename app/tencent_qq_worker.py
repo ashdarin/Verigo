@@ -3,11 +3,10 @@ from __future__ import annotations
 import json
 import os
 import socket
+import subprocess
 import sys
 import time
 from typing import Any
-from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
 
 from app.core.legacy import create_verifier
 
@@ -25,24 +24,23 @@ class WorkerRequestError(RuntimeError):
 
 
 def request_json(path: str, payload: dict[str, object] | None = None) -> dict[str, object]:
-    data = json.dumps(payload).encode("utf-8") if payload is not None else None
-    request = Request(
-        f"{SERVER_URL}{path}",
-        data=data,
-        method="POST",
-        headers={
-            "Content-Type": "application/json",
-            "X-Verigo-Worker-Token": TOKEN,
-            "X-Verigo-Worker-Id": WORKER_ID,
-        },
-    )
+    command = [
+        "curl", "--silent", "--show-error", "--fail", "--max-time", "30",
+        "-X", "POST", f"{SERVER_URL}{path}",
+        "-H", "Content-Type: application/json",
+        "-H", f"X-Verigo-Worker-Token: {TOKEN}",
+        "-H", f"X-Verigo-Worker-Id: {WORKER_ID}",
+    ]
+    if payload is not None:
+        command.extend(["--data-binary", json.dumps(payload, ensure_ascii=False)])
     try:
-        with urlopen(request, timeout=30) as response:
-            return json.loads(response.read().decode("utf-8"))
-    except HTTPError as exc:
-        detail = exc.read().decode("utf-8", "replace")[:500]
-        raise WorkerRequestError(f"{exc.code}: {detail}") from exc
-    except (URLError, TimeoutError, json.JSONDecodeError) as exc:
+        response = subprocess.run(
+            command, check=False, capture_output=True, text=True, timeout=35
+        )
+        if response.returncode:
+            raise WorkerRequestError(response.stderr.strip() or "curl request failed")
+        return json.loads(response.stdout)
+    except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError) as exc:
         raise WorkerRequestError(str(exc)) from exc
 
 
