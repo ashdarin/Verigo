@@ -62,7 +62,11 @@ def tencent_qq_target(emails: list[str]) -> str:
 
 
 def require_tencent_worker(token: str | None) -> None:
-    raise HTTPException(status_code=410, detail="CloudStudio QQ 验证节点已下线")
+    configured_token = settings.tencent_qq_worker_token
+    if not configured_token:
+        raise HTTPException(status_code=503, detail="CloudStudio worker 尚未配置")
+    if not token or not hmac.compare_digest(token, configured_token):
+        raise HTTPException(status_code=401, detail="CloudStudio worker 认证失败")
 
 
 def reject_yahoo_addresses(emails: list[str]) -> None:

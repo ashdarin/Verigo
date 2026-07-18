@@ -22,6 +22,7 @@ os.environ["VERIGO_TRIAL_NETWORK_LIMIT"] = "2"
 os.environ["VERIGO_ADMIN_EMAILS"] = "admin@example.com"
 os.environ["VERIGO_METRICS_SALT"] = "smoke-test-metrics-salt"
 os.environ["VERIGO_CLOUDSTUDIO_PROBE_TOKEN"] = "smoke-cloudstudio-probe-token"
+os.environ["VERIGO_TENCENT_QQ_WORKER_TOKEN"] = "smoke-tencent-worker-token"
 
 from fastapi.testclient import TestClient
 from openpyxl import Workbook
@@ -123,7 +124,16 @@ with TestClient(app) as guest:
     yahoo_single = guest.post("/api/verify/single", json={"email": "person@yahoo.co.uk"})
     assert yahoo_single.status_code == 422, yahoo_single.text
     assert "Yahoo" in yahoo_single.json()["detail"]
-    assert guest.post("/api/workers/tencent-qq/claim").status_code == 410
+    assert guest.post("/api/workers/tencent-qq/claim").status_code == 401
+    worker_claim = guest.post(
+        "/api/workers/tencent-qq/claim?wait_seconds=0",
+        headers={
+            "X-Verigo-Worker-Token": "smoke-tencent-worker-token",
+            "X-Verigo-Worker-Id": "smoke-cloudstudio",
+        },
+    )
+    assert worker_claim.status_code == 200, worker_claim.text
+    assert worker_claim.json() == {"job": None}
 
 
 with TestClient(app) as account:
