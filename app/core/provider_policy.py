@@ -28,5 +28,9 @@ def is_yahoo_domain(domain: str) -> bool:
     )
 
 
+def is_yahoo_email(email: str) -> bool:
+    return is_yahoo_domain(email_domain(email))
+
+
 def yahoo_addresses(emails: list[str]) -> list[str]:
-    return [email for email in emails if is_yahoo_domain(email_domain(email))]
+    return [email for email in emails if is_yahoo_email(email)]

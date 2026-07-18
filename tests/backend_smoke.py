@@ -71,6 +71,25 @@ object.__setattr__(
 
 object.__setattr__(settings, "tencent_qq_worker_allowed_emails", frozenset({"*"}))
 object.__setattr__(settings, "gmail_worker_allowed_emails", frozenset({"*"}))
+yahoo_mixed_parent = submit_routed_job(
+    ["skip@yahoo.com", "first@qq.com", "second@gmail.com", "third@example.com"],
+    2,
+    owner_id="mixed-owner",
+    owner_email="mixed-owner@example.com",
+    job_id="mixedyahoo001",
+)
+yahoo_mixed_children = job_store.children(yahoo_mixed_parent.id)
+assert {child.execution_target for child in yahoo_mixed_children} == {
+    "unsupported", "local", "tencent_qq", "gmail"
+}
+yahoo_child = next(child for child in yahoo_mixed_children if child.execution_target == "unsupported")
+assert yahoo_child.status == "completed"
+assert yahoo_child.results[0]["verification_method"] == "不支持验证"
+assert yahoo_mixed_parent.results[0]["email"] == "skip@yahoo.com"
+for child in yahoo_mixed_children:
+    if child.status != "completed":
+        job_store.stop(child.id)
+
 mixed_three_way_parent = submit_routed_job(
     ["first@qq.com", "second@gmail.com", "third@example.com", "fourth@googlemail.com"],
     2,
@@ -251,8 +270,16 @@ with TestClient(app) as guest:
     assert stopped_guest_job.status_code == 200, stopped_guest_job.text
     assert stopped_guest_job.json()["status"] == "stopped"
     yahoo_single = guest.post("/api/verify/single", json={"email": "person@yahoo.co.uk"})
-    assert yahoo_single.status_code == 422, yahoo_single.text
-    assert "Yahoo" in yahoo_single.json()["detail"]
+    assert yahoo_single.status_code == 202, yahoo_single.text
+    assert yahoo_single.json()["status"] == "completed"
+    yahoo_single_results = guest.get(
+        f"/api/jobs/{yahoo_single.json()['id']}/results?limit=50",
+        headers={"X-Job-Token": yahoo_single.json()["access_token"]},
+    )
+    assert yahoo_single_results.status_code == 200, yahoo_single_results.text
+    yahoo_result = yahoo_single_results.json()["items"][0]
+    assert yahoo_result["verification_method"] == "不支持验证"
+    assert yahoo_result["skipped"] is True
     object.__setattr__(settings, "tencent_qq_worker_allowed_emails", frozenset({"*"}))
     guest_qq = guest.post("/api/verify/single", json={"email": "public-user@qq.com"})
     object.__setattr__(
@@ -339,7 +366,15 @@ with TestClient(app) as account:
         "/api/jobs",
         json={"emails": ["person@ymail.com", "other@example.com"], "worker_count": 2},
     )
-    assert yahoo_batch.status_code == 422, yahoo_batch.text
+    assert yahoo_batch.status_code == 202, yahoo_batch.text
+    assert yahoo_batch.json()["completed"] == 1
+    assert yahoo_batch.json()["total"] == 2
+    yahoo_batch_results = account.get(f"/api/jobs/{yahoo_batch.json()['id']}/results?limit=50")
+    assert yahoo_batch_results.status_code == 200, yahoo_batch_results.text
+    assert yahoo_batch_results.json()["items"][0]["email"] == "person@ymail.com"
+    assert yahoo_batch_results.json()["items"][0]["verification_method"] == "不支持验证"
+    assert account.get("/api/auth/me").json()["credits"] == 9
+    auth_store.refund_credits(user_id, 1, f"verification:{yahoo_batch.json()['id']}")
     assert account.get("/api/auth/me").json()["credits"] == 10
     discovery_job = account.post(
         "/api/discovery/verify",

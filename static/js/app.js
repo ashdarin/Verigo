@@ -336,10 +336,6 @@ startButton.addEventListener("click", async () => {
     errorBox.textContent = "单个验证一次只能提交一个邮箱地址";
     return;
   }
-  if (emails.some(isYahooEmail)) {
-    errorBox.textContent = yahooUnsupportedMessage;
-    return;
-  }
   startButton.disabled = true;
   startButton.textContent = "正在提交…";
   try {

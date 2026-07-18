@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 
 from app.config import settings
 from app.core.legacy import create_verifier
+from app.core.provider_policy import YAHOO_UNSUPPORTED_MESSAGE, is_yahoo_email
 from app.core.security import token_hash
 from app.core.worker_lifecycle import TENCENT_QQ_TARGET, worker_lifecycle
 from app.core.cloudshell_lifecycle import GMAIL_TARGET, cloudshell_lifecycle
@@ -129,6 +130,7 @@ class VerificationTasks:
         stop_on_deliverable: bool = False,
         job_id: str | None = None,
         execution_target: str = "local",
+        immediate_results: list[dict[str, Any]] | None = None,
     ) -> Job:
         guest_token = None if owner_id else secrets.token_urlsafe(32)
         job = Job(
@@ -141,7 +143,18 @@ class VerificationTasks:
             stop_on_deliverable=stop_on_deliverable,
             execution_target=execution_target,
         )
+        if immediate_results is not None:
+            job.results = immediate_results
+            job.status = "completed"
+            job.started_at = utc_now()
+            job.finished_at = job.started_at
         job_store.add(job, max_active=settings.max_pending_jobs)
+        if immediate_results is not None:
+            job_store.cache_results(job.results)
+            job_store.record_catch_all(job)
+            write_csv(job)
+            job_store.persist(job)
+            return job
         if execution_target == TENCENT_QQ_TARGET:
             worker_lifecycle.notify_job_queued()
         elif execution_target == GMAIL_TARGET:
@@ -155,6 +168,7 @@ class VerificationTasks:
         target_emails: dict[str, list[str]],
         owner_id: str | None = None,
         job_id: str | None = None,
+        immediate_results_by_target: dict[str, list[dict[str, Any]]] | None = None,
     ) -> Job:
         """Create one visible task and target-specific internal child jobs."""
         all_emails = clean_emails(emails)
@@ -189,6 +203,7 @@ class VerificationTasks:
         job_store.add(parent, max_active=settings.max_pending_jobs)
 
         for target, child_emails in partitions:
+            immediate_results = (immediate_results_by_target or {}).get(target)
             child = Job(
                 id=uuid.uuid4().hex[:12],
                 emails=child_emails,
@@ -197,12 +212,34 @@ class VerificationTasks:
                 execution_target=target,
                 parent_id=parent.id,
             )
+            if immediate_results is not None:
+                child.results = immediate_results
+                child.status = "completed"
+                child.started_at = utc_now()
+                child.finished_at = child.started_at
             job_store.add(child)
+            if immediate_results is not None:
+                continue
             if target == TENCENT_QQ_TARGET:
                 worker_lifecycle.notify_job_queued()
             elif target == GMAIL_TARGET:
                 cloudshell_lifecycle.notify_job_queued()
-        return parent
+        return job_store.refresh_parent(parent.id) or parent
+
+
+def yahoo_unsupported_result(email: str, index: int) -> dict[str, Any]:
+    return {
+        "email": email,
+        "timestamp": utc_now().strftime("%Y-%m-%d %H:%M:%S"),
+        "valid": False,
+        "deliverable": None,
+        "domain_type": "-",
+        "verification_method": "不支持验证",
+        "smtp_result": "不支持验证",
+        "message": YAHOO_UNSUPPORTED_MESSAGE,
+        "original_index": index,
+        "skipped": True,
+    }
 
 
 def skipped_result(email: str, index: int) -> dict[str, Any]:
@@ -242,6 +279,9 @@ def verify_until_deliverable(
     for index, email in enumerate(job.emails):
         if job_store.is_stopped(job.id):
             return by_index
+        if is_yahoo_email(email):
+            by_index[index] = yahoo_unsupported_result(email, index)
+            continue
         cached = cached_by_email.get(email.lower())
         if cached is not None:
             result = dict(cached)

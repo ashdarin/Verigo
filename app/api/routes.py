@@ -33,6 +33,7 @@ from app.core.cloudshell_lifecycle import cloudshell_lifecycle
 from app.core.provider_policy import (
     YAHOO_UNSUPPORTED_MESSAGE,
     is_qq_email,
+    is_yahoo_email,
     is_yahoo_domain,
     yahoo_addresses,
 )
@@ -48,6 +49,7 @@ from app.tasks.verification import (
     verification_filename,
     verification_tasks,
     write_csv,
+    yahoo_unsupported_result,
 )
 
 
@@ -114,8 +116,19 @@ def submit_routed_job(
 ) -> Job:
     targets: dict[str, list[str]] = {}
     for email in emails:
-        target = email_execution_target(email, owner_email)
+        target = (
+            "unsupported"
+            if is_yahoo_email(email)
+            else email_execution_target(email, owner_email)
+        )
         targets.setdefault(target, []).append(email)
+
+    immediate_results = {
+        "unsupported": [
+            yahoo_unsupported_result(email, index)
+            for index, email in enumerate(targets.get("unsupported", []))
+        ]
+    }
 
     # Candidate discovery must preserve its input order and stop as soon as it
     # confirms a deliverable address, so it cannot be processed concurrently.
@@ -126,6 +139,7 @@ def submit_routed_job(
             targets,
             owner_id=owner_id,
             job_id=job_id,
+            immediate_results_by_target=immediate_results,
         )
 
     execution_target = next(iter(targets), "local") if len(targets) == 1 else "local"
@@ -136,6 +150,7 @@ def submit_routed_job(
         stop_on_deliverable=stop_on_deliverable,
         job_id=job_id,
         execution_target=execution_target,
+        immediate_results=immediate_results.get(execution_target),
     )
 
 
@@ -149,11 +164,6 @@ def require_remote_worker(worker_target: str, token: str | None) -> str:
     if not token or not hmac.compare_digest(token, configured_token):
         raise HTTPException(status_code=401, detail="远程验证节点认证失败")
     return execution_target
-
-
-def reject_yahoo_addresses(emails: list[str]) -> None:
-    if yahoo_addresses(emails):
-        raise HTTPException(status_code=422, detail=YAHOO_UNSUPPORTED_MESSAGE)
 
 
 def require_remote_job(job_id: str, worker_id: str, execution_target: str) -> Job:
@@ -414,7 +424,6 @@ def verify_discovery_candidates(
         raise HTTPException(status_code=403, detail="请先验证注册邮箱")
     try:
         candidates = candidate_emails(payload.first_name, payload.last_name, payload.domain)
-        reject_yahoo_addresses(candidates)
         job = submit_routed_job(
             candidates,
             4,
@@ -440,14 +449,15 @@ def create_job(
     emails = clean_emails(payload.emails)
     if not emails:
         raise HTTPException(status_code=422, detail="邮箱包含空格、非 ASCII 或非法字符")
-    reject_yahoo_addresses(emails)
     job_limit = settings.max_emails_per_job
     if len(emails) > job_limit:
         raise HTTPException(status_code=422, detail=f"单次最多 {job_limit} 个邮箱")
     job_id = uuid.uuid4().hex[:12]
     charge_reference = f"verification:{job_id}"
+    charged_count = len(emails) - len(yahoo_addresses(emails))
     try:
-        auth_store.consume_credits(user.id, len(emails), charge_reference)
+        if charged_count:
+            auth_store.consume_credits(user.id, charged_count, charge_reference)
         job = submit_routed_job(
             emails,
             payload.worker_count,
@@ -457,7 +467,8 @@ def create_job(
             job_id=job_id,
         )
     except RuntimeError as exc:
-        auth_store.refund_credits(user.id, len(emails), charge_reference)
+        if charged_count:
+            auth_store.refund_credits(user.id, charged_count, charge_reference)
         raise HTTPException(status_code=429, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -474,11 +485,12 @@ def verify_single_email(
     emails = clean_emails([payload.email])
     if len(emails) != 1:
         raise HTTPException(status_code=422, detail="请输入有效的邮箱地址")
-    reject_yahoo_addresses(emails)
+    yahoo_only = bool(yahoo_addresses(emails))
     try:
-        metrics_store.reserve_free_single(
-            request_network_hash(request), settings.anonymous_free_single_daily_limit
-        )
+        if not yahoo_only:
+            metrics_store.reserve_free_single(
+                request_network_hash(request), settings.anonymous_free_single_daily_limit
+            )
         job = submit_routed_job(
             emails,
             1,
@@ -487,7 +499,8 @@ def verify_single_email(
             job_id=uuid.uuid4().hex[:12],
         )
     except RuntimeError as exc:
-        metrics_store.release_free_single(request_network_hash(request))
+        if not yahoo_only:
+            metrics_store.release_free_single(request_network_hash(request))
         raise HTTPException(status_code=429, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
