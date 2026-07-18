@@ -36,6 +36,7 @@ import app.api.auth as auth_api
 from app.api.routes import gmail_target, submit_routed_job, tencent_qq_target
 from app.config import settings
 from app.core.legacy import load_legacy_module
+from app.core.result_retry import is_temporary_smtp_452
 from app.core.security import hash_password, token_hash
 from app.db.auth import auth_store
 from app.db.jobs import Job, job_store, utc_now
@@ -60,6 +61,9 @@ assert tencent_qq_target(["person@example.com"], "smoke@example.com") == "local"
 assert gmail_target(["person@gmail.com"], "smoke@example.com") == "gmail"
 assert gmail_target(["person@gmail.com"], "other@example.com") == "local"
 assert gmail_target(["person@example.com"], "smoke@example.com") == "local"
+assert is_temporary_smtp_452({"smtp_result": "452 temporary mailbox failure"})
+assert is_temporary_smtp_452({"message": "452 暂时无法确认"})
+assert not is_temporary_smtp_452({"smtp_result": "550 mailbox unavailable"})
 
 object.__setattr__(settings, "tencent_qq_worker_allowed_emails", frozenset({"*"}))
 assert tencent_qq_target(["person@qq.com"], "other@example.com") == "tencent_qq"

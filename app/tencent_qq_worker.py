@@ -9,6 +9,7 @@ import time
 from typing import Any
 
 from app.core.legacy import create_verifier
+from app.core.result_retry import is_temporary_smtp_452
 
 
 WORKER_TARGET = os.getenv("VERIGO_REMOTE_WORKER_TARGET", "tencent-qq")
@@ -83,6 +84,42 @@ def skipped_result(email: str, index: int) -> dict[str, object]:
     }
 
 
+def retry_temporary_452_results(
+    job_id: str,
+    emails: list[str],
+    results: list[dict[str, Any]],
+    control: dict[str, object],
+) -> list[dict[str, Any]]:
+    by_index = {int(result.get("original_index", index)): dict(result) for index, result in enumerate(results)}
+    retry_items = [
+        (index, emails[index])
+        for index, result in by_index.items()
+        if 0 <= index < len(emails) and is_temporary_smtp_452(result)
+    ]
+    if not retry_items or stopped(job_id, control):
+        return results
+
+    print(f"Retrying {len(retry_items)} temporary 452 results for {job_id}", flush=True)
+    time.sleep(3)
+    verifier = create_verifier(1)
+    retry_results = verifier.verify_batch_distributed(
+        [email for _, email in retry_items],
+        num_processes=1,
+        should_stop=lambda: stopped(job_id, control),
+    )
+    if stopped(job_id, control):
+        return results
+    for retry_result in retry_results:
+        result = dict(retry_result)
+        relative_index = int(result.get("original_index", 0))
+        if 0 <= relative_index < len(retry_items):
+            original_index = retry_items[relative_index][0]
+            result["original_index"] = original_index
+            by_index[original_index] = result
+            report_result(job_id, result)
+    return [by_index[index] for index in sorted(by_index)]
+
+
 def verify_job(job: dict[str, object]) -> None:
     job_id = str(job["id"])
     emails = [str(email) for email in job["emails"]]
@@ -132,6 +169,8 @@ def verify_job(job: dict[str, object]) -> None:
         if stopped(job_id, control):
             return
 
+    if not stopped(job_id, control):
+        results = retry_temporary_452_results(job_id, emails, results, control)
     if not stopped(job_id, control):
         request_json(f"/api/workers/{WORKER_TARGET}/jobs/{job_id}/complete", {"results": results})
 

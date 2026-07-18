@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo
 from app.config import settings
 from app.core.legacy import create_verifier
 from app.core.provider_policy import YAHOO_UNSUPPORTED_MESSAGE, is_yahoo_email
+from app.core.result_retry import is_temporary_smtp_452
 from app.core.security import token_hash
 from app.core.worker_lifecycle import TENCENT_QQ_TARGET, worker_lifecycle
 from app.core.cloudshell_lifecycle import GMAIL_TARGET, cloudshell_lifecycle
@@ -314,6 +315,35 @@ def verify_until_deliverable(
     return by_index
 
 
+def retry_temporary_452_results(job: Job, by_index: dict[int, dict[str, Any]]) -> None:
+    retry_items = [
+        (index, job.emails[index])
+        for index, result in by_index.items()
+        if is_temporary_smtp_452(result)
+    ]
+    if not retry_items or job_store.is_stopped(job.id):
+        return
+
+    logger.info("Retrying %s temporary 452 results for job %s", len(retry_items), job.id)
+    time.sleep(3)
+    verifier = create_verifier(1)
+    retry_emails = [email for _, email in retry_items]
+    retry_results = verifier.verify_batch_distributed(
+        retry_emails,
+        num_processes=1,
+        should_stop=lambda: job_store.is_stopped(job.id),
+    )
+    if job_store.is_stopped(job.id):
+        return
+    for retry_result in retry_results:
+        result = dict(retry_result)
+        relative_index = int(result.get("original_index", 0))
+        if 0 <= relative_index < len(retry_items):
+            original_index = retry_items[relative_index][0]
+            result["original_index"] = original_index
+            by_index[original_index] = normalize_result(result)
+
+
 def run_job(job: Job) -> None:
     """Execute a claimed job and make incremental progress visible through SQLite."""
     job.status = "running"
@@ -386,6 +416,8 @@ def run_job(job: Job) -> None:
                 relative_index = int(result.get("original_index", 0))
                 result["original_index"] = missing_indices[relative_index]
                 by_index[result["original_index"]] = normalize_result(result)
+
+        retry_temporary_452_results(job, by_index)
 
         job.results = [by_index[index] for index in sorted(by_index)]
         job_store.cache_results(job.results)
