@@ -141,6 +141,28 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@router.post("/workers/cloudstudio/probe")
+def cloudstudio_probe(
+    request: Request,
+    token: Annotated[str | None, Header(alias="X-Verigo-CloudStudio-Probe-Token")] = None,
+    workspace_key: Annotated[str | None, Header(alias="X-Verigo-CloudStudio-Workspace-Key")] = None,
+) -> dict[str, str]:
+    configured_token = settings.cloudstudio_probe_token
+    if not configured_token:
+        raise HTTPException(status_code=503, detail="CloudStudio 连通性探针尚未配置")
+    if not token or not hmac.compare_digest(token, configured_token):
+        raise HTTPException(status_code=401, detail="CloudStudio 连通性探针认证失败")
+    if not workspace_key or len(workspace_key) > 64:
+        raise HTTPException(status_code=422, detail="CloudStudio 工作空间标识无效")
+
+    forwarded_for = request.headers.get("x-forwarded-for", "")
+    source = forwarded_for.split(",", 1)[0].strip() or (
+        request.client.host if request.client else "unknown"
+    )
+    print(f"CloudStudio probe accepted: workspace={workspace_key} source={source}", flush=True)
+    return {"status": "accepted", "workspace_key": workspace_key}
+
+
 @router.post("/workers/tencent-qq/claim")
 async def claim_tencent_qq_job(
     token: Annotated[str | None, Header(alias="X-Verigo-Worker-Token")] = None,

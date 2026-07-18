@@ -21,6 +21,7 @@ os.environ["VERIGO_MAX_PENDING_JOBS"] = "50"
 os.environ["VERIGO_TRIAL_NETWORK_LIMIT"] = "2"
 os.environ["VERIGO_ADMIN_EMAILS"] = "admin@example.com"
 os.environ["VERIGO_METRICS_SALT"] = "smoke-test-metrics-salt"
+os.environ["VERIGO_CLOUDSTUDIO_PROBE_TOKEN"] = "smoke-cloudstudio-probe-token"
 
 from fastapi.testclient import TestClient
 from openpyxl import Workbook
@@ -59,6 +60,18 @@ with TestClient(app) as guest:
     assert guest.get("/email-list-cleaning").status_code == 200
     assert guest.get("/api/admin/metrics").status_code == 401
     assert guest.get("/api/jobs").status_code == 401
+    assert guest.post("/api/workers/cloudstudio/probe").status_code == 401
+    cloudstudio_probe = guest.post(
+        "/api/workers/cloudstudio/probe",
+        headers={
+            "X-Verigo-CloudStudio-Probe-Token": "smoke-cloudstudio-probe-token",
+            "X-Verigo-CloudStudio-Workspace-Key": "smoke-workspace",
+        },
+    )
+    assert cloudstudio_probe.status_code == 200, cloudstudio_probe.text
+    assert cloudstudio_probe.json() == {
+        "status": "accepted", "workspace_key": "smoke-workspace"
+    }
 
     workbook = Workbook()
     sheet = workbook.active
