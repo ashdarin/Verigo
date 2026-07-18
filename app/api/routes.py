@@ -49,6 +49,9 @@ from app.tasks.verification import (
 
 
 router = APIRouter(prefix="/api")
+TENCENT_QQ_DOMAINS = frozenset({"qq.com", "vip.qq.com", "foxmail.com"})
+
+
 def require_job(job_id: str) -> Job:
     job = job_store.get(job_id)
     if job is None:
@@ -56,9 +59,13 @@ def require_job(job_id: str) -> Job:
     return job
 
 
-def tencent_qq_target(emails: list[str]) -> str:
-    """Compatibility shim for jobs created before CloudStudio was retired."""
-    return "local"
+def tencent_qq_target(emails: list[str], owner_email: str | None) -> str:
+    if not settings.tencent_qq_worker_enabled or not emails:
+        return "local"
+    if not owner_email or owner_email.lower() not in settings.tencent_qq_worker_allowed_emails:
+        return "local"
+    domains = {email.rsplit("@", 1)[-1].lower() for email in emails if "@" in email}
+    return "tencent_qq" if domains and domains <= TENCENT_QQ_DOMAINS else "local"
 
 
 def require_tencent_worker(token: str | None) -> None:
@@ -185,7 +192,7 @@ async def claim_tencent_qq_job(
                 "job": {
                     "id": job.id,
                     "emails": job.emails,
-                    "worker_count": min(job.worker_count, 4),
+                    "worker_count": 1,
                     "stop_on_deliverable": job.stop_on_deliverable,
                 }
             }
@@ -323,7 +330,7 @@ def verify_discovery_candidates(
             owner_id=user.id,
             stop_on_deliverable=True,
             job_id=uuid.uuid4().hex[:12],
-            execution_target=tencent_qq_target(candidates),
+            execution_target=tencent_qq_target(candidates, user.email),
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -356,7 +363,7 @@ def create_job(
             owner_id=user.id,
             stop_on_deliverable=payload.stop_on_deliverable,
             job_id=job_id,
-            execution_target=tencent_qq_target(emails),
+            execution_target=tencent_qq_target(emails, user.email),
         )
     except RuntimeError as exc:
         auth_store.refund_credits(user.id, len(emails), charge_reference)
@@ -386,7 +393,7 @@ def verify_single_email(
             worker_count=1,
             owner_id=user.id if user else None,
             job_id=uuid.uuid4().hex[:12],
-            execution_target=tencent_qq_target(emails),
+            execution_target=tencent_qq_target(emails, user.email if user else None),
         )
     except RuntimeError as exc:
         metrics_store.release_free_single(request_network_hash(request))

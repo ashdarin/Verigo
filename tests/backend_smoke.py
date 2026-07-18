@@ -23,11 +23,14 @@ os.environ["VERIGO_ADMIN_EMAILS"] = "admin@example.com"
 os.environ["VERIGO_METRICS_SALT"] = "smoke-test-metrics-salt"
 os.environ["VERIGO_CLOUDSTUDIO_PROBE_TOKEN"] = "smoke-cloudstudio-probe-token"
 os.environ["VERIGO_TENCENT_QQ_WORKER_TOKEN"] = "smoke-tencent-worker-token"
+os.environ["VERIGO_TENCENT_QQ_WORKER_ENABLED"] = "true"
+os.environ["VERIGO_TENCENT_QQ_WORKER_ALLOWED_EMAILS"] = "smoke@example.com"
 
 from fastapi.testclient import TestClient
 from openpyxl import Workbook
 
 import app.api.auth as auth_api
+from app.api.routes import tencent_qq_target
 from app.core.legacy import load_legacy_module
 from app.core.security import hash_password, token_hash
 from app.db.auth import auth_store
@@ -44,6 +47,11 @@ def completed_job(job_id: str, **kwargs) -> Job:
         results=[{"email": "check@example.com", "deliverable": True}],
         **kwargs,
     )
+
+
+assert tencent_qq_target(["person@qq.com"], "smoke@example.com") == "tencent_qq"
+assert tencent_qq_target(["person@qq.com"], "other@example.com") == "local"
+assert tencent_qq_target(["person@example.com"], "smoke@example.com") == "local"
 
 
 with TestClient(app) as guest:

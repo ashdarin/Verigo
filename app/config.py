@@ -73,6 +73,12 @@ class Settings:
     qq_avatar_min_interval_seconds: float = max(
         0.0, float(os.getenv("VERIGO_QQ_AVATAR_MIN_INTERVAL_SECONDS", "1"))
     )
+    tencent_qq_worker_enabled: bool = env_bool("VERIGO_TENCENT_QQ_WORKER_ENABLED", False)
+    tencent_qq_worker_allowed_emails: frozenset[str] = frozenset(
+        email.strip().lower()
+        for email in os.getenv("VERIGO_TENCENT_QQ_WORKER_ALLOWED_EMAILS", "").split(",")
+        if email.strip()
+    )
     results_dir: Path = Path(
         os.getenv("VERIGO_RESULTS_DIR", str(BASE_DIR / "data" / "results"))
     )
