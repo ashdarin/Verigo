@@ -77,9 +77,9 @@ class CloudShellLifecycle:
             "2>/dev/null && tr '\\0' '\\n' < \"/proc/$(cat \"$pid_file\")/environ\" "
             "| grep -qx 'VERIGO_REMOTE_WORKER_TARGET=gmail'; then exit 0; fi; "
             "rm -f \"$pid_file\"; "
-            "nohup sh -c 'cd \"$HOME/verigo-worker\" && . .worker.env && exec "
-            ".venv/bin/python -m app.tencent_qq_worker' "
-            ">/tmp/verigo-gmail-worker.log 2>&1 </dev/null & echo $! > \"$pid_file\""
+            "(set -a; . .worker.env; set +a; nohup .venv/bin/python -m "
+            "app.tencent_qq_worker >/tmp/verigo-gmail-worker.log 2>&1 </dev/null & "
+            "echo $! > \"$pid_file\")"
         )
 
     def _token(self) -> str:
