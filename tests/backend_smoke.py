@@ -185,7 +185,23 @@ with TestClient(app) as admin_account:
     admin_id = registered.json()["id"]
     verification_code = auth_store.create_email_verification(admin_id)
     auth_store.confirm_email_verification(admin_id, verification_code)
-    assert admin_account.get("/api/auth/me").json()["is_admin"] is True
+    admin_user = admin_account.get("/api/auth/me").json()
+    assert admin_user["is_admin"] is True
+    admin_credits = admin_user["credits"]
+    admin_job = admin_account.post(
+        "/api/jobs",
+        json={
+            "emails": [f"admin-check-{number}@example.com" for number in range(admin_credits + 1)],
+            "worker_count": 1,
+        },
+    )
+    assert admin_job.status_code == 202, admin_job.text
+    assert admin_account.get("/api/auth/me").json()["credits"] == admin_credits
+    with auth_store._connect() as connection:
+        assert connection.execute(
+            "SELECT 1 FROM credit_ledger WHERE user_id=? AND reference=?",
+            (admin_id, f"verification:{admin_job.json()['id']}"),
+        ).fetchone() is None
     metrics = admin_account.get("/api/admin/metrics")
     assert metrics.status_code == 200, metrics.text
     assert metrics.json()["today"]["page_views"] >= 1

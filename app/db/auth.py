@@ -474,9 +474,14 @@ class AuthStore:
         now = utc_now().isoformat()
         with closing(self._connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
-            row = connection.execute("SELECT email_verified, credits FROM users WHERE id=?", (user_id,)).fetchone()
+            row = connection.execute(
+                "SELECT email_verified, credits, email FROM users WHERE id=?", (user_id,)
+            ).fetchone()
             if row is None or not row[0]:
                 connection.rollback(); raise ValueError("请先验证邮箱后领取额度")
+            if row[2] and str(row[2]).lower() in settings.admin_emails:
+                connection.rollback()
+                return int(row[1])
             grants = connection.execute(
                 """
                 SELECT id, remaining_credits FROM promo_credit_grants

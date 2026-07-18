@@ -148,10 +148,11 @@ async function checkDashboard(browser) {
     title: document.title,
     overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
     navVisible: !document.querySelector("#dashboard-nav")?.classList.contains("hidden"),
+    credits: document.querySelector("#account-credits")?.textContent,
     trafficRows: document.querySelectorAll("#dashboard-traffic-body tr").length,
     revenue: document.querySelector("#metric-today-revenue")?.textContent,
   }));
-  if (result.title !== "运营监控 | Verigo" || result.overflow || !result.navVisible || result.trafficRows !== 7 || result.revenue !== "¥29.90") {
+  if (result.title !== "运营监控 | Verigo" || result.overflow || !result.navVisible || result.credits !== "无限额度" || result.trafficRows !== 7 || result.revenue !== "¥29.90") {
     throw new Error(`dashboard: unexpected rendering ${JSON.stringify(result)}`);
   }
   await page.close();

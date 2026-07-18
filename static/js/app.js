@@ -643,7 +643,9 @@ function updateAccount() {
   el("account-name").textContent = state.user?.email || "";
   const trialCredits = Number(state.user?.trial_credits || 0);
   el("account-credits").textContent = state.user
-    ? `${state.user.credits || 0} 额度${trialCredits ? ` · ${trialCredits} 体验额度` : ""}`
+    ? state.user.is_admin
+      ? "无限额度"
+      : `${state.user.credits || 0} 额度${trialCredits ? ` · ${trialCredits} 体验额度` : ""}`
     : "";
   el("account-credits").title = state.user?.trial_credit_expires_at
     ? `体验额度有效至 ${new Date(state.user.trial_credit_expires_at).toLocaleString("zh-CN")}`
