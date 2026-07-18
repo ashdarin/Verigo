@@ -84,3 +84,11 @@ class PaymentOrderResponse(BaseModel):
     credits: int
     amount_fen: int
     status: str
+
+
+class WorkerResultsRequest(BaseModel):
+    results: list[dict[str, Any]] = Field(default_factory=list, max_length=5000)
+
+
+class WorkerFailureRequest(BaseModel):
+    error: str = Field(min_length=1, max_length=500)

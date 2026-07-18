@@ -19,13 +19,15 @@ from app.api.schemas import (
     PaymentOrderResponse,
     ResultsResponse,
     SingleVerificationRequest,
+    WorkerFailureRequest,
+    WorkerResultsRequest,
 )
 from app.config import settings
 from app.core.imports import extract_emails
 from app.core.discovery import candidate_emails
 from app.core.security import token_hash
 from app.db.auth import User, auth_store
-from app.db.jobs import Job, job_store
+from app.db.jobs import Job, job_store, utc_now
 from app.db.metrics import metrics_store
 from app.tasks.verification import (
     clean_emails,
@@ -34,16 +36,61 @@ from app.tasks.verification import (
     summarize,
     verification_filename,
     verification_tasks,
+    write_csv,
 )
 
 
 router = APIRouter(prefix="/api")
+TENCENT_QQ_DOMAINS = frozenset({"qq.com", "vip.qq.com", "foxmail.com"})
 
 
 def require_job(job_id: str) -> Job:
     job = job_store.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="任务不存在或服务已重启")
+    return job
+
+
+def tencent_qq_target(emails: list[str]) -> str:
+    if not settings.tencent_qq_worker_enabled or not emails:
+        return "local"
+    domains = {email.rsplit("@", 1)[-1].lower() for email in emails if "@" in email}
+    return "tencent_qq" if domains and domains <= TENCENT_QQ_DOMAINS else "local"
+
+
+def require_tencent_worker(token: str | None) -> None:
+    configured_token = settings.tencent_qq_worker_token
+    if not configured_token:
+        raise HTTPException(status_code=503, detail="腾讯 QQ 验证节点尚未配置")
+    if not token or not hmac.compare_digest(token, configured_token):
+        raise HTTPException(status_code=401, detail="腾讯 QQ 验证节点认证失败")
+
+
+def require_tencent_job(job_id: str, worker_id: str) -> Job:
+    job = require_job(job_id)
+    if job.execution_target != "tencent_qq" or job.worker_id != worker_id:
+        raise HTTPException(status_code=409, detail="腾讯 QQ 验证节点任务租约无效")
+    return job
+
+
+def merge_worker_results(job: Job, results: list[dict[str, object]]) -> Job:
+    by_index = {
+        int(item.get("original_index", index)): dict(item)
+        for index, item in enumerate(job.results)
+    }
+    for raw_result in results:
+        result = dict(raw_result)
+        try:
+            index = int(result.get("original_index", -1))
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail="腾讯节点结果缺少有效序号") from exc
+        if index < 0 or index >= len(job.emails):
+            raise HTTPException(status_code=422, detail="腾讯节点结果序号超出任务范围")
+        if str(result.get("email", "")).lower() != job.emails[index].lower():
+            raise HTTPException(status_code=422, detail="腾讯节点结果邮箱与任务不匹配")
+        result["original_index"] = index
+        by_index[index] = normalize_result(result)
+    job.results = [by_index[index] for index in sorted(by_index)]
     return job
 
 
@@ -89,6 +136,110 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@router.post("/workers/tencent-qq/claim")
+def claim_tencent_qq_job(
+    token: Annotated[str | None, Header(alias="X-Verigo-Worker-Token")] = None,
+    worker_id: Annotated[str | None, Header(alias="X-Verigo-Worker-Id")] = None,
+) -> dict[str, object]:
+    require_tencent_worker(token)
+    worker_name = (worker_id or "").strip()
+    if not worker_name or len(worker_name) > 128:
+        raise HTTPException(status_code=422, detail="腾讯 QQ 验证节点标识无效")
+    job = job_store.claim_next(worker_name, execution_target="tencent_qq")
+    if job is None:
+        return {"job": None}
+    return {
+        "job": {
+            "id": job.id,
+            "emails": job.emails,
+            "worker_count": min(job.worker_count, 4),
+            "stop_on_deliverable": job.stop_on_deliverable,
+        }
+    }
+
+
+@router.post("/workers/tencent-qq/jobs/{job_id}/heartbeat")
+def heartbeat_tencent_qq_job(
+    job_id: str,
+    token: Annotated[str | None, Header(alias="X-Verigo-Worker-Token")] = None,
+    worker_id: Annotated[str | None, Header(alias="X-Verigo-Worker-Id")] = None,
+) -> dict[str, object]:
+    require_tencent_worker(token)
+    job = require_job(job_id)
+    if job.execution_target != "tencent_qq":
+        raise HTTPException(status_code=409, detail="不是腾讯 QQ 验证节点任务")
+    if job.status == "stopped":
+        return {"status": "stopped", "stop_requested": True}
+    job = require_tencent_job(job_id, (worker_id or "").strip())
+    job_store.heartbeat(job)
+    return {"status": job.status, "stop_requested": False}
+
+
+@router.post("/workers/tencent-qq/jobs/{job_id}/results")
+def report_tencent_qq_results(
+    job_id: str,
+    payload: WorkerResultsRequest,
+    token: Annotated[str | None, Header(alias="X-Verigo-Worker-Token")] = None,
+    worker_id: Annotated[str | None, Header(alias="X-Verigo-Worker-Id")] = None,
+) -> dict[str, object]:
+    require_tencent_worker(token)
+    job = require_job(job_id)
+    if job.execution_target != "tencent_qq":
+        raise HTTPException(status_code=409, detail="不是腾讯 QQ 验证节点任务")
+    if job.status == "stopped":
+        return {"status": "stopped", "stop_requested": True}
+    job = require_tencent_job(job_id, (worker_id or "").strip())
+    merge_worker_results(job, payload.results)
+    job_store.persist(job)
+    job_store.heartbeat(job)
+    return {"status": job.status, "stop_requested": False, "completed": len(job.results)}
+
+
+@router.post("/workers/tencent-qq/jobs/{job_id}/complete", response_model=JobResponse)
+def complete_tencent_qq_job(
+    job_id: str,
+    payload: WorkerResultsRequest,
+    token: Annotated[str | None, Header(alias="X-Verigo-Worker-Token")] = None,
+    worker_id: Annotated[str | None, Header(alias="X-Verigo-Worker-Id")] = None,
+) -> JobResponse:
+    require_tencent_worker(token)
+    job = require_job(job_id)
+    if job.execution_target != "tencent_qq":
+        raise HTTPException(status_code=409, detail="不是腾讯 QQ 验证节点任务")
+    if job.status == "stopped":
+        return serialize_job(job)
+    job = require_tencent_job(job_id, (worker_id or "").strip())
+    merge_worker_results(job, payload.results)
+    job_store.cache_results(job.results)
+    job_store.record_catch_all(job)
+    job.finished_at = utc_now()
+    write_csv(job)
+    job.status = "completed"
+    job_store.persist(job)
+    return serialize_job(job)
+
+
+@router.post("/workers/tencent-qq/jobs/{job_id}/fail", response_model=JobResponse)
+def fail_tencent_qq_job(
+    job_id: str,
+    payload: WorkerFailureRequest,
+    token: Annotated[str | None, Header(alias="X-Verigo-Worker-Token")] = None,
+    worker_id: Annotated[str | None, Header(alias="X-Verigo-Worker-Id")] = None,
+) -> JobResponse:
+    require_tencent_worker(token)
+    job = require_job(job_id)
+    if job.execution_target != "tencent_qq":
+        raise HTTPException(status_code=409, detail="不是腾讯 QQ 验证节点任务")
+    if job.status == "stopped":
+        return serialize_job(job)
+    job = require_tencent_job(job_id, (worker_id or "").strip())
+    job.error = f"腾讯 QQ 验证节点失败: {payload.error}"
+    job.status = "failed"
+    job.finished_at = utc_now()
+    job_store.persist(job)
+    return serialize_job(job)
+
+
 @router.post("/analytics/engage", status_code=204)
 def record_analytics_engagement(
     request: Request,
@@ -132,6 +283,7 @@ def verify_discovery_candidates(
             owner_id=user.id,
             stop_on_deliverable=True,
             job_id=uuid.uuid4().hex[:12],
+            execution_target=tencent_qq_target(candidates),
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -163,6 +315,7 @@ def create_job(
             owner_id=user.id,
             stop_on_deliverable=payload.stop_on_deliverable,
             job_id=job_id,
+            execution_target=tencent_qq_target(emails),
         )
     except RuntimeError as exc:
         auth_store.refund_credits(user.id, len(emails), charge_reference)
@@ -191,6 +344,7 @@ def verify_single_email(
             worker_count=1,
             owner_id=user.id if user else None,
             job_id=uuid.uuid4().hex[:12],
+            execution_target=tencent_qq_target(emails),
         )
     except RuntimeError as exc:
         metrics_store.release_free_single(request_network_hash(request))

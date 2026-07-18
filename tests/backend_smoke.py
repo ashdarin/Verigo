@@ -21,6 +21,8 @@ os.environ["VERIGO_MAX_PENDING_JOBS"] = "50"
 os.environ["VERIGO_TRIAL_NETWORK_LIMIT"] = "2"
 os.environ["VERIGO_ADMIN_EMAILS"] = "admin@example.com"
 os.environ["VERIGO_METRICS_SALT"] = "smoke-test-metrics-salt"
+os.environ["VERIGO_TENCENT_QQ_WORKER_ENABLED"] = "true"
+os.environ["VERIGO_TENCENT_QQ_WORKER_TOKEN"] = "smoke-tencent-worker-token"
 
 from fastapi.testclient import TestClient
 from openpyxl import Workbook
@@ -31,6 +33,7 @@ from app.core.security import hash_password, token_hash
 from app.db.auth import auth_store
 from app.db.jobs import Job, job_store
 from app.main import app
+from app.tasks.verification import verification_tasks
 
 
 def completed_job(job_id: str, **kwargs) -> Job:
@@ -107,6 +110,48 @@ with TestClient(app) as guest:
     )
     assert stopped_guest_job.status_code == 200, stopped_guest_job.text
     assert stopped_guest_job.json()["status"] == "stopped"
+
+    worker_headers = {
+        "X-Verigo-Worker-Token": "smoke-tencent-worker-token",
+        "X-Verigo-Worker-Id": "smoke-cloudstudio",
+    }
+    assert guest.post("/api/workers/tencent-qq/claim").status_code == 401
+    remote_stopped = verification_tasks.submit(
+        ["worker-stop@qq.com"], worker_count=1, execution_target="tencent_qq"
+    )
+    claimed_stopped = guest.post("/api/workers/tencent-qq/claim", headers=worker_headers)
+    assert claimed_stopped.status_code == 200, claimed_stopped.text
+    assert claimed_stopped.json()["job"]["id"] == remote_stopped.id
+    stopped_remote = guest.post(
+        f"/api/jobs/{remote_stopped.id}/stop",
+        headers={"X-Job-Token": remote_stopped.guest_token},
+    )
+    assert stopped_remote.status_code == 200, stopped_remote.text
+    heartbeat = guest.post(
+        f"/api/workers/tencent-qq/jobs/{remote_stopped.id}/heartbeat", headers=worker_headers
+    )
+    assert heartbeat.json()["stop_requested"] is True
+
+    remote_completed = verification_tasks.submit(
+        ["worker-complete@qq.com"], worker_count=1, execution_target="tencent_qq"
+    )
+    claimed_completed = guest.post("/api/workers/tencent-qq/claim", headers=worker_headers)
+    assert claimed_completed.json()["job"]["id"] == remote_completed.id
+    worker_result = {
+        "email": "worker-complete@qq.com", "original_index": 0,
+        "deliverable": True, "valid": True, "verification_method": "qq_optimized",
+    }
+    reported = guest.post(
+        f"/api/workers/tencent-qq/jobs/{remote_completed.id}/results",
+        headers=worker_headers, json={"results": [worker_result]},
+    )
+    assert reported.status_code == 200, reported.text
+    completed_remote = guest.post(
+        f"/api/workers/tencent-qq/jobs/{remote_completed.id}/complete",
+        headers=worker_headers, json={"results": [worker_result]},
+    )
+    assert completed_remote.status_code == 200, completed_remote.text
+    assert completed_remote.json()["status"] == "completed"
 
 
 with TestClient(app) as account:

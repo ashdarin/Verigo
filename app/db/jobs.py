@@ -36,6 +36,7 @@ class Job:
     worker_id: str | None = None
     heartbeat_at: datetime | None = None
     stop_on_deliverable: bool = False
+    execution_target: str = "local"
 
 
 class JobStore:
@@ -45,6 +46,7 @@ class JobStore:
         "id", "emails_json", "worker_count", "status", "created_at",
         "started_at", "finished_at", "error", "results_json", "csv_path",
         "owner_id", "guest_token_hash", "worker_id", "heartbeat_at", "stop_on_deliverable",
+        "execution_target",
     )
 
     def __init__(self, keep: int = 100) -> None:
@@ -80,6 +82,7 @@ class JobStore:
             worker_id=row["worker_id"],
             heartbeat_at=datetime.fromisoformat(row["heartbeat_at"]) if row["heartbeat_at"] else None,
             stop_on_deliverable=bool(row["stop_on_deliverable"]),
+            execution_target=str(row["execution_target"] or "local"),
         )
 
     def initialize(self) -> None:
@@ -105,12 +108,13 @@ class JobStore:
                         guest_token_hash TEXT,
                         worker_id TEXT,
                         heartbeat_at TEXT,
-                        stop_on_deliverable INTEGER NOT NULL DEFAULT 0
+                        stop_on_deliverable INTEGER NOT NULL DEFAULT 0,
+                        execution_target TEXT NOT NULL DEFAULT 'local'
                     )
                     """
                 )
                 existing = {row[1] for row in connection.execute("PRAGMA table_info(jobs)")}
-                for name, kind in (("owner_id", "TEXT"), ("guest_token_hash", "TEXT"), ("worker_id", "TEXT"), ("heartbeat_at", "TEXT"), ("stop_on_deliverable", "INTEGER NOT NULL DEFAULT 0")):
+                for name, kind in (("owner_id", "TEXT"), ("guest_token_hash", "TEXT"), ("worker_id", "TEXT"), ("heartbeat_at", "TEXT"), ("stop_on_deliverable", "INTEGER NOT NULL DEFAULT 0"), ("execution_target", "TEXT NOT NULL DEFAULT 'local'")):
                     if name not in existing:
                         connection.execute(f"ALTER TABLE jobs ADD COLUMN {name} {kind}")
                 connection.execute("CREATE INDEX IF NOT EXISTS idx_jobs_queue ON jobs(status, created_at)")
@@ -183,6 +187,7 @@ class JobStore:
             job.worker_id,
             job.heartbeat_at.isoformat() if job.heartbeat_at else None,
             int(job.stop_on_deliverable),
+            job.execution_target,
         )
         with self._lock, closing(self._connect()) as connection:
             connection.execute(
@@ -190,8 +195,8 @@ class JobStore:
                 INSERT INTO jobs (
                     id, emails_json, worker_count, status, created_at, started_at, finished_at,
                     error, results_json, csv_path, owner_id, guest_token_hash, worker_id, heartbeat_at,
-                    stop_on_deliverable
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    stop_on_deliverable, execution_target
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     emails_json=excluded.emails_json, worker_count=excluded.worker_count,
                     status=excluded.status, started_at=excluded.started_at,
@@ -199,7 +204,8 @@ class JobStore:
                     results_json=excluded.results_json, csv_path=excluded.csv_path,
                     owner_id=excluded.owner_id, guest_token_hash=excluded.guest_token_hash,
                     worker_id=excluded.worker_id, heartbeat_at=excluded.heartbeat_at,
-                    stop_on_deliverable=excluded.stop_on_deliverable
+                    stop_on_deliverable=excluded.stop_on_deliverable,
+                    execution_target=excluded.execution_target
                 WHERE jobs.status != 'stopped' OR excluded.status = 'stopped'
                 """,
                 values,
@@ -222,7 +228,7 @@ class JobStore:
             ).fetchall()
         return [self._job_from_row(row) for row in rows]
 
-    def claim_next(self, worker_id: str) -> Job | None:
+    def claim_next(self, worker_id: str, execution_target: str = "local") -> Job | None:
         """Atomically claim the next task; expired worker leases are returned to the queue."""
         self.initialize()
         now = utc_now()
@@ -238,7 +244,8 @@ class JobStore:
                 (stale_before.isoformat(),),
             )
             row = connection.execute(
-                f"SELECT {self._select_columns()} FROM jobs WHERE status = 'queued' ORDER BY created_at LIMIT 1"
+                f"SELECT {self._select_columns()} FROM jobs WHERE status = 'queued' AND execution_target = ? ORDER BY created_at LIMIT 1",
+                (execution_target,),
             ).fetchone()
             if row is None:
                 connection.commit()

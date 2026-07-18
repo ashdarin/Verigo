@@ -125,6 +125,7 @@ class VerificationTasks:
         owner_id: str | None = None,
         stop_on_deliverable: bool = False,
         job_id: str | None = None,
+        execution_target: str = "local",
     ) -> Job:
         guest_token = None if owner_id else secrets.token_urlsafe(32)
         job = Job(
@@ -135,6 +136,7 @@ class VerificationTasks:
             guest_token=guest_token,
             guest_token_hash=token_hash(guest_token) if guest_token else None,
             stop_on_deliverable=stop_on_deliverable,
+            execution_target=execution_target,
         )
         job_store.add(job, max_active=settings.max_pending_jobs)
         return job
