@@ -30,12 +30,14 @@ from fastapi.testclient import TestClient
 from openpyxl import Workbook
 
 import app.api.auth as auth_api
-from app.api.routes import tencent_qq_target
+from app.api.routes import submit_routed_job, tencent_qq_target
+from app.config import settings
 from app.core.legacy import load_legacy_module
 from app.core.security import hash_password, token_hash
 from app.db.auth import auth_store
-from app.db.jobs import Job, job_store
+from app.db.jobs import Job, job_store, utc_now
 from app.main import app
+from app.tasks.verification import sync_parent_job
 
 
 def completed_job(job_id: str, **kwargs) -> Job:
@@ -52,6 +54,79 @@ def completed_job(job_id: str, **kwargs) -> Job:
 assert tencent_qq_target(["person@qq.com"], "smoke@example.com") == "tencent_qq"
 assert tencent_qq_target(["person@qq.com"], "other@example.com") == "local"
 assert tencent_qq_target(["person@example.com"], "smoke@example.com") == "local"
+
+object.__setattr__(settings, "tencent_qq_worker_allowed_emails", frozenset({"*"}))
+assert tencent_qq_target(["person@qq.com"], "other@example.com") == "tencent_qq"
+assert tencent_qq_target(["person@qq.com"], None) == "tencent_qq"
+assert tencent_qq_target(["person@example.com"], None) == "local"
+object.__setattr__(
+    settings, "tencent_qq_worker_allowed_emails", frozenset({"smoke@example.com"})
+)
+
+restart_job = Job(
+    id="restartqq001",
+    emails=["restart-check@qq.com"],
+    worker_count=1,
+    execution_target="tencent_qq",
+)
+job_store.add(restart_job)
+job_store._initialized = False
+job_store.initialize()
+assert job_store.get(restart_job.id).execution_target == "tencent_qq"
+job_store.stop(restart_job.id)
+
+object.__setattr__(settings, "tencent_qq_worker_allowed_emails", frozenset({"*"}))
+mixed_parent = submit_routed_job(
+    ["first@qq.com", "second@example.com", "third@foxmail.com"],
+    2,
+    owner_id="mixed-owner",
+    owner_email="mixed-owner@example.com",
+    job_id="mixedparent01",
+)
+mixed_children = job_store.children(mixed_parent.id)
+assert mixed_parent.execution_target == "aggregate"
+assert {child.execution_target for child in mixed_children} == {"local", "tencent_qq"}
+assert [child for child in mixed_children if child.execution_target == "tencent_qq"][0].emails == [
+    "first@qq.com",
+    "third@foxmail.com",
+]
+assert [child for child in mixed_children if child.execution_target == "local"][0].emails == [
+    "second@example.com"
+]
+for child in mixed_children:
+    child.status = "completed"
+    child.started_at = utc_now()
+    child.finished_at = utc_now()
+    child.results = [
+        {"email": email, "original_index": index, "deliverable": True}
+        for index, email in enumerate(child.emails)
+    ]
+    job_store.persist(child)
+    sync_parent_job(child)
+mixed_parent = job_store.get(mixed_parent.id)
+assert mixed_parent is not None
+assert mixed_parent.status == "completed"
+assert [result["email"] for result in mixed_parent.results] == [
+    "first@qq.com",
+    "second@example.com",
+    "third@foxmail.com",
+]
+assert mixed_parent.csv_path is not None and mixed_parent.csv_path.exists()
+assert mixed_parent.id in [job.id for job in job_store.list_recent("mixed-owner")]
+assert all(job.parent_id is None for job in job_store.list_recent("mixed-owner"))
+
+stopped_parent = submit_routed_job(
+    ["stop@qq.com", "stop@example.com"],
+    1,
+    owner_id="mixed-owner",
+    owner_email="mixed-owner@example.com",
+    job_id="mixedstop001",
+)
+assert job_store.stop(stopped_parent.id).status == "stopped"
+assert all(child.status == "stopped" for child in job_store.children(stopped_parent.id))
+object.__setattr__(
+    settings, "tencent_qq_worker_allowed_emails", frozenset({"smoke@example.com"})
+)
 
 
 with TestClient(app) as guest:
@@ -132,6 +207,12 @@ with TestClient(app) as guest:
     yahoo_single = guest.post("/api/verify/single", json={"email": "person@yahoo.co.uk"})
     assert yahoo_single.status_code == 422, yahoo_single.text
     assert "Yahoo" in yahoo_single.json()["detail"]
+    object.__setattr__(settings, "tencent_qq_worker_allowed_emails", frozenset({"*"}))
+    guest_qq = guest.post("/api/verify/single", json={"email": "public-user@qq.com"})
+    object.__setattr__(
+        settings, "tencent_qq_worker_allowed_emails", frozenset({"smoke@example.com"})
+    )
+    assert guest_qq.status_code == 202, guest_qq.text
     assert guest.post("/api/workers/tencent-qq/claim").status_code == 401
     worker_claim = guest.post(
         "/api/workers/tencent-qq/claim?wait_seconds=0",
@@ -141,7 +222,13 @@ with TestClient(app) as guest:
         },
     )
     assert worker_claim.status_code == 200, worker_claim.text
-    assert worker_claim.json() == {"job": None}
+    assert worker_claim.json()["job"]["id"] == guest_qq.json()["id"]
+    assert job_store.worker_runtime("tencent_qq").worker_id == "smoke-cloudstudio"
+    stopped_qq_job = guest.post(
+        f"/api/jobs/{guest_qq.json()['id']}/stop",
+        headers={"X-Job-Token": guest_qq.json()["access_token"]},
+    )
+    assert stopped_qq_job.status_code == 200, stopped_qq_job.text
 
 
 with TestClient(app) as account:

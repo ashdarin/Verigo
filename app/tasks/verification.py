@@ -13,6 +13,8 @@ from zoneinfo import ZoneInfo
 from app.config import settings
 from app.core.legacy import create_verifier
 from app.core.security import token_hash
+from app.core.worker_lifecycle import TENCENT_QQ_TARGET, worker_lifecycle
+from app.core.cloudshell_lifecycle import GMAIL_TARGET, cloudshell_lifecycle
 from app.db.jobs import Job, job_store, utc_now
 
 
@@ -140,7 +142,61 @@ class VerificationTasks:
             execution_target=execution_target,
         )
         job_store.add(job, max_active=settings.max_pending_jobs)
+        if execution_target == TENCENT_QQ_TARGET:
+            worker_lifecycle.notify_job_queued()
+        elif execution_target == GMAIL_TARGET:
+            cloudshell_lifecycle.notify_job_queued()
         return job
+
+    def submit_partitioned(
+        self,
+        emails: list[str],
+        worker_count: int,
+        tencent_emails: list[str],
+        owner_id: str | None = None,
+        stop_on_deliverable: bool = False,
+        job_id: str | None = None,
+    ) -> Job:
+        """Create one visible task and target-specific internal child jobs."""
+        all_emails = clean_emails(emails)
+        qq_emails = clean_emails(tencent_emails)
+        qq_keys = {email.lower() for email in qq_emails}
+        local_emails = [email for email in all_emails if email.lower() not in qq_keys]
+        if not qq_emails or not local_emails:
+            raise ValueError("分流任务必须同时包含腾讯邮箱和其他邮箱")
+
+        parent = Job(
+            id=job_id or uuid.uuid4().hex[:12],
+            emails=all_emails,
+            worker_count=worker_count,
+            status="running",
+            started_at=utc_now(),
+            owner_id=owner_id,
+            guest_token=None if owner_id else secrets.token_urlsafe(32),
+            stop_on_deliverable=stop_on_deliverable,
+            execution_target="aggregate",
+        )
+        parent.guest_token_hash = (
+            token_hash(parent.guest_token) if parent.guest_token else None
+        )
+        job_store.add(parent, max_active=settings.max_pending_jobs)
+
+        for child_emails, target in (
+            (qq_emails, TENCENT_QQ_TARGET),
+            (local_emails, "local"),
+        ):
+            child = Job(
+                id=uuid.uuid4().hex[:12],
+                emails=child_emails,
+                worker_count=worker_count,
+                stop_on_deliverable=stop_on_deliverable,
+                execution_target=target,
+                parent_id=parent.id,
+            )
+            job_store.add(child)
+            if target == TENCENT_QQ_TARGET:
+                worker_lifecycle.notify_job_queued()
+        return parent
 
 
 def skipped_result(email: str, index: int) -> dict[str, Any]:
@@ -156,6 +212,19 @@ def skipped_result(email: str, index: int) -> dict[str, Any]:
         "original_index": index,
         "skipped": True,
     }
+
+
+def sync_parent_job(job: Job) -> Job | None:
+    """Refresh the visible mixed-domain task after a child update."""
+    if not job.parent_id:
+        return None
+    parent = job_store.refresh_parent(job.parent_id)
+    if parent is not None and parent.status == "completed":
+        job_store.cache_results(parent.results)
+        job_store.record_catch_all(parent)
+        write_csv(parent)
+        job_store.persist(parent)
+    return parent
 
 
 def verify_until_deliverable(
@@ -287,6 +356,7 @@ def run_job(job: Job) -> None:
         job.verifier = None
         job.heartbeat_at = utc_now()
         job_store.persist(job)
+        sync_parent_job(job)
 
 
 def job_progress(job: Job) -> tuple[int, int, float]:

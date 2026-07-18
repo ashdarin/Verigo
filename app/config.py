@@ -79,6 +79,12 @@ class Settings:
         for email in os.getenv("VERIGO_TENCENT_QQ_WORKER_ALLOWED_EMAILS", "").split(",")
         if email.strip()
     )
+    gmail_worker_enabled: bool = env_bool("VERIGO_GMAIL_WORKER_ENABLED", False)
+    gmail_worker_allowed_emails: frozenset[str] = frozenset(
+        email.strip().lower()
+        for email in os.getenv("VERIGO_GMAIL_WORKER_ALLOWED_EMAILS", "").split(",")
+        if email.strip()
+    )
     results_dir: Path = Path(
         os.getenv("VERIGO_RESULTS_DIR", str(BASE_DIR / "data" / "results"))
     )
@@ -92,6 +98,37 @@ class Settings:
     smtp_mail_from: str = os.getenv("VERIGO_SMTP_MAIL_FROM", "verify@verigo.site")
     cloudstudio_probe_token: str = os.getenv("VERIGO_CLOUDSTUDIO_PROBE_TOKEN", "")
     tencent_qq_worker_token: str = os.getenv("VERIGO_TENCENT_QQ_WORKER_TOKEN", "")
+    gmail_worker_token: str = os.getenv("VERIGO_GMAIL_WORKER_TOKEN", "")
+    google_cloudshell_enabled: bool = env_bool("VERIGO_GOOGLE_CLOUDSHELL_ENABLED", False)
+    google_cloudshell_user: str = os.getenv("VERIGO_GOOGLE_CLOUDSHELL_USER", "")
+    google_cloudshell_quota_project: str = os.getenv("VERIGO_GOOGLE_CLOUDSHELL_QUOTA_PROJECT", "")
+    google_cloudshell_adc_path: Path = Path(os.getenv("VERIGO_GOOGLE_CLOUDSHELL_ADC_PATH", ""))
+    google_cloudshell_ssh_key_path: Path = Path(os.getenv("VERIGO_GOOGLE_CLOUDSHELL_SSH_KEY_PATH", ""))
+    cloudstudio_lifecycle_enabled: bool = env_bool(
+        "VERIGO_CLOUDSTUDIO_LIFECYCLE_ENABLED", False
+    )
+    cloudstudio_secret_id: str = os.getenv("VERIGO_CLOUDSTUDIO_SECRET_ID", "")
+    cloudstudio_secret_key: str = os.getenv("VERIGO_CLOUDSTUDIO_SECRET_KEY", "")
+    cloudstudio_region: str = os.getenv("VERIGO_CLOUDSTUDIO_REGION", "")
+    cloudstudio_space_key: str = os.getenv("VERIGO_CLOUDSTUDIO_SPACE_KEY", "")
+    cloudstudio_worker_online_seconds: int = max(
+        15, int(os.getenv("VERIGO_CLOUDSTUDIO_WORKER_ONLINE_SECONDS", "45"))
+    )
+    cloudstudio_startup_timeout_seconds: int = max(
+        30, int(os.getenv("VERIGO_CLOUDSTUDIO_STARTUP_TIMEOUT_SECONDS", "300"))
+    )
+    cloudstudio_wake_max_attempts: int = max(
+        1, int(os.getenv("VERIGO_CLOUDSTUDIO_WAKE_MAX_ATTEMPTS", "3"))
+    )
+    cloudstudio_wake_retry_seconds: int = max(
+        5, int(os.getenv("VERIGO_CLOUDSTUDIO_WAKE_RETRY_SECONDS", "15"))
+    )
+    cloudstudio_idle_stop_seconds: int = max(
+        60, int(os.getenv("VERIGO_CLOUDSTUDIO_IDLE_STOP_SECONDS", "600"))
+    )
+    cloudstudio_lifecycle_poll_seconds: float = max(
+        1.0, float(os.getenv("VERIGO_CLOUDSTUDIO_LIFECYCLE_POLL_SECONDS", "5"))
+    )
     worker_poll_seconds: float = float(os.getenv("VERIGO_WORKER_POLL_SECONDS", "1"))
     worker_lease_seconds: int = int(os.getenv("VERIGO_WORKER_LEASE_SECONDS", "180"))
     verification_cache_hours: int = int(os.getenv("VERIGO_VERIFICATION_CACHE_HOURS", "24"))

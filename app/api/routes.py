@@ -28,6 +28,8 @@ from app.config import settings
 from app.core.imports import extract_emails
 from app.core.discovery import candidate_emails
 from app.core.security import token_hash
+from app.core.worker_lifecycle import worker_lifecycle
+from app.core.cloudshell_lifecycle import cloudshell_lifecycle
 from app.core.provider_policy import (
     YAHOO_UNSUPPORTED_MESSAGE,
     is_qq_email,
@@ -42,6 +44,7 @@ from app.tasks.verification import (
     job_progress,
     normalize_result,
     summarize,
+    sync_parent_job,
     verification_filename,
     verification_tasks,
     write_csv,
@@ -50,6 +53,8 @@ from app.tasks.verification import (
 
 router = APIRouter(prefix="/api")
 TENCENT_QQ_DOMAINS = frozenset({"qq.com", "vip.qq.com", "foxmail.com"})
+GMAIL_DOMAINS = frozenset({"gmail.com", "googlemail.com"})
+REMOTE_WORKERS = {"tencent-qq": "tencent_qq", "gmail": "gmail"}
 
 
 def require_job(job_id: str) -> Job:
@@ -62,18 +67,74 @@ def require_job(job_id: str) -> Job:
 def tencent_qq_target(emails: list[str], owner_email: str | None) -> str:
     if not settings.tencent_qq_worker_enabled or not emails:
         return "local"
-    if not owner_email or owner_email.lower() not in settings.tencent_qq_worker_allowed_emails:
+    allowed_emails = settings.tencent_qq_worker_allowed_emails
+    if "*" not in allowed_emails and (
+        not owner_email or owner_email.lower() not in allowed_emails
+    ):
         return "local"
     domains = {email.rsplit("@", 1)[-1].lower() for email in emails if "@" in email}
     return "tencent_qq" if domains and domains <= TENCENT_QQ_DOMAINS else "local"
 
 
-def require_tencent_worker(token: str | None) -> None:
-    configured_token = settings.tencent_qq_worker_token
+def gmail_target(emails: list[str], owner_email: str | None) -> str:
+    if not settings.gmail_worker_enabled or not emails:
+        return "local"
+    allowed = settings.gmail_worker_allowed_emails
+    if "*" not in allowed and (not owner_email or owner_email.lower() not in allowed):
+        return "local"
+    domains = {email.rsplit("@", 1)[-1].lower() for email in emails if "@" in email}
+    return "gmail" if domains and domains <= GMAIL_DOMAINS else "local"
+
+
+def submit_routed_job(
+    emails: list[str],
+    worker_count: int,
+    owner_id: str | None,
+    owner_email: str | None,
+    stop_on_deliverable: bool = False,
+    job_id: str | None = None,
+) -> Job:
+    if gmail_target(emails, owner_email) == "gmail":
+        return verification_tasks.submit(
+            emails, worker_count, owner_id=owner_id,
+            stop_on_deliverable=stop_on_deliverable, job_id=job_id,
+            execution_target="gmail",
+        )
+    qq_emails = [
+        email
+        for email in emails
+        if email.rsplit("@", 1)[-1].lower() in TENCENT_QQ_DOMAINS
+    ]
+    qq_enabled = tencent_qq_target(qq_emails, owner_email) == "tencent_qq"
+    if qq_enabled and len(qq_emails) < len(emails) and not stop_on_deliverable:
+        return verification_tasks.submit_partitioned(
+            emails,
+            worker_count,
+            qq_emails,
+            owner_id=owner_id,
+            stop_on_deliverable=False,
+            job_id=job_id,
+        )
+    return verification_tasks.submit(
+        emails,
+        worker_count,
+        owner_id=owner_id,
+        stop_on_deliverable=stop_on_deliverable,
+        job_id=job_id,
+        execution_target=tencent_qq_target(emails, owner_email),
+    )
+
+
+def require_remote_worker(worker_target: str, token: str | None) -> str:
+    execution_target = REMOTE_WORKERS.get(worker_target)
+    if execution_target is None:
+        raise HTTPException(status_code=404, detail="未知远程验证节点")
+    configured_token = settings.tencent_qq_worker_token if execution_target == "tencent_qq" else settings.gmail_worker_token
     if not configured_token:
-        raise HTTPException(status_code=503, detail="CloudStudio worker 尚未配置")
+        raise HTTPException(status_code=503, detail="远程验证节点尚未配置")
     if not token or not hmac.compare_digest(token, configured_token):
-        raise HTTPException(status_code=401, detail="CloudStudio worker 认证失败")
+        raise HTTPException(status_code=401, detail="远程验证节点认证失败")
+    return execution_target
 
 
 def reject_yahoo_addresses(emails: list[str]) -> None:
@@ -81,10 +142,14 @@ def reject_yahoo_addresses(emails: list[str]) -> None:
         raise HTTPException(status_code=422, detail=YAHOO_UNSUPPORTED_MESSAGE)
 
 
-def require_tencent_job(job_id: str, worker_id: str) -> Job:
+def require_remote_job(job_id: str, worker_id: str, execution_target: str) -> Job:
     job = require_job(job_id)
-    if job.execution_target != "tencent_qq" or job.worker_id != worker_id:
-        raise HTTPException(status_code=409, detail="腾讯 QQ 验证节点任务租约无效")
+    if job.execution_target != execution_target or job.worker_id != worker_id:
+        raise HTTPException(status_code=409, detail="远程验证节点任务租约无效")
+    if execution_target == "tencent_qq":
+        worker_lifecycle.record_worker_seen(worker_id)
+    else:
+        cloudshell_lifecycle.record_worker_seen(worker_id)
     return job
 
 
@@ -174,19 +239,24 @@ def cloudstudio_probe(
     return {"status": "accepted", "workspace_key": workspace_key}
 
 
-@router.post("/workers/tencent-qq/claim")
+@router.post("/workers/{worker_target}/claim")
 async def claim_tencent_qq_job(
+    worker_target: str,
     token: Annotated[str | None, Header(alias="X-Verigo-Worker-Token")] = None,
     worker_id: Annotated[str | None, Header(alias="X-Verigo-Worker-Id")] = None,
     wait_seconds: int = Query(default=20, ge=0, le=25),
 ) -> dict[str, object]:
-    require_tencent_worker(token)
+    execution_target = require_remote_worker(worker_target, token)
     worker_name = (worker_id or "").strip()
     if not worker_name or len(worker_name) > 128:
         raise HTTPException(status_code=422, detail="腾讯 QQ 验证节点标识无效")
+    if execution_target == "tencent_qq":
+        worker_lifecycle.record_worker_seen(worker_name)
+    else:
+        cloudshell_lifecycle.record_worker_seen(worker_name)
     deadline = time.monotonic() + wait_seconds
     while True:
-        job = job_store.claim_next(worker_name, execution_target="tencent_qq")
+        job = job_store.claim_next(worker_name, execution_target=execution_target)
         if job is not None:
             return {
                 "job": {
@@ -202,57 +272,61 @@ async def claim_tencent_qq_job(
         await asyncio.sleep(min(0.25, remaining))
 
 
-@router.post("/workers/tencent-qq/jobs/{job_id}/heartbeat")
+@router.post("/workers/{worker_target}/jobs/{job_id}/heartbeat")
 def heartbeat_tencent_qq_job(
+    worker_target: str,
     job_id: str,
     token: Annotated[str | None, Header(alias="X-Verigo-Worker-Token")] = None,
     worker_id: Annotated[str | None, Header(alias="X-Verigo-Worker-Id")] = None,
 ) -> dict[str, object]:
-    require_tencent_worker(token)
+    execution_target = require_remote_worker(worker_target, token)
     job = require_job(job_id)
-    if job.execution_target != "tencent_qq":
+    if job.execution_target != execution_target:
         raise HTTPException(status_code=409, detail="不是腾讯 QQ 验证节点任务")
     if job.status == "stopped":
         return {"status": "stopped", "stop_requested": True}
-    job = require_tencent_job(job_id, (worker_id or "").strip())
+    job = require_remote_job(job_id, (worker_id or "").strip(), execution_target)
     job_store.heartbeat(job)
     return {"status": job.status, "stop_requested": False}
 
 
-@router.post("/workers/tencent-qq/jobs/{job_id}/results")
+@router.post("/workers/{worker_target}/jobs/{job_id}/results")
 def report_tencent_qq_results(
+    worker_target: str,
     job_id: str,
     payload: WorkerResultsRequest,
     token: Annotated[str | None, Header(alias="X-Verigo-Worker-Token")] = None,
     worker_id: Annotated[str | None, Header(alias="X-Verigo-Worker-Id")] = None,
 ) -> dict[str, object]:
-    require_tencent_worker(token)
+    execution_target = require_remote_worker(worker_target, token)
     job = require_job(job_id)
-    if job.execution_target != "tencent_qq":
+    if job.execution_target != execution_target:
         raise HTTPException(status_code=409, detail="不是腾讯 QQ 验证节点任务")
     if job.status == "stopped":
         return {"status": "stopped", "stop_requested": True}
-    job = require_tencent_job(job_id, (worker_id or "").strip())
+    job = require_remote_job(job_id, (worker_id or "").strip(), execution_target)
     merge_worker_results(job, payload.results)
     job_store.persist(job)
     job_store.heartbeat(job)
+    sync_parent_job(job)
     return {"status": job.status, "stop_requested": False, "completed": len(job.results)}
 
 
-@router.post("/workers/tencent-qq/jobs/{job_id}/complete", response_model=JobResponse)
+@router.post("/workers/{worker_target}/jobs/{job_id}/complete", response_model=JobResponse)
 def complete_tencent_qq_job(
+    worker_target: str,
     job_id: str,
     payload: WorkerResultsRequest,
     token: Annotated[str | None, Header(alias="X-Verigo-Worker-Token")] = None,
     worker_id: Annotated[str | None, Header(alias="X-Verigo-Worker-Id")] = None,
 ) -> JobResponse:
-    require_tencent_worker(token)
+    execution_target = require_remote_worker(worker_target, token)
     job = require_job(job_id)
-    if job.execution_target != "tencent_qq":
+    if job.execution_target != execution_target:
         raise HTTPException(status_code=409, detail="不是腾讯 QQ 验证节点任务")
     if job.status == "stopped":
         return serialize_job(job)
-    job = require_tencent_job(job_id, (worker_id or "").strip())
+    job = require_remote_job(job_id, (worker_id or "").strip(), execution_target)
     merge_worker_results(job, payload.results)
     job_store.cache_results(job.results)
     job_store.record_catch_all(job)
@@ -260,27 +334,30 @@ def complete_tencent_qq_job(
     write_csv(job)
     job.status = "completed"
     job_store.persist(job)
+    sync_parent_job(job)
     return serialize_job(job)
 
 
-@router.post("/workers/tencent-qq/jobs/{job_id}/fail", response_model=JobResponse)
+@router.post("/workers/{worker_target}/jobs/{job_id}/fail", response_model=JobResponse)
 def fail_tencent_qq_job(
+    worker_target: str,
     job_id: str,
     payload: WorkerFailureRequest,
     token: Annotated[str | None, Header(alias="X-Verigo-Worker-Token")] = None,
     worker_id: Annotated[str | None, Header(alias="X-Verigo-Worker-Id")] = None,
 ) -> JobResponse:
-    require_tencent_worker(token)
+    execution_target = require_remote_worker(worker_target, token)
     job = require_job(job_id)
-    if job.execution_target != "tencent_qq":
+    if job.execution_target != execution_target:
         raise HTTPException(status_code=409, detail="不是腾讯 QQ 验证节点任务")
     if job.status == "stopped":
         return serialize_job(job)
-    job = require_tencent_job(job_id, (worker_id or "").strip())
+    job = require_remote_job(job_id, (worker_id or "").strip(), execution_target)
     job.error = f"腾讯 QQ 验证节点失败: {payload.error}"
     job.status = "failed"
     job.finished_at = utc_now()
     job_store.persist(job)
+    sync_parent_job(job)
     return serialize_job(job)
 
 
@@ -324,13 +401,13 @@ def verify_discovery_candidates(
     try:
         candidates = candidate_emails(payload.first_name, payload.last_name, payload.domain)
         reject_yahoo_addresses(candidates)
-        job = verification_tasks.submit(
+        job = submit_routed_job(
             candidates,
-            worker_count=4,
+            4,
             owner_id=user.id,
             stop_on_deliverable=True,
             job_id=uuid.uuid4().hex[:12],
-            execution_target=tencent_qq_target(candidates, user.email),
+            owner_email=user.email,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -357,13 +434,13 @@ def create_job(
     charge_reference = f"verification:{job_id}"
     try:
         auth_store.consume_credits(user.id, len(emails), charge_reference)
-        job = verification_tasks.submit(
+        job = submit_routed_job(
             emails,
             payload.worker_count,
             owner_id=user.id,
+            owner_email=user.email,
             stop_on_deliverable=payload.stop_on_deliverable,
             job_id=job_id,
-            execution_target=tencent_qq_target(emails, user.email),
         )
     except RuntimeError as exc:
         auth_store.refund_credits(user.id, len(emails), charge_reference)
@@ -388,12 +465,12 @@ def verify_single_email(
         metrics_store.reserve_free_single(
             request_network_hash(request), settings.anonymous_free_single_daily_limit
         )
-        job = verification_tasks.submit(
+        job = submit_routed_job(
             emails,
-            worker_count=1,
+            1,
             owner_id=user.id if user else None,
+            owner_email=user.email if user else None,
             job_id=uuid.uuid4().hex[:12],
-            execution_target=tencent_qq_target(emails, user.email if user else None),
         )
     except RuntimeError as exc:
         metrics_store.release_free_single(request_network_hash(request))

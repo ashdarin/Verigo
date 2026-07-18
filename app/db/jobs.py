@@ -37,6 +37,21 @@ class Job:
     heartbeat_at: datetime | None = None
     stop_on_deliverable: bool = False
     execution_target: str = "local"
+    parent_id: str | None = None
+
+
+@dataclass(frozen=True)
+class WorkerRuntime:
+    target: str
+    worker_id: str | None = None
+    last_seen_at: datetime | None = None
+    wake_requested_at: datetime | None = None
+    wake_deadline_at: datetime | None = None
+    wake_attempts: int = 0
+    last_wake_error: str | None = None
+    idle_since: datetime | None = None
+    stop_requested_at: datetime | None = None
+    last_stop_error: str | None = None
 
 
 class JobStore:
@@ -46,7 +61,7 @@ class JobStore:
         "id", "emails_json", "worker_count", "status", "created_at",
         "started_at", "finished_at", "error", "results_json", "csv_path",
         "owner_id", "guest_token_hash", "worker_id", "heartbeat_at", "stop_on_deliverable",
-        "execution_target",
+        "execution_target", "parent_id",
     )
 
     def __init__(self, keep: int = 100) -> None:
@@ -83,6 +98,7 @@ class JobStore:
             heartbeat_at=datetime.fromisoformat(row["heartbeat_at"]) if row["heartbeat_at"] else None,
             stop_on_deliverable=bool(row["stop_on_deliverable"]),
             execution_target=str(row["execution_target"] or "local"),
+            parent_id=row["parent_id"],
         )
 
     def initialize(self) -> None:
@@ -109,15 +125,17 @@ class JobStore:
                         worker_id TEXT,
                         heartbeat_at TEXT,
                         stop_on_deliverable INTEGER NOT NULL DEFAULT 0,
-                        execution_target TEXT NOT NULL DEFAULT 'local'
+                        execution_target TEXT NOT NULL DEFAULT 'local',
+                        parent_id TEXT
                     )
                     """
                 )
                 existing = {row[1] for row in connection.execute("PRAGMA table_info(jobs)")}
-                for name, kind in (("owner_id", "TEXT"), ("guest_token_hash", "TEXT"), ("worker_id", "TEXT"), ("heartbeat_at", "TEXT"), ("stop_on_deliverable", "INTEGER NOT NULL DEFAULT 0"), ("execution_target", "TEXT NOT NULL DEFAULT 'local'")):
+                for name, kind in (("owner_id", "TEXT"), ("guest_token_hash", "TEXT"), ("worker_id", "TEXT"), ("heartbeat_at", "TEXT"), ("stop_on_deliverable", "INTEGER NOT NULL DEFAULT 0"), ("execution_target", "TEXT NOT NULL DEFAULT 'local'"), ("parent_id", "TEXT")):
                     if name not in existing:
                         connection.execute(f"ALTER TABLE jobs ADD COLUMN {name} {kind}")
                 connection.execute("CREATE INDEX IF NOT EXISTS idx_jobs_queue ON jobs(status, created_at)")
+                connection.execute("CREATE INDEX IF NOT EXISTS idx_jobs_parent ON jobs(parent_id, created_at)")
                 connection.execute(
                     """
                     CREATE TABLE IF NOT EXISTS verification_cache (
@@ -154,15 +172,20 @@ class JobStore:
                 connection.execute(
                     "CREATE INDEX IF NOT EXISTS idx_catch_all_domain ON catch_all_emails(domain, verified_at DESC)"
                 )
-                # CloudStudio QQ workers have been retired. Requeue any job
-                # that had been leased by that worker so the local worker can
-                # finish it with the conservative QQ policy.
                 connection.execute(
                     """
-                    UPDATE jobs
-                    SET execution_target = 'local', worker_id = NULL, heartbeat_at = NULL,
-                        status = 'queued', error = 'CloudStudio QQ 节点已下线，任务已转为本机专属策略'
-                    WHERE execution_target = 'tencent_qq' AND status IN ('queued', 'running')
+                    CREATE TABLE IF NOT EXISTS worker_runtime (
+                        target TEXT PRIMARY KEY,
+                        worker_id TEXT,
+                        last_seen_at TEXT,
+                        wake_requested_at TEXT,
+                        wake_deadline_at TEXT,
+                        wake_attempts INTEGER NOT NULL DEFAULT 0,
+                        last_wake_error TEXT,
+                        idle_since TEXT,
+                        stop_requested_at TEXT,
+                        last_stop_error TEXT
+                    )
                     """
                 )
             self._initialized = True
@@ -199,6 +222,7 @@ class JobStore:
             job.heartbeat_at.isoformat() if job.heartbeat_at else None,
             int(job.stop_on_deliverable),
             job.execution_target,
+            job.parent_id,
         )
         with self._lock, closing(self._connect()) as connection:
             connection.execute(
@@ -206,8 +230,8 @@ class JobStore:
                 INSERT INTO jobs (
                     id, emails_json, worker_count, status, created_at, started_at, finished_at,
                     error, results_json, csv_path, owner_id, guest_token_hash, worker_id, heartbeat_at,
-                    stop_on_deliverable, execution_target
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    stop_on_deliverable, execution_target, parent_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     emails_json=excluded.emails_json, worker_count=excluded.worker_count,
                     status=excluded.status, started_at=excluded.started_at,
@@ -216,7 +240,7 @@ class JobStore:
                     owner_id=excluded.owner_id, guest_token_hash=excluded.guest_token_hash,
                     worker_id=excluded.worker_id, heartbeat_at=excluded.heartbeat_at,
                     stop_on_deliverable=excluded.stop_on_deliverable,
-                    execution_target=excluded.execution_target
+                    execution_target=excluded.execution_target, parent_id=excluded.parent_id
                 WHERE jobs.status != 'stopped' OR excluded.status = 'stopped'
                 """,
                 values,
@@ -234,10 +258,67 @@ class JobStore:
         self.initialize()
         with closing(self._connect()) as connection:
             rows = connection.execute(
-                f"SELECT {self._select_columns()} FROM jobs WHERE owner_id = ? ORDER BY created_at DESC LIMIT ?",
+                f"SELECT {self._select_columns()} FROM jobs WHERE owner_id = ? AND parent_id IS NULL ORDER BY created_at DESC LIMIT ?",
                 (owner_id, limit),
             ).fetchall()
         return [self._job_from_row(row) for row in rows]
+
+    def children(self, parent_id: str) -> list[Job]:
+        self.initialize()
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                f"SELECT {self._select_columns()} FROM jobs WHERE parent_id=? ORDER BY created_at, id",
+                (parent_id,),
+            ).fetchall()
+        return [self._job_from_row(row) for row in rows]
+
+    def refresh_parent(self, parent_id: str) -> Job | None:
+        """Merge child results into the user-visible parent task."""
+        parent = self.get(parent_id)
+        if parent is None or parent.status == "stopped":
+            return parent
+        children = self.children(parent_id)
+        if not children:
+            return parent
+
+        results_by_email = {
+            str(result.get("email", "")).lower(): dict(result)
+            for child in children
+            for result in child.results
+            if result.get("email")
+        }
+        parent.results = []
+        for index, email in enumerate(parent.emails):
+            result = results_by_email.get(email.lower())
+            if result is None:
+                continue
+            result["original_index"] = index
+            parent.results.append(result)
+
+        started = [child.started_at for child in children if child.started_at]
+        parent.started_at = min(started) if started else None
+        terminal = {"completed", "failed", "stopped"}
+        if all(child.status in terminal for child in children):
+            parent.finished_at = max(
+                (child.finished_at or utc_now() for child in children), default=utc_now()
+            )
+            failures = [child.error for child in children if child.status == "failed" and child.error]
+            if failures:
+                parent.status = "failed"
+                parent.error = "；".join(failures[:2])[:500]
+            elif any(child.status == "stopped" for child in children):
+                parent.status = "stopped"
+                parent.error = "已由用户停止验证"
+            else:
+                parent.status = "completed"
+                parent.error = None
+        else:
+            parent.status = "running"
+            parent.finished_at = None
+            notices = [child.error for child in children if child.status == "queued" and child.error]
+            parent.error = notices[0] if notices else None
+        self.persist(parent)
+        return self.get(parent_id)
 
     def claim_next(self, worker_id: str, execution_target: str = "local") -> Job | None:
         """Atomically claim the next task; expired worker leases are returned to the queue."""
@@ -284,6 +365,180 @@ class JobStore:
                 (job.heartbeat_at.isoformat(), job.id, job.worker_id),
             )
 
+    def requeue_stale_jobs(self) -> int:
+        """Return expired leases to their original execution-target queue."""
+        self.initialize()
+        stale_before = utc_now() - timedelta(seconds=settings.worker_lease_seconds)
+        with closing(self._connect()) as connection:
+            return connection.execute(
+                """
+                UPDATE jobs SET status='queued', worker_id=NULL, heartbeat_at=NULL,
+                    error='工作节点已重新领取任务'
+                WHERE status='running' AND heartbeat_at IS NOT NULL AND heartbeat_at < ?
+                """,
+                (stale_before.isoformat(),),
+            ).rowcount
+
+    def active_target_count(self, target: str) -> int:
+        self.initialize()
+        with closing(self._connect()) as connection:
+            return int(
+                connection.execute(
+                    """
+                    SELECT COUNT(*) FROM jobs
+                    WHERE execution_target=? AND status IN ('queued', 'running')
+                    """,
+                    (target,),
+                ).fetchone()[0]
+            )
+
+    def set_queued_target_message(self, target: str, message: str | None) -> int:
+        self.initialize()
+        with closing(self._connect()) as connection:
+            return connection.execute(
+                "UPDATE jobs SET error=? WHERE execution_target=? AND status='queued'",
+                (message, target),
+            ).rowcount
+
+    def fail_queued_target(self, target: str, message: str) -> int:
+        self.initialize()
+        now = utc_now().isoformat()
+        with closing(self._connect()) as connection:
+            return connection.execute(
+                """
+                UPDATE jobs SET status='failed', error=?, finished_at=?,
+                    worker_id=NULL, heartbeat_at=NULL
+                WHERE execution_target=? AND status='queued'
+                """,
+                (message, now, target),
+            ).rowcount
+
+    @staticmethod
+    def _runtime_from_row(target: str, row: tuple[Any, ...] | None) -> WorkerRuntime:
+        if row is None:
+            return WorkerRuntime(target=target)
+        return WorkerRuntime(
+            target=target,
+            worker_id=row[0],
+            last_seen_at=datetime.fromisoformat(row[1]) if row[1] else None,
+            wake_requested_at=datetime.fromisoformat(row[2]) if row[2] else None,
+            wake_deadline_at=datetime.fromisoformat(row[3]) if row[3] else None,
+            wake_attempts=int(row[4]),
+            last_wake_error=row[5],
+            idle_since=datetime.fromisoformat(row[6]) if row[6] else None,
+            stop_requested_at=datetime.fromisoformat(row[7]) if row[7] else None,
+            last_stop_error=row[8],
+        )
+
+    def worker_runtime(self, target: str) -> WorkerRuntime:
+        self.initialize()
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                """
+                SELECT worker_id, last_seen_at, wake_requested_at, wake_deadline_at,
+                    wake_attempts, last_wake_error, idle_since, stop_requested_at,
+                    last_stop_error
+                FROM worker_runtime WHERE target=?
+                """,
+                (target,),
+            ).fetchone()
+        return self._runtime_from_row(target, row)
+
+    def record_worker_seen(self, target: str, worker_id: str) -> None:
+        self.initialize()
+        with closing(self._connect()) as connection:
+            connection.execute(
+                """
+                INSERT INTO worker_runtime(target, worker_id, last_seen_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(target) DO UPDATE SET
+                    worker_id=excluded.worker_id,
+                    last_seen_at=excluded.last_seen_at,
+                    wake_requested_at=NULL,
+                    wake_deadline_at=NULL,
+                    wake_attempts=0,
+                    last_wake_error=NULL
+                """,
+                (target, worker_id, utc_now().isoformat()),
+            )
+
+    def record_wake_attempt(
+        self, target: str, deadline: datetime | None, error: str | None
+    ) -> WorkerRuntime:
+        self.initialize()
+        now = utc_now().isoformat()
+        with closing(self._connect()) as connection:
+            connection.execute(
+                """
+                INSERT INTO worker_runtime(
+                    target, wake_requested_at, wake_deadline_at, wake_attempts,
+                    last_wake_error
+                ) VALUES (?, ?, ?, 1, ?)
+                ON CONFLICT(target) DO UPDATE SET
+                    wake_requested_at=excluded.wake_requested_at,
+                    wake_deadline_at=excluded.wake_deadline_at,
+                    wake_attempts=worker_runtime.wake_attempts+1,
+                    last_wake_error=excluded.last_wake_error,
+                    idle_since=NULL,
+                    stop_requested_at=NULL,
+                    last_stop_error=NULL
+                """,
+                (target, now, deadline.isoformat() if deadline else None, error),
+            )
+        return self.worker_runtime(target)
+
+    def clear_wake_state(self, target: str) -> None:
+        self.initialize()
+        with closing(self._connect()) as connection:
+            connection.execute(
+                """
+                UPDATE worker_runtime SET wake_requested_at=NULL, wake_deadline_at=NULL,
+                    wake_attempts=0, last_wake_error=NULL
+                WHERE target=?
+                """,
+                (target,),
+            )
+
+    def begin_worker_idle(self, target: str) -> WorkerRuntime:
+        self.initialize()
+        now = utc_now().isoformat()
+        with closing(self._connect()) as connection:
+            connection.execute(
+                """
+                INSERT INTO worker_runtime(target, idle_since) VALUES (?, ?)
+                ON CONFLICT(target) DO UPDATE SET
+                    idle_since=COALESCE(worker_runtime.idle_since, excluded.idle_since)
+                """,
+                (target, now),
+            )
+        return self.worker_runtime(target)
+
+    def clear_worker_idle(self, target: str) -> None:
+        self.initialize()
+        with closing(self._connect()) as connection:
+            connection.execute(
+                """
+                UPDATE worker_runtime SET idle_since=NULL, stop_requested_at=NULL,
+                    last_stop_error=NULL
+                WHERE target=?
+                """,
+                (target,),
+            )
+
+    def record_stop_attempt(self, target: str, error: str | None) -> None:
+        self.initialize()
+        with closing(self._connect()) as connection:
+            connection.execute(
+                """
+                INSERT INTO worker_runtime(target, stop_requested_at, last_stop_error)
+                VALUES (?, ?, ?)
+                ON CONFLICT(target) DO UPDATE SET
+                    stop_requested_at=excluded.stop_requested_at,
+                    last_stop_error=excluded.last_stop_error
+                """,
+                (target, utc_now().isoformat(), error),
+            )
+
     def is_stopped(self, job_id: str) -> bool:
         self.initialize()
         with closing(self._connect()) as connection:
@@ -305,6 +560,15 @@ class JobStore:
             if job.status not in {"queued", "running"}:
                 connection.commit()
                 return job
+            if job.execution_target == "aggregate":
+                connection.execute(
+                    """
+                    UPDATE jobs SET status='stopped', finished_at=?, error=?,
+                        worker_id=NULL, heartbeat_at=NULL
+                    WHERE parent_id=? AND status IN ('queued', 'running')
+                    """,
+                    (utc_now().isoformat(), "已由用户停止验证", job_id),
+                )
             connection.execute(
                 """
                 UPDATE jobs SET status='stopped', finished_at=?, error=?,

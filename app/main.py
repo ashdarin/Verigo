@@ -11,6 +11,7 @@ from app.api.auth import auth_router
 from app.api.routes import router
 from app.config import BASE_DIR, settings
 from app.core.legacy import load_persistent_cache, save_persistent_cache
+from app.core.worker_lifecycle import worker_lifecycle
 from app.db.jobs import job_store
 from app.db.auth import auth_store
 from app.db.metrics import metrics_store
@@ -26,8 +27,12 @@ async def lifespan(_: FastAPI):
     auth_store.initialize()
     metrics_store.initialize()
     load_persistent_cache()
-    yield
-    save_persistent_cache()
+    worker_lifecycle.start()
+    try:
+        yield
+    finally:
+        worker_lifecycle.stop()
+        save_persistent_cache()
 
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
