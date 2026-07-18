@@ -16,6 +16,11 @@ if [[ ! "$release_version" =~ ^[0-9a-f]{7,40}$ ]]; then
     exit 1
 fi
 
+set_application_owner() {
+    chown -R verigo:verigo "$app_dir/app" "$app_dir/static" "$app_dir/deploy"
+    chown verigo:verigo "$app_dir/requirements.txt" "$app_dir/验证8.py"
+}
+
 rollback() {
     echo "Release failed; restoring previous application files" >&2
     rsync -a --delete "$backup_dir/app/" "$app_dir/app/"
@@ -23,7 +28,12 @@ rollback() {
     rsync -a --delete "$backup_dir/deploy/" "$app_dir/deploy/"
     cp "$backup_dir/requirements.txt" "$app_dir/requirements.txt"
     cp "$backup_dir/验证8.py" "$app_dir/验证8.py"
-    chown -R verigo:verigo "$app_dir"
+    if [[ -f "$backup_dir/RELEASE_VERSION" ]]; then
+        cp "$backup_dir/RELEASE_VERSION" "$app_dir/RELEASE_VERSION"
+    else
+        rm -f "$app_dir/RELEASE_VERSION"
+    fi
+    set_application_owner
     systemctl restart verigo || true
 }
 
@@ -38,6 +48,11 @@ rsync -a --delete "$app_dir/static/" "$backup_dir/static/"
 rsync -a --delete "$app_dir/deploy/" "$backup_dir/deploy/"
 cp "$app_dir/requirements.txt" "$backup_dir/requirements.txt"
 cp "$app_dir/验证8.py" "$backup_dir/验证8.py"
+if [[ -f "$app_dir/RELEASE_VERSION" ]]; then
+    cp "$app_dir/RELEASE_VERSION" "$backup_dir/RELEASE_VERSION"
+else
+    rm -f "$backup_dir/RELEASE_VERSION"
+fi
 
 trap rollback ERR
 
@@ -94,7 +109,7 @@ if ! grep -q '^VERIGO_METRICS_SALT=' /etc/verigo/verigo.env; then
     printf 'VERIGO_METRICS_SALT=%s\n' "$(openssl rand -hex 32)" >> /etc/verigo/verigo.env
 fi
 
-chown -R verigo:verigo "$app_dir"
+set_application_owner
 chmod 600 /etc/verigo/verigo.env
 systemctl restart verigo
 
