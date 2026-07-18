@@ -18,6 +18,9 @@ GMAIL_TARGET = "gmail"
 class CloudShellLifecycle:
     def __init__(self) -> None:
         self._lock = threading.Lock()
+        self._stop_event = threading.Event()
+        self._wake_event = threading.Event()
+        self._thread: threading.Thread | None = None
 
     @property
     def configured(self) -> bool:
@@ -32,9 +35,33 @@ class CloudShellLifecycle:
         )
 
     def notify_job_queued(self) -> None:
+        self._wake_event.set()
         if not self.configured or not self._lock.acquire(blocking=False):
             return
         threading.Thread(target=self._start, name="cloudshell-gmail", daemon=True).start()
+
+    def start(self) -> None:
+        if self._thread and self._thread.is_alive():
+            return
+        self._stop_event.clear()
+        self._thread = threading.Thread(
+            target=self._run, name="cloudshell-gmail-lifecycle", daemon=True
+        )
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        self._wake_event.set()
+        if self._thread:
+            self._thread.join(timeout=5)
+        self._thread = None
+
+    def _run(self) -> None:
+        while not self._stop_event.is_set():
+            if self.configured and job_store.active_target_count(GMAIL_TARGET):
+                self.notify_job_queued()
+            self._wake_event.wait(5)
+            self._wake_event.clear()
 
     def record_worker_seen(self, worker_id: str) -> None:
         job_store.record_worker_seen(GMAIL_TARGET, worker_id)

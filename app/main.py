@@ -12,6 +12,7 @@ from app.api.routes import router
 from app.config import BASE_DIR, settings
 from app.core.legacy import load_persistent_cache, save_persistent_cache
 from app.core.worker_lifecycle import worker_lifecycle
+from app.core.cloudshell_lifecycle import cloudshell_lifecycle
 from app.db.jobs import job_store
 from app.db.auth import auth_store
 from app.db.metrics import metrics_store
@@ -28,9 +29,11 @@ async def lifespan(_: FastAPI):
     metrics_store.initialize()
     load_persistent_cache()
     worker_lifecycle.start()
+    cloudshell_lifecycle.start()
     try:
         yield
     finally:
+        cloudshell_lifecycle.stop()
         worker_lifecycle.stop()
         save_persistent_cache()
 
