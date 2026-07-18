@@ -32,11 +32,18 @@ def request_json(path: str, payload: dict[str, object] | None = None) -> dict[st
         "-H", f"X-Verigo-Worker-Token: {TOKEN}",
         "-H", f"X-Verigo-Worker-Id: {WORKER_ID}",
     ]
+    request_body = None
     if payload is not None:
-        command.extend(["--data-binary", json.dumps(payload, ensure_ascii=False)])
+        command.extend(["--data-binary", "@-"])
+        request_body = json.dumps(payload, ensure_ascii=False)
     try:
         response = subprocess.run(
-            command, check=False, capture_output=True, text=True, timeout=35
+            command,
+            input=request_body,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=35,
         )
         if response.returncode:
             raise WorkerRequestError(response.stderr.strip() or "curl request failed")
