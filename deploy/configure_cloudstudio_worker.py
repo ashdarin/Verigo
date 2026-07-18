@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 from app.config import settings
 from app.core.cloudstudio_startup import workspace_configuration
 from app.core.worker_lifecycle import TencentCloudStudioApi
