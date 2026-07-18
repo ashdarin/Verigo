@@ -25,12 +25,15 @@ os.environ["VERIGO_CLOUDSTUDIO_PROBE_TOKEN"] = "smoke-cloudstudio-probe-token"
 os.environ["VERIGO_TENCENT_QQ_WORKER_TOKEN"] = "smoke-tencent-worker-token"
 os.environ["VERIGO_TENCENT_QQ_WORKER_ENABLED"] = "true"
 os.environ["VERIGO_TENCENT_QQ_WORKER_ALLOWED_EMAILS"] = "smoke@example.com"
+os.environ["VERIGO_GMAIL_WORKER_TOKEN"] = "smoke-gmail-worker-token"
+os.environ["VERIGO_GMAIL_WORKER_ENABLED"] = "true"
+os.environ["VERIGO_GMAIL_WORKER_ALLOWED_EMAILS"] = "smoke@example.com"
 
 from fastapi.testclient import TestClient
 from openpyxl import Workbook
 
 import app.api.auth as auth_api
-from app.api.routes import submit_routed_job, tencent_qq_target
+from app.api.routes import gmail_target, submit_routed_job, tencent_qq_target
 from app.config import settings
 from app.core.legacy import load_legacy_module
 from app.core.security import hash_password, token_hash
@@ -54,6 +57,9 @@ def completed_job(job_id: str, **kwargs) -> Job:
 assert tencent_qq_target(["person@qq.com"], "smoke@example.com") == "tencent_qq"
 assert tencent_qq_target(["person@qq.com"], "other@example.com") == "local"
 assert tencent_qq_target(["person@example.com"], "smoke@example.com") == "local"
+assert gmail_target(["person@gmail.com"], "smoke@example.com") == "gmail"
+assert gmail_target(["person@gmail.com"], "other@example.com") == "local"
+assert gmail_target(["person@example.com"], "smoke@example.com") == "local"
 
 object.__setattr__(settings, "tencent_qq_worker_allowed_emails", frozenset({"*"}))
 assert tencent_qq_target(["person@qq.com"], "other@example.com") == "tencent_qq"
@@ -61,6 +67,46 @@ assert tencent_qq_target(["person@qq.com"], None) == "tencent_qq"
 assert tencent_qq_target(["person@example.com"], None) == "local"
 object.__setattr__(
     settings, "tencent_qq_worker_allowed_emails", frozenset({"smoke@example.com"})
+)
+
+object.__setattr__(settings, "tencent_qq_worker_allowed_emails", frozenset({"*"}))
+object.__setattr__(settings, "gmail_worker_allowed_emails", frozenset({"*"}))
+mixed_three_way_parent = submit_routed_job(
+    ["first@qq.com", "second@gmail.com", "third@example.com", "fourth@googlemail.com"],
+    2,
+    owner_id="mixed-owner",
+    owner_email="mixed-owner@example.com",
+    job_id="mixedthree001",
+)
+mixed_three_way_children = job_store.children(mixed_three_way_parent.id)
+assert mixed_three_way_parent.execution_target == "aggregate"
+assert {child.execution_target for child in mixed_three_way_children} == {
+    "local", "tencent_qq", "gmail"
+}
+assert next(child for child in mixed_three_way_children if child.execution_target == "tencent_qq").emails == ["first@qq.com"]
+assert next(child for child in mixed_three_way_children if child.execution_target == "gmail").emails == ["second@gmail.com", "fourth@googlemail.com"]
+assert next(child for child in mixed_three_way_children if child.execution_target == "local").emails == ["third@example.com"]
+for child in mixed_three_way_children:
+    child.status = "completed"
+    child.started_at = utc_now()
+    child.finished_at = utc_now()
+    child.results = [
+        {"email": email, "original_index": index, "deliverable": True}
+        for index, email in enumerate(child.emails)
+    ]
+    job_store.persist(child)
+    sync_parent_job(child)
+mixed_three_way_parent = job_store.get(mixed_three_way_parent.id)
+assert mixed_three_way_parent is not None
+assert mixed_three_way_parent.status == "completed"
+assert [result["email"] for result in mixed_three_way_parent.results] == [
+    "first@qq.com", "second@gmail.com", "third@example.com", "fourth@googlemail.com"
+]
+object.__setattr__(
+    settings, "tencent_qq_worker_allowed_emails", frozenset({"smoke@example.com"})
+)
+object.__setattr__(
+    settings, "gmail_worker_allowed_emails", frozenset({"smoke@example.com"})
 )
 
 restart_job = Job(

@@ -152,18 +152,25 @@ class VerificationTasks:
         self,
         emails: list[str],
         worker_count: int,
-        tencent_emails: list[str],
+        target_emails: dict[str, list[str]],
         owner_id: str | None = None,
-        stop_on_deliverable: bool = False,
         job_id: str | None = None,
     ) -> Job:
         """Create one visible task and target-specific internal child jobs."""
         all_emails = clean_emails(emails)
-        qq_emails = clean_emails(tencent_emails)
-        qq_keys = {email.lower() for email in qq_emails}
-        local_emails = [email for email in all_emails if email.lower() not in qq_keys]
-        if not qq_emails or not local_emails:
-            raise ValueError("分流任务必须同时包含腾讯邮箱和其他邮箱")
+        partitions = [
+            (target, clean_emails(partition_emails))
+            for target, partition_emails in target_emails.items()
+            if partition_emails
+        ]
+        partitioned_emails = [email for _, partition in partitions for email in partition]
+        if (
+            len(partitions) < 2
+            or len(partitioned_emails) != len(all_emails)
+            or {email.lower() for email in partitioned_emails}
+            != {email.lower() for email in all_emails}
+        ):
+            raise ValueError("分流任务必须包含至少两个完整且互不重叠的执行分区")
 
         parent = Job(
             id=job_id or uuid.uuid4().hex[:12],
@@ -173,7 +180,7 @@ class VerificationTasks:
             started_at=utc_now(),
             owner_id=owner_id,
             guest_token=None if owner_id else secrets.token_urlsafe(32),
-            stop_on_deliverable=stop_on_deliverable,
+            stop_on_deliverable=False,
             execution_target="aggregate",
         )
         parent.guest_token_hash = (
@@ -181,21 +188,20 @@ class VerificationTasks:
         )
         job_store.add(parent, max_active=settings.max_pending_jobs)
 
-        for child_emails, target in (
-            (qq_emails, TENCENT_QQ_TARGET),
-            (local_emails, "local"),
-        ):
+        for target, child_emails in partitions:
             child = Job(
                 id=uuid.uuid4().hex[:12],
                 emails=child_emails,
                 worker_count=worker_count,
-                stop_on_deliverable=stop_on_deliverable,
+                stop_on_deliverable=False,
                 execution_target=target,
                 parent_id=parent.id,
             )
             job_store.add(child)
             if target == TENCENT_QQ_TARGET:
                 worker_lifecycle.notify_job_queued()
+            elif target == GMAIL_TARGET:
+                cloudshell_lifecycle.notify_job_queued()
         return parent
 
 

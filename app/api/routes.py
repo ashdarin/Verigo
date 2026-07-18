@@ -65,25 +65,43 @@ def require_job(job_id: str) -> Job:
 
 
 def tencent_qq_target(emails: list[str], owner_email: str | None) -> str:
-    if not settings.tencent_qq_worker_enabled or not emails:
-        return "local"
-    allowed_emails = settings.tencent_qq_worker_allowed_emails
-    if "*" not in allowed_emails and (
-        not owner_email or owner_email.lower() not in allowed_emails
-    ):
+    if not qq_worker_allowed(owner_email) or not emails:
         return "local"
     domains = {email.rsplit("@", 1)[-1].lower() for email in emails if "@" in email}
     return "tencent_qq" if domains and domains <= TENCENT_QQ_DOMAINS else "local"
 
 
 def gmail_target(emails: list[str], owner_email: str | None) -> str:
-    if not settings.gmail_worker_enabled or not emails:
-        return "local"
-    allowed = settings.gmail_worker_allowed_emails
-    if "*" not in allowed and (not owner_email or owner_email.lower() not in allowed):
+    if not gmail_worker_allowed(owner_email) or not emails:
         return "local"
     domains = {email.rsplit("@", 1)[-1].lower() for email in emails if "@" in email}
     return "gmail" if domains and domains <= GMAIL_DOMAINS else "local"
+
+
+def qq_worker_allowed(owner_email: str | None) -> bool:
+    allowed = settings.tencent_qq_worker_allowed_emails
+    return bool(
+        settings.tencent_qq_worker_enabled
+        and ("*" in allowed or (owner_email and owner_email.lower() in allowed))
+    )
+
+
+def gmail_worker_allowed(owner_email: str | None) -> bool:
+    allowed = settings.gmail_worker_allowed_emails
+    return bool(
+        settings.gmail_worker_enabled
+        and ("*" in allowed or (owner_email and owner_email.lower() in allowed))
+    )
+
+
+def email_execution_target(email: str, owner_email: str | None) -> str:
+    """Return the configured worker target for one address."""
+    domain = email.rsplit("@", 1)[-1].lower() if "@" in email else ""
+    if domain in TENCENT_QQ_DOMAINS and qq_worker_allowed(owner_email):
+        return "tencent_qq"
+    if domain in GMAIL_DOMAINS and gmail_worker_allowed(owner_email):
+        return "gmail"
+    return "local"
 
 
 def submit_routed_job(
@@ -94,34 +112,30 @@ def submit_routed_job(
     stop_on_deliverable: bool = False,
     job_id: str | None = None,
 ) -> Job:
-    if gmail_target(emails, owner_email) == "gmail":
-        return verification_tasks.submit(
-            emails, worker_count, owner_id=owner_id,
-            stop_on_deliverable=stop_on_deliverable, job_id=job_id,
-            execution_target="gmail",
-        )
-    qq_emails = [
-        email
-        for email in emails
-        if email.rsplit("@", 1)[-1].lower() in TENCENT_QQ_DOMAINS
-    ]
-    qq_enabled = tencent_qq_target(qq_emails, owner_email) == "tencent_qq"
-    if qq_enabled and len(qq_emails) < len(emails) and not stop_on_deliverable:
+    targets: dict[str, list[str]] = {}
+    for email in emails:
+        target = email_execution_target(email, owner_email)
+        targets.setdefault(target, []).append(email)
+
+    # Candidate discovery must preserve its input order and stop as soon as it
+    # confirms a deliverable address, so it cannot be processed concurrently.
+    if not stop_on_deliverable and len(targets) > 1:
         return verification_tasks.submit_partitioned(
             emails,
             worker_count,
-            qq_emails,
+            targets,
             owner_id=owner_id,
-            stop_on_deliverable=False,
             job_id=job_id,
         )
+
+    execution_target = next(iter(targets), "local") if len(targets) == 1 else "local"
     return verification_tasks.submit(
         emails,
         worker_count,
         owner_id=owner_id,
         stop_on_deliverable=stop_on_deliverable,
         job_id=job_id,
-        execution_target=tencent_qq_target(emails, owner_email),
+        execution_target=execution_target,
     )
 
 
