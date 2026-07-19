@@ -146,7 +146,7 @@ class CloudShellLifecycle:
             host, port = environment["sshHost"], str(environment["sshPort"])
             ssh_user = settings.google_cloudshell_user.split("@", 1)[0]
             remote = f"{ssh_user}@{host}"
-            base = ["ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "-o", "UserKnownHostsFile=/opt/verigo/data/cloudshell_known_hosts", "-i", str(settings.google_cloudshell_ssh_key_path), "-p", port, remote]
+            base = ["ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new", "-o", "UserKnownHostsFile=/opt/verigo/data/cloudshell_known_hosts", "-i", str(settings.google_cloudshell_ssh_key_path), "-p", port, remote]
             source_root = Path(__file__).resolve().parents[2]
             archive = subprocess.run(["tar", "-C", str(source_root), "-czf", "-", "app", "验证8.py"], check=True, capture_output=True).stdout
             subprocess.run(base + ["mkdir -p ~/verigo-worker && tar -xzf - -C ~/verigo-worker"], input=archive, check=True, timeout=90)
