@@ -292,7 +292,15 @@ class WorkerLifecycleCoordinator:
     def _activate_workspace_session(
         self, runtime: WorkerRuntime, now: datetime, *, force: bool = False
     ) -> None:
-        if runtime.last_wake_error == IDE_SESSION_ACTIVATED:
+        if runtime.last_wake_error == IDE_SESSION_ACTIVATED and not force:
+            return
+        if (
+            runtime.last_wake_error == IDE_SESSION_ACTIVATED
+            and runtime.wake_requested_at
+            and now < runtime.wake_requested_at + timedelta(
+                seconds=self.config.cloudstudio_wake_retry_seconds
+            )
+        ):
             return
         if not force and runtime.wake_requested_at and now < runtime.wake_requested_at + timedelta(
             seconds=self.config.cloudstudio_wake_retry_seconds
@@ -346,7 +354,15 @@ class WorkerLifecycleCoordinator:
                     return
                 if status == "RUNNING":
                     self._activate_workspace_session(
-                        runtime, now, force=runtime.last_wake_error is None
+                        runtime,
+                        now,
+                        # RunWorkspace can report RUNNING before the IDE's remote
+                        # socket is ready. Retry the tokenized IDE activation until
+                        # the worker heartbeat confirms that the start hook ran.
+                        force=runtime.last_wake_error in {
+                            None,
+                            IDE_SESSION_ACTIVATED,
+                        },
                     )
             return
 

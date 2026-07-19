@@ -158,6 +158,12 @@ assert running_api.run_calls == 0
 assert running_api.stop_calls == 0
 assert running_api.activation_calls == 1
 
+# A RUNNING workspace can accept the API request before its IDE remote socket
+# is ready. Keep retrying the IDE activation while the worker has not checked in.
+current_time += timedelta(seconds=15)
+running_coordinator.tick(current_time)
+assert running_api.activation_calls == 2
+
 timeout_store = FakeStore()
 timeout_api = FakeApi()
 timeout_coordinator = WorkerLifecycleCoordinator(
