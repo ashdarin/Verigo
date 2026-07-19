@@ -283,9 +283,11 @@
   </main>
 
   <main id="admin-credits-workspace" class="admin-credits-workspace hidden">
+    <section class="report-heading admin-report-heading"><div><p class="eyebrow">账户运营</p><h1>验证次数管理</h1><p class="report-updated">账户、使用情况与调整记录</p></div><div class="report-actions"><span class="report-period">100 次 ¥0.50</span></div></section>
+    <section class="report-scorecards admin-scorecards"><article class="report-scorecard"><span>账户总数</span><strong id="admin-metric-users">0</strong><small>已注册账户</small></article><article class="report-scorecard"><span>付费验证次数</span><strong id="admin-metric-paid">0</strong><small>全部账户</small></article><article class="report-scorecard"><span>体验验证次数</span><strong id="admin-metric-trial">0</strong><small>有效体验次数</small></article><article class="report-scorecard"><span>累计已验证</span><strong id="admin-metric-used">0</strong><small>全部账户</small></article></section>
     <section class="admin-credits-panel" aria-labelledby="admin-credits-heading">
       <div class="admin-credits-heading">
-        <div><p class="eyebrow">管理员</p><h1 id="admin-credits-heading">授予账户额度</h1></div>
+        <div><p class="eyebrow">调整操作</p><h2 id="admin-credits-heading">授予或扣减验证次数</h2></div>
       </div>
       <form id="admin-credit-grant-form" class="admin-credit-grant-form">
         <label for="admin-credit-action">操作</label>
@@ -293,7 +295,6 @@
         <label for="admin-credit-email">用户注册邮箱</label>
         <input id="admin-credit-email" type="email" autocomplete="email" maxlength="254" required>
         <button id="admin-account-lookup" class="download-action" type="button">查询账户</button>
-        <div id="admin-account-summary" class="admin-account-summary hidden"></div>
         <label for="admin-credit-amount">授予额度</label>
         <input id="admin-credit-amount" type="number" inputmode="numeric" min="1" max="1000000" step="1" required>
         <label for="admin-credit-payment">实收或退款金额（元，可选）</label>
@@ -303,6 +304,7 @@
         <p id="admin-credit-result" class="admin-credit-result" role="status"></p>
         <button id="admin-credit-submit" class="primary-action" type="submit">确认授予</button>
       </form>
+      <section id="admin-account-summary" class="admin-account-summary hidden"></section>
       <section class="admin-accounts-section"><div class="report-card-heading"><div><h2>全部账户</h2><p>按注册时间排序</p></div><button id="admin-accounts-refresh" class="download-action" type="button">刷新</button></div><div id="admin-accounts-list" class="admin-accounts-list"></div></section>
     </section>
   </main>
