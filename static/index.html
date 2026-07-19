@@ -30,6 +30,7 @@
       <button class="nav-item" type="button" data-view="discovery">查找工作邮箱</button>
       <button id="dashboard-nav" class="nav-item hidden" type="button" data-view="dashboard">运营监控</button>
       <button id="admin-credits-nav" class="nav-item hidden" type="button" data-view="admin-credits">额度管理</button>
+      <button id="wallet-nav" class="nav-item hidden" type="button" data-view="wallet">资金与使用</button>
     </nav>
     <div class="account-area">
       <span class="service-state"><span class="state-dot"></span>运行中</span>
@@ -40,7 +41,6 @@
       <div id="account-menu" class="account-menu hidden">
         <strong id="account-name"></strong>
         <small id="account-credits" class="account-credits"></small>
-        <button id="wallet-button" type="button" class="account-action">资金与使用</button>
         <button id="bind-email-button" type="button" class="hidden">绑定邮箱</button>
         <button id="change-password-button" type="button" class="account-action">修改密码</button>
         <button id="delete-account-button" type="button" class="account-delete">删除账户</button>
@@ -303,6 +303,7 @@
         <p id="admin-credit-result" class="admin-credit-result" role="status"></p>
         <button id="admin-credit-submit" class="primary-action" type="submit">确认授予</button>
       </form>
+      <section class="admin-accounts-section"><div class="report-card-heading"><div><h2>全部账户</h2><p>按注册时间排序</p></div><button id="admin-accounts-refresh" class="download-action" type="button">刷新</button></div><div id="admin-accounts-list" class="admin-accounts-list"></div></section>
     </section>
   </main>
 

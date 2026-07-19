@@ -751,6 +751,12 @@ class AuthStore:
             adjustments = connection.execute("SELECT delta, amount_fen, note, created_at FROM admin_credit_adjustments WHERE user_id=? ORDER BY created_at DESC LIMIT 10", (user.id,)).fetchall()
         return {"email": user.email, "email_verified": user.email_verified, "available_verifications": user.credits, "paid_verifications": user.paid_credits, "trial_verifications": user.trial_credits, "verifications_used": usage, "jobs": {str(status): int(count) for status, count in jobs}, "adjustments": [{"delta": int(delta), "amount_fen": int(amount) if amount is not None else None, "note": str(note), "created_at": str(created)} for delta, amount, note, created in adjustments]}
 
+    def list_admin_accounts(self, limit: int = 100) -> list[dict[str, object]]:
+        self.initialize()
+        with closing(self._connect()) as connection:
+            rows = connection.execute("""SELECT u.id,u.email,u.email_verified,u.credits,u.created_at,COALESCE((SELECT SUM(remaining_credits) FROM promo_credit_grants p WHERE p.user_id=u.id AND p.remaining_credits>0 AND p.expires_at>?),0),COALESCE((SELECT SUM(-delta) FROM credit_ledger l WHERE l.user_id=u.id AND l.kind='verification'),0) FROM users u WHERE u.email IS NOT NULL ORDER BY u.created_at DESC LIMIT ?""", (utc_now().isoformat(), limit)).fetchall()
+        return [{"email":str(r[1]),"email_verified":bool(r[2]),"paid_verifications":int(r[3]),"trial_verifications":int(r[5]),"used_verifications":int(r[6]),"created_at":str(r[4])} for r in rows]
+
     def create_notification(self, user_id: str, kind: str, title: str, body: str) -> None:
         """Record a user-facing event for payment and other future workflows."""
         self.initialize()

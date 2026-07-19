@@ -495,6 +495,10 @@ def admin_account_snapshot(
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
+@router.get("/admin/accounts/list")
+def admin_accounts(_: Annotated[User, Depends(require_admin)]) -> list[dict[str, object]]:
+    return auth_store.list_admin_accounts()
+
 
 @router.get("/notifications", response_model=NotificationListResponse)
 def list_notifications(user: Annotated[User, Depends(require_user)]) -> NotificationListResponse:
