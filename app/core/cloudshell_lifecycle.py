@@ -4,6 +4,7 @@ import json
 import logging
 import subprocess
 import threading
+import time
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -93,21 +94,55 @@ class CloudShellLifecycle:
         with urllib.request.urlopen("https://oauth2.googleapis.com/token", data=data, timeout=30) as response:
             return str(json.load(response)["access_token"])
 
+    @staticmethod
+    def _operation_environment(operation: dict[str, object]) -> dict[str, object] | None:
+        """Extract the environment when a Cloud Shell operation has completed."""
+        error = operation.get("error")
+        if isinstance(error, dict):
+            raise RuntimeError(str(error.get("message") or "Cloud Shell start failed"))
+        response = operation.get("response")
+        if not isinstance(response, dict):
+            return None
+        environment = response.get("environment")
+        return environment if isinstance(environment, dict) else None
+
+    def _start_environment(self, token: str) -> dict[str, object]:
+        user = urllib.parse.quote(settings.google_cloudshell_user, safe="")
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+            "X-Goog-User-Project": settings.google_cloudshell_quota_project,
+        }
+        request = urllib.request.Request(
+            f"https://cloudshell.googleapis.com/v1/users/{user}/environments/default:start",
+            data=json.dumps({"accessToken": token}).encode(),
+            headers=headers,
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=60) as response:
+            operation = json.load(response)
+
+        for _ in range(30):
+            environment = self._operation_environment(operation)
+            if environment is not None:
+                return environment
+            operation_name = str(operation.get("name") or "")
+            if not operation_name:
+                raise RuntimeError("Cloud Shell start returned no operation name")
+            time.sleep(2)
+            poll = urllib.request.Request(
+                f"https://cloudshell.googleapis.com/v1/{operation_name}",
+                headers=headers,
+                method="GET",
+            )
+            with urllib.request.urlopen(poll, timeout=30) as response:
+                operation = json.load(response)
+        raise RuntimeError("Cloud Shell environment start timed out")
+
     def _start(self) -> None:
         try:
             token = self._token()
-            user = urllib.parse.quote(settings.google_cloudshell_user, safe="")
-            request = urllib.request.Request(
-                f"https://cloudshell.googleapis.com/v1/users/{user}/environments/default:start",
-                data=json.dumps({"accessToken": token}).encode(),
-                headers={
-                    "Authorization": f"Bearer {token}",
-                    "Content-Type": "application/json",
-                    "X-Goog-User-Project": settings.google_cloudshell_quota_project,
-                }, method="POST",
-            )
-            with urllib.request.urlopen(request, timeout=60) as response:
-                environment = json.load(response)["response"]["environment"]
+            environment = self._start_environment(token)
             host, port = environment["sshHost"], str(environment["sshPort"])
             ssh_user = settings.google_cloudshell_user.split("@", 1)[0]
             remote = f"{ssh_user}@{host}"

@@ -21,4 +21,17 @@ assert lifecycle._thread is not None and lifecycle._thread.is_alive()
 lifecycle.stop()
 assert lifecycle._thread is None
 
+environment = CloudShellLifecycle._operation_environment({
+    "done": True,
+    "response": {"environment": {"sshHost": "host", "sshPort": 2222}},
+})
+assert environment == {"sshHost": "host", "sshPort": 2222}
+assert CloudShellLifecycle._operation_environment({"done": False, "name": "operations/1"}) is None
+try:
+    CloudShellLifecycle._operation_environment({"error": {"message": "denied"}})
+except RuntimeError as exc:
+    assert str(exc) == "denied"
+else:
+    raise AssertionError("Cloud Shell operation errors must be surfaced")
+
 print("cloudshell lifecycle smoke: ok")
