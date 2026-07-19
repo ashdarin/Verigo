@@ -5,3 +5,4 @@ openpyxl>=3.1,<4
 xlrd>=2.0,<3
 python-multipart>=0.0.22,<1
 tencentcloud-sdk-python-cloudstudio==3.1.53
+playwright==1.61.0

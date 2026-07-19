@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 import threading
-import time
-import urllib.request
+import urllib.parse
 from datetime import datetime, timedelta
 from typing import Any, Protocol
 
@@ -65,7 +65,7 @@ class TencentCloudStudioApi:
         return None
 
     def activate_workspace_session(self) -> None:
-        """Open the token-authenticated IDE route that starts Cloud Studio hooks."""
+        """Run the IDE loader so Cloud Studio executes its Start lifecycle hook."""
         token_request = models.CreateWorkspaceTokenRequest()
         token_request.SpaceKey = settings.cloudstudio_space_key
         token_request.TokenExpiredLimitSec = 120
@@ -75,25 +75,33 @@ class TencentCloudStudioApi:
         if not access_token:
             raise RuntimeError("Cloud Studio returned an empty workspace access token")
         # RunWorkspace reaches RUNNING before the IDE frontend is consistently ready.
-        for attempt in range(6):
-            request = urllib.request.Request(
-                "https://ide.cloud.tencent.com/tty/"
-                f"{settings.cloudstudio_space_key}/?report_open_type=vps_lifecycle",
-                headers={
-                    "Authorization": f"Bearer {access_token}",
-                    "User-Agent": "Mozilla/5.0",
-                },
-            )
-            try:
-                with urllib.request.urlopen(request, timeout=30) as response:
-                    body = response.read()
-            except Exception:
-                body = b""
-            if b"workbench.web.main" in body:
-                return
-            if attempt < 5:
-                time.sleep(10)
-        raise RuntimeError("Cloud Studio IDE session activation was not accepted")
+        os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "/opt/verigo/data/playwright")
+        from playwright.sync_api import sync_playwright
+
+        query = urllib.parse.urlencode({
+            "token": access_token,
+            "report_open_type": "vps_lifecycle",
+        })
+        url = (
+            "https://ide.cloud.tencent.com/tty/"
+            f"{settings.cloudstudio_space_key}/?{query}"
+        )
+        try:
+            with sync_playwright() as playwright:
+                browser = playwright.chromium.launch(
+                    headless=True,
+                    args=["--no-sandbox", "--disable-dev-shm-usage"],
+                )
+                try:
+                    page = browser.new_page()
+                    page.goto(url, wait_until="domcontentloaded", timeout=60_000)
+                    # The loader posts the token and establishes the remote sockets.
+                    page.wait_for_timeout(20_000)
+                finally:
+                    browser.close()
+        except Exception as exc:
+            # Playwright errors may include the tokenized URL, so never expose them.
+            raise RuntimeError("Cloud Studio IDE session activation failed") from exc
 
     def bootstrap_worker(self) -> None:
         """Run the idempotent QQ worker bootstrap through Cloud Studio SSH."""
