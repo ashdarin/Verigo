@@ -53,6 +53,9 @@ class Settings:
     metrics_salt: str = os.getenv("VERIGO_METRICS_SALT", "")
     max_workers_per_job: int = int(os.getenv("VERIGO_MAX_WORKERS", "8"))
     max_parallel_jobs: int = int(os.getenv("VERIGO_MAX_PARALLEL_JOBS", "2"))
+    verification_price_fen_per_100: int = max(
+        1, int(os.getenv("VERIGO_VERIFICATION_PRICE_FEN_PER_100", "50"))
+    )
     max_pending_jobs: int = int(os.getenv("VERIGO_MAX_PENDING_JOBS", "20"))
     qq_smtp_per_mx: int = max(1, int(os.getenv("VERIGO_QQ_SMTP_PER_MX", "1")))
     qq_smtp_wait_seconds: float = max(

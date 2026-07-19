@@ -1,7 +1,7 @@
 const state = {
   view: window.location.pathname === "/dashboard"
     ? "dashboard"
-    : window.location.pathname === "/admin/credits" ? "admin-credits" : "single",
+    : window.location.pathname === "/admin/credits" ? "admin-credits" : window.location.pathname === "/wallet" ? "wallet" : "single",
   mode: "paste",
   fileEmails: [],
   user: null,
@@ -114,6 +114,8 @@ function switchView(view) {
   const discovery = view === "discovery";
   const dashboard = view === "dashboard";
   const adminCredits = view === "admin-credits";
+  const wallet = view === "wallet";
+  if (wallet && !state.user) { el("auth-dialog").showModal(); return; }
   if (discovery && !state.user) {
     el("auth-dialog").showModal();
     setAuthMode("login");
@@ -121,13 +123,14 @@ function switchView(view) {
     return;
   }
   state.view = view;
-  el("verify-workspace").classList.toggle("hidden", discovery || dashboard || adminCredits);
+  el("verify-workspace").classList.toggle("hidden", discovery || dashboard || adminCredits || wallet);
   el("discovery-workspace").classList.toggle("hidden", !discovery);
   el("dashboard-workspace").classList.toggle("hidden", !dashboard);
   el("admin-credits-workspace").classList.toggle("hidden", !adminCredits);
+  el("wallet-workspace").classList.toggle("hidden", !wallet);
   el("single-panel").classList.toggle("hidden", view !== "single");
   el("batch-panel").classList.toggle("hidden", view !== "batch");
-  if (!discovery && !dashboard && !adminCredits) {
+  if (!discovery && !dashboard && !adminCredits && !wallet) {
     el("verify-eyebrow").textContent = view === "single" ? "免费单个验证" : "收费批量验证";
     el("verify-heading").textContent = view === "single" ? "验证单个收件地址" : "批量验证收件地址";
   }
@@ -145,11 +148,15 @@ function switchView(view) {
     if (window.location.pathname !== "/admin/credits") window.history.pushState({}, "", "/admin/credits");
     clearInterval(state.metricsTimer);
     state.metricsTimer = null;
+  } else if (wallet) {
+    document.title = "资金与使用 | Verigo";
+    if (window.location.pathname !== "/wallet") window.history.pushState({}, "", "/wallet");
+    loadWallet();
   } else {
     document.title = "Verigo";
     clearInterval(state.metricsTimer);
     state.metricsTimer = null;
-    if (["/dashboard", "/admin/credits"].includes(window.location.pathname)) window.history.replaceState({}, "", "/");
+    if (["/dashboard", "/admin/credits", "/wallet"].includes(window.location.pathname)) window.history.replaceState({}, "", "/");
   }
   updateCount();
 }
@@ -843,7 +850,7 @@ function updateAccount() {
   el("account-credits").textContent = state.user
     ? state.user.is_admin
       ? "无限额度"
-      : `${state.user.credits || 0} 额度${trialCredits ? ` · ${trialCredits} 体验额度` : ""}`
+      : `${state.user.credits || 0} 验证次数${trialCredits ? ` · ${trialCredits} 体验次数` : ""}`
     : "";
   el("account-credits").title = state.user?.trial_credit_expires_at
     ? `体验额度有效至 ${new Date(state.user.trial_credit_expires_at).toLocaleString("zh-CN")}`
@@ -873,6 +880,9 @@ async function loadAccount() {
 }
 
 el("dashboard-refresh").addEventListener("click", loadDashboardMetrics);
+async function loadWallet() { const data = await api("/api/wallet"); const set=(id,v)=>el(id).textContent=Number(v||0).toLocaleString("zh-CN"); set("wallet-available",data.available_verifications); set("wallet-paid",data.paid_verifications); set("wallet-trial",data.trial_verifications); set("wallet-used",data.verifications_used); el("wallet-price").textContent=`100 次 ¥${(data.price_fen_per_100/100).toFixed(2)}`; el("wallet-trial-note").textContent=data.trial_expires_at?`有效至 ${new Date(data.trial_expires_at).toLocaleDateString("zh-CN")}`:"无体验次数"; el("wallet-updated").textContent=`更新于 ${new Date().toLocaleString("zh-CN")}`; const days=data.usage_daily||[]; const max=Math.max(1,...days.map(x=>x.verifications)); el("wallet-usage-chart").innerHTML=days.map(x=>`<div class="wallet-bar" style="height:${Math.max(4,x.verifications/max*180)}px"><span>${x.verifications}</span></div>`).join(""); el("wallet-transactions").innerHTML=(data.transactions||[]).map(x=>`<div class="wallet-transaction"><div><strong>${x.title}</strong><small>${x.credits>0?"+":""}${x.credits} 次 ${x.note||""}</small></div><div><strong>${x.amount_fen==null?"—":`${x.credits<0?"-":"+"}¥${(x.amount_fen/100).toFixed(2)}`}</strong><small>${new Date(x.created_at).toLocaleString("zh-CN")}</small></div></div>`).join("")||"暂无资金流水"; }
+el("wallet-refresh").addEventListener("click", loadWallet); el("wallet-button").addEventListener("click",()=>switchView("wallet"));
+el("admin-account-lookup").addEventListener("click", async()=>{ const box=el("admin-account-summary"); try { const d=await api(`/api/admin/accounts?email=${encodeURIComponent(el("admin-credit-email").value)}`); box.classList.remove("hidden"); box.innerHTML=`<strong>${d.email}</strong><dl><div><dt>可用次数</dt><dd>${d.available_verifications}</dd></div><div><dt>付费次数</dt><dd>${d.paid_verifications}</dd></div><div><dt>累计已验证</dt><dd>${d.verifications_used}</dd></div></dl>`; } catch(e){box.classList.remove("hidden");box.textContent=e.message;} });
 function renderNotifications() {
   const list = el("notification-list");
   list.replaceChildren();
@@ -922,6 +932,13 @@ el("notification-button").addEventListener("click", async () => {
     await loadNotifications();
   }
 });
+document.addEventListener("click", (event) => {
+  if (!el("notification-menu").contains(event.target) && !el("notification-button").contains(event.target)) el("notification-menu").classList.add("hidden");
+  if (!el("account-menu").contains(event.target) && !el("account-button").contains(event.target)) el("account-menu").classList.add("hidden");
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") { el("notification-menu").classList.add("hidden"); el("account-menu").classList.add("hidden"); }
+});
 el("admin-credit-grant-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const submit = el("admin-credit-submit");
@@ -938,6 +955,7 @@ el("admin-credit-grant-form").addEventListener("submit", async (event) => {
         email: el("admin-credit-email").value,
         credits: Number(el("admin-credit-amount").value),
         note: el("admin-credit-note").value,
+        amount_fen: el("admin-credit-payment").value === "" ? null : Math.round(Number(el("admin-credit-payment").value) * 100),
       }),
     });
     result.classList.add("success");
@@ -947,6 +965,7 @@ el("admin-credit-grant-form").addEventListener("submit", async (event) => {
       : `已向 ${adjustment.email} 授予 ${amount} 额度，当前余额 ${adjustment.credits.toLocaleString("zh-CN")}。`;
     el("admin-credit-amount").value = "";
     el("admin-credit-note").value = "";
+    el("admin-credit-payment").value = "";
   } catch (error) {
     result.classList.add("error");
     result.textContent = error.message;
@@ -1220,9 +1239,9 @@ el("refresh-jobs").addEventListener("click", loadRecentJobs);
   updateCount();
   await loadAccount();
   await loadPublicConfig();
-  if (["/dashboard", "/admin/credits"].includes(window.location.pathname)) {
+  if (["/dashboard", "/admin/credits", "/wallet"].includes(window.location.pathname)) {
     if (state.user?.is_admin) {
-      switchView(window.location.pathname === "/admin/credits" ? "admin-credits" : "dashboard");
+      switchView(window.location.pathname === "/admin/credits" ? "admin-credits" : window.location.pathname === "/wallet" ? "wallet" : "dashboard");
     } else if (state.user) {
       window.location.replace("/");
       return;

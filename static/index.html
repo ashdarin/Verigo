@@ -40,6 +40,7 @@
       <div id="account-menu" class="account-menu hidden">
         <strong id="account-name"></strong>
         <small id="account-credits" class="account-credits"></small>
+        <button id="wallet-button" type="button" class="account-action">资金与使用</button>
         <button id="bind-email-button" type="button" class="hidden">绑定邮箱</button>
         <button id="change-password-button" type="button" class="account-action">修改密码</button>
         <button id="delete-account-button" type="button" class="account-delete">删除账户</button>
@@ -291,14 +292,24 @@
         <select id="admin-credit-action"><option value="grant">授予额度</option><option value="deduct">扣减额度</option></select>
         <label for="admin-credit-email">用户注册邮箱</label>
         <input id="admin-credit-email" type="email" autocomplete="email" maxlength="254" required>
+        <button id="admin-account-lookup" class="download-action" type="button">查询账户</button>
+        <div id="admin-account-summary" class="admin-account-summary hidden"></div>
         <label for="admin-credit-amount">授予额度</label>
         <input id="admin-credit-amount" type="number" inputmode="numeric" min="1" max="1000000" step="1" required>
+        <label for="admin-credit-payment">实收或退款金额（元，可选）</label>
+        <input id="admin-credit-payment" type="number" inputmode="decimal" min="0" step="0.01">
         <label for="admin-credit-note">备注</label>
         <input id="admin-credit-note" type="text" maxlength="200" autocomplete="off">
         <p id="admin-credit-result" class="admin-credit-result" role="status"></p>
         <button id="admin-credit-submit" class="primary-action" type="submit">确认授予</button>
       </form>
     </section>
+  </main>
+
+  <main id="wallet-workspace" class="wallet-workspace hidden">
+    <section class="report-heading"><div><p class="eyebrow">账户中心</p><h1>资金与使用</h1><p id="wallet-updated" class="report-updated"></p></div><div class="report-actions"><span id="wallet-price" class="report-period"></span><button id="wallet-refresh" class="download-action" type="button">刷新</button></div></section>
+    <section class="report-scorecards"><article class="report-scorecard"><span>可用验证次数</span><strong id="wallet-available">0</strong><small>可继续验证</small></article><article class="report-scorecard"><span>付费验证次数</span><strong id="wallet-paid">0</strong><small>永久有效</small></article><article class="report-scorecard"><span>体验验证次数</span><strong id="wallet-trial">0</strong><small id="wallet-trial-note">—</small></article><article class="report-scorecard"><span>累计已验证</span><strong id="wallet-used">0</strong><small>全部任务</small></article></section>
+    <section class="report-secondary-grid"><section class="report-card"><div class="report-card-heading"><div><h2>验证使用趋势</h2><p>最近 14 天</p></div></div><div id="wallet-usage-chart" class="wallet-usage-chart"></div></section><section class="report-card"><div class="report-card-heading"><div><h2>资金流水</h2><p>实收、退款和管理员调整</p></div></div><div id="wallet-transactions" class="wallet-transactions"></div></section></section>
   </main>
 
   <footer class="site-footer">

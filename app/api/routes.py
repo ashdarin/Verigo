@@ -451,7 +451,7 @@ def grant_admin_credits(
 ) -> AdminCreditAdjustmentResponse:
     try:
         adjustment = auth_store.adjust_paid_credits(
-            payload.email, payload.credits, admin.id, payload.note
+            payload.email, payload.credits, admin.id, payload.note, payload.amount_fen
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -472,7 +472,7 @@ def deduct_admin_credits(
 ) -> AdminCreditAdjustmentResponse:
     try:
         adjustment = auth_store.adjust_paid_credits(
-            payload.email, -payload.credits, admin.id, payload.note
+            payload.email, -payload.credits, admin.id, payload.note, payload.amount_fen
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -485,6 +485,16 @@ def deduct_admin_credits(
         created_at=adjustment.created_at,
     )
 
+@router.get("/admin/accounts")
+def admin_account_snapshot(
+    email: str = Query(min_length=3, max_length=254),
+    _: Annotated[User, Depends(require_admin)] = None,
+) -> dict[str, object]:
+    try:
+        return auth_store.admin_account_snapshot(email)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
 
 @router.get("/notifications", response_model=NotificationListResponse)
 def list_notifications(user: Annotated[User, Depends(require_user)]) -> NotificationListResponse:
@@ -495,6 +505,10 @@ def list_notifications(user: Annotated[User, Depends(require_user)]) -> Notifica
 @router.post("/notifications/read", status_code=204)
 def mark_notifications_read(user: Annotated[User, Depends(require_user)]) -> None:
     auth_store.mark_notifications_read(user.id)
+
+@router.get("/wallet")
+def wallet_snapshot(user: Annotated[User, Depends(require_user)]) -> dict[str, object]:
+    return auth_store.wallet_snapshot(user.id)
 
 
 @router.post("/discovery/candidates", response_model=DiscoveryResponse)

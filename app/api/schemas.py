@@ -91,6 +91,7 @@ class AdminCreditGrantRequest(BaseModel):
     email: str = Field(min_length=3, max_length=254)
     credits: int = Field(ge=1, le=1_000_000)
     note: str = Field(default="", max_length=200)
+    amount_fen: int | None = Field(default=None, ge=0, le=100_000_000)
 
     @field_validator("email")
     @classmethod

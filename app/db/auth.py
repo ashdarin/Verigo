@@ -263,6 +263,11 @@ class AuthStore:
                 connection.execute(
                     "CREATE INDEX IF NOT EXISTS idx_admin_credit_adjustments_user ON admin_credit_adjustments(user_id, created_at DESC)"
                 )
+                adjustment_columns = {
+                    row[1] for row in connection.execute("PRAGMA table_info(admin_credit_adjustments)")
+                }
+                if "amount_fen" not in adjustment_columns:
+                    connection.execute("ALTER TABLE admin_credit_adjustments ADD COLUMN amount_fen INTEGER")
                 connection.execute(
                     """
                     CREATE TABLE IF NOT EXISTS notifications (
@@ -607,7 +612,8 @@ class AuthStore:
             return paid_credits + promo_available - amount
 
     def adjust_paid_credits(
-        self, email: str, delta: int, adjusted_by_user_id: str, note: str = ""
+        self, email: str, delta: int, adjusted_by_user_id: str, note: str = "",
+        amount_fen: int | None = None,
     ) -> AdminCreditAdjustment:
         """Adjust paid credits atomically with an audit record and user notification."""
         self.initialize()
@@ -616,6 +622,8 @@ class AuthStore:
             raise ValueError("请输入有效的注册邮箱")
         if not delta:
             raise ValueError("额度调整不能为零")
+        if amount_fen is not None and amount_fen < 0:
+            raise ValueError("实收金额不能为负数")
         now = utc_now().isoformat()
         adjustment_id = uuid.uuid4().hex
         reference = f"admin_adjustment:{adjustment_id}"
@@ -654,10 +662,10 @@ class AuthStore:
             connection.execute(
                 """
                 INSERT INTO admin_credit_adjustments(
-                    id, user_id, adjusted_by_user_id, delta, note, reference, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    id, user_id, adjusted_by_user_id, delta, note, reference, created_at, amount_fen
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (adjustment_id, row[0], adjusted_by_user_id, delta, note.strip(), reference, now),
+                (adjustment_id, row[0], adjusted_by_user_id, delta, note.strip(), reference, now, amount_fen),
             )
             amount_text = f"{abs(delta):,}"
             self._insert_notification(
@@ -684,6 +692,64 @@ class AuthStore:
         return AdminCreditAdjustment(
             user=user, delta=delta, reference=reference, created_at=now
         )
+
+    def wallet_snapshot(self, user_id: str) -> dict[str, object]:
+        self.initialize()
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                "SELECT id, username, email, email_verified, credits, created_at FROM users WHERE id=?", (user_id,)
+            ).fetchone()
+            if row is None:
+                raise ValueError("账户不存在")
+            user = self._user_from_row(connection, row)
+            usage_rows = connection.execute(
+                """SELECT substr(created_at, 1, 10), COALESCE(SUM(-delta), 0)
+                   FROM credit_ledger WHERE user_id=? AND kind='verification'
+                   GROUP BY substr(created_at, 1, 10) ORDER BY 1 DESC LIMIT 14""", (user_id,)
+            ).fetchall()
+            usage_total = int(connection.execute(
+                "SELECT COALESCE(SUM(-delta), 0) FROM credit_ledger WHERE user_id=? AND kind='verification'", (user_id,)
+            ).fetchone()[0])
+            adjustments = connection.execute(
+                """SELECT delta, amount_fen, note, created_at FROM admin_credit_adjustments
+                   WHERE user_id=? ORDER BY created_at DESC LIMIT 20""", (user_id,)
+            ).fetchall()
+            paid_orders = connection.execute(
+                """SELECT credits, amount_fen, paid_at FROM payment_orders
+                   WHERE user_id=? AND status='paid' ORDER BY paid_at DESC LIMIT 20""", (user_id,)
+            ).fetchall()
+        transactions = [
+            {"kind": "payment", "title": "充值到账", "credits": int(r[0]), "amount_fen": int(r[1]), "note": "", "created_at": str(r[2])}
+            for r in paid_orders
+        ] + [
+            {"kind": "adjustment", "title": "管理员授予" if int(r[0]) > 0 else "管理员扣减", "credits": int(r[0]), "amount_fen": int(r[1]) if r[1] is not None else None, "note": str(r[2]), "created_at": str(r[3])}
+            for r in adjustments
+        ]
+        transactions.sort(key=lambda item: str(item["created_at"]), reverse=True)
+        return {
+            "price_fen_per_100": settings.verification_price_fen_per_100,
+            "available_verifications": user.credits,
+            "paid_verifications": user.paid_credits,
+            "trial_verifications": user.trial_credits,
+            "trial_expires_at": user.trial_credit_expires_at,
+            "verifications_used": usage_total,
+            "usage_daily": [{"day": str(day), "verifications": int(total)} for day, total in reversed(usage_rows)],
+            "transactions": transactions[:20],
+        }
+
+    def admin_account_snapshot(self, email: str) -> dict[str, object]:
+        self.initialize()
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                "SELECT id, username, email, email_verified, credits, created_at FROM users WHERE email=? COLLATE NOCASE", (email.strip().lower(),)
+            ).fetchone()
+            if row is None:
+                raise ValueError("未找到该注册邮箱对应的账户")
+            user = self._user_from_row(connection, row)
+            usage = int(connection.execute("SELECT COALESCE(SUM(-delta), 0) FROM credit_ledger WHERE user_id=? AND kind='verification'", (user.id,)).fetchone()[0])
+            jobs = connection.execute("SELECT status, COUNT(*) FROM jobs WHERE owner_id=? GROUP BY status", (user.id,)).fetchall()
+            adjustments = connection.execute("SELECT delta, amount_fen, note, created_at FROM admin_credit_adjustments WHERE user_id=? ORDER BY created_at DESC LIMIT 10", (user.id,)).fetchall()
+        return {"email": user.email, "email_verified": user.email_verified, "available_verifications": user.credits, "paid_verifications": user.paid_credits, "trial_verifications": user.trial_credits, "verifications_used": usage, "jobs": {str(status): int(count) for status, count in jobs}, "adjustments": [{"delta": int(delta), "amount_fen": int(amount) if amount is not None else None, "note": str(note), "created_at": str(created)} for delta, amount, note, created in adjustments]}
 
     def create_notification(self, user_id: str, kind: str, title: str, body: str) -> None:
         """Record a user-facing event for payment and other future workflows."""
