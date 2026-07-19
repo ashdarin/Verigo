@@ -29,9 +29,9 @@ class User:
 
 
 @dataclass(frozen=True)
-class AdminCreditGrant:
+class AdminCreditAdjustment:
     user: User
-    credits: int
+    delta: int
     reference: str
     created_at: str
 
@@ -54,6 +54,23 @@ class AuthStore:
         connection.execute("PRAGMA journal_mode=WAL")
         connection.execute("PRAGMA foreign_keys=ON")
         return connection
+
+    @staticmethod
+    def _insert_notification(
+        connection: sqlite3.Connection,
+        user_id: str,
+        kind: str,
+        title: str,
+        body: str,
+        created_at: str,
+    ) -> None:
+        connection.execute(
+            """
+            INSERT INTO notifications(id, user_id, kind, title, body, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (uuid.uuid4().hex, user_id, kind, title, body, created_at),
+        )
 
     def initialize(self) -> None:
         with self._lock:
@@ -227,6 +244,41 @@ class AuthStore:
                 )
                 connection.execute(
                     "CREATE INDEX IF NOT EXISTS idx_admin_credit_grants_user ON admin_credit_grants(user_id, created_at DESC)"
+                )
+                connection.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS admin_credit_adjustments (
+                        id TEXT PRIMARY KEY,
+                        user_id TEXT NOT NULL,
+                        adjusted_by_user_id TEXT NOT NULL,
+                        delta INTEGER NOT NULL,
+                        note TEXT NOT NULL DEFAULT '',
+                        reference TEXT NOT NULL UNIQUE,
+                        created_at TEXT NOT NULL,
+                        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+                        FOREIGN KEY(adjusted_by_user_id) REFERENCES users(id) ON DELETE CASCADE
+                    )
+                    """
+                )
+                connection.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_admin_credit_adjustments_user ON admin_credit_adjustments(user_id, created_at DESC)"
+                )
+                connection.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS notifications (
+                        id TEXT PRIMARY KEY,
+                        user_id TEXT NOT NULL,
+                        kind TEXT NOT NULL,
+                        title TEXT NOT NULL,
+                        body TEXT NOT NULL,
+                        created_at TEXT NOT NULL,
+                        read_at TEXT,
+                        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+                    )
+                    """
+                )
+                connection.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, read_at, created_at DESC)"
                 )
                 connection.execute("DELETE FROM sessions WHERE expires_at <= ?", (utc_now().isoformat(),))
                 connection.execute("DELETE FROM password_resets WHERE expires_at <= ?", (utc_now().isoformat(),))
@@ -554,19 +606,19 @@ class AuthStore:
             connection.commit()
             return paid_credits + promo_available - amount
 
-    def grant_paid_credits(
-        self, email: str, amount: int, granted_by_user_id: str, note: str = ""
-    ) -> AdminCreditGrant:
-        """Grant non-expiring paid credits and retain an administrator audit record."""
+    def adjust_paid_credits(
+        self, email: str, delta: int, adjusted_by_user_id: str, note: str = ""
+    ) -> AdminCreditAdjustment:
+        """Adjust paid credits atomically with an audit record and user notification."""
         self.initialize()
         normalized_email = email.strip().lower()
         if not normalized_email or "@" not in normalized_email:
             raise ValueError("请输入有效的注册邮箱")
-        if amount < 1:
-            raise ValueError("授予额度必须大于零")
+        if not delta:
+            raise ValueError("额度调整不能为零")
         now = utc_now().isoformat()
-        grant_id = uuid.uuid4().hex
-        reference = f"admin_grant:{grant_id}"
+        adjustment_id = uuid.uuid4().hex
+        reference = f"admin_adjustment:{adjustment_id}"
         with closing(self._connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
@@ -579,23 +631,46 @@ class AuthStore:
             if row is None:
                 connection.rollback()
                 raise ValueError("未找到该注册邮箱对应的账户")
+            paid_credits = int(row[4])
+            if delta < 0 and paid_credits < -delta:
+                connection.rollback()
+                raise ValueError("该账户的可退付费额度不足")
             connection.execute(
-                "UPDATE users SET credits=credits+? WHERE id=?", (amount, row[0])
+                "UPDATE users SET credits=credits+? WHERE id=?", (delta, row[0])
             )
             connection.execute(
                 """
                 INSERT INTO credit_ledger(user_id, delta, kind, reference, created_at)
-                VALUES (?, ?, 'admin_credit_grant', ?, ?)
+                VALUES (?, ?, ?, ?, ?)
                 """,
-                (row[0], amount, reference, now),
+                (
+                    row[0],
+                    delta,
+                    "admin_credit_grant" if delta > 0 else "admin_credit_deduction",
+                    reference,
+                    now,
+                ),
             )
             connection.execute(
                 """
-                INSERT INTO admin_credit_grants(
-                    id, user_id, granted_by_user_id, credits, note, reference, created_at
+                INSERT INTO admin_credit_adjustments(
+                    id, user_id, adjusted_by_user_id, delta, note, reference, created_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                (grant_id, row[0], granted_by_user_id, amount, note.strip(), reference, now),
+                (adjustment_id, row[0], adjusted_by_user_id, delta, note.strip(), reference, now),
+            )
+            amount_text = f"{abs(delta):,}"
+            self._insert_notification(
+                connection,
+                str(row[0]),
+                "credit_grant" if delta > 0 else "credit_deduction",
+                "额度已到账" if delta > 0 else "额度已调整",
+                (
+                    f"管理员已向你的账户增加 {amount_text} 额度。"
+                    if delta > 0
+                    else f"管理员已从你的账户扣减 {amount_text} 额度。"
+                ),
+                now,
             )
             updated_row = connection.execute(
                 """
@@ -606,9 +681,49 @@ class AuthStore:
             ).fetchone()
             user = self._user_from_row(connection, updated_row)
             connection.commit()
-        return AdminCreditGrant(
-            user=user, credits=amount, reference=reference, created_at=now
+        return AdminCreditAdjustment(
+            user=user, delta=delta, reference=reference, created_at=now
         )
+
+    def create_notification(self, user_id: str, kind: str, title: str, body: str) -> None:
+        """Record a user-facing event for payment and other future workflows."""
+        self.initialize()
+        with closing(self._connect()) as connection:
+            self._insert_notification(
+                connection, user_id, kind, title, body, utc_now().isoformat()
+            )
+
+    def list_notifications(self, user_id: str, limit: int = 30) -> tuple[list[dict[str, str | None]], int]:
+        self.initialize()
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                """
+                SELECT id, kind, title, body, created_at, read_at
+                FROM notifications WHERE user_id=?
+                ORDER BY created_at DESC, id DESC LIMIT ?
+                """,
+                (user_id, limit),
+            ).fetchall()
+            unread = connection.execute(
+                "SELECT COUNT(*) FROM notifications WHERE user_id=? AND read_at IS NULL",
+                (user_id,),
+            ).fetchone()[0]
+        return [
+            {
+                "id": str(row[0]), "kind": str(row[1]), "title": str(row[2]),
+                "body": str(row[3]), "created_at": str(row[4]),
+                "read_at": str(row[5]) if row[5] else None,
+            }
+            for row in rows
+        ], int(unread)
+
+    def mark_notifications_read(self, user_id: str) -> None:
+        self.initialize()
+        with closing(self._connect()) as connection:
+            connection.execute(
+                "UPDATE notifications SET read_at=? WHERE user_id=? AND read_at IS NULL",
+                (utc_now().isoformat(), user_id),
+            )
 
     def refund_credits(self, user_id: str, amount: int, reference: str) -> None:
         """Refund a failed submission once, keyed by its original ledger reference."""
@@ -836,6 +951,10 @@ class AuthStore:
                 "DELETE FROM admin_credit_grants WHERE user_id=? OR granted_by_user_id=?",
                 (user_id, user_id),
             )
+            connection.execute(
+                "DELETE FROM admin_credit_adjustments WHERE user_id=? OR adjusted_by_user_id=?",
+                (user_id, user_id),
+            )
             for table in (
                 "sessions",
                 "email_verifications",
@@ -847,6 +966,7 @@ class AuthStore:
                 "credit_debits",
                 "credit_ledger",
                 "payment_orders",
+                "notifications",
             ):
                 connection.execute(f"DELETE FROM {table} WHERE user_id=?", (user_id,))
             deleted = connection.execute("DELETE FROM users WHERE id=?", (user_id,)).rowcount

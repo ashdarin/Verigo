@@ -17,6 +17,8 @@ const state = {
   metricsTimer: null,
   turnstileSiteKey: "",
   turnstileWidgetId: null,
+  notifications: [],
+  notificationTimer: null,
 };
 
 const pageSize = 50;
@@ -395,6 +397,8 @@ function showJob(job) {
   const isActive = job.status === "queued" || job.status === "running";
   el("stop-job-button").classList.toggle("hidden", !isActive);
   el("stop-job-button").disabled = !isActive;
+  el("resume-job-button").classList.toggle("hidden", job.status !== "stopped");
+  el("resume-job-button").disabled = job.status !== "stopped";
   el("progress-percent").textContent = `${job.progress}%`;
   el("progress-bar").style.width = `${job.progress}%`;
   const progressCopy = job.error
@@ -559,6 +563,23 @@ el("stop-job-button").addEventListener("click", async () => {
   } catch (error) {
     errorBox.textContent = error.message;
   } finally {
+    button.disabled = false;
+  }
+});
+el("resume-job-button").addEventListener("click", async () => {
+  if (!state.jobId) return;
+  const button = el("resume-job-button");
+  button.disabled = true;
+  try {
+    const job = await api(`/api/jobs/${state.jobId}/resume`, { method: "POST" });
+    state.page = 0;
+    state.results = [];
+    showJob(job);
+    await loadResults();
+    schedulePoll(300);
+    if (state.user) await loadRecentJobs();
+  } catch (error) {
+    errorBox.textContent = error.message;
     button.disabled = false;
   }
 });
@@ -830,12 +851,20 @@ function updateAccount() {
   el("bind-email-button").classList.toggle("hidden", !state.user?.needs_email_binding);
   el("dashboard-nav").classList.toggle("hidden", !state.user?.is_admin);
   el("admin-credits-nav").classList.toggle("hidden", !state.user?.is_admin);
+  el("notification-button").classList.toggle("hidden", !state.user);
   el("claim-trial-button").classList.toggle(
     "hidden", !state.user || state.user.needs_email_binding || state.user.email_verified,
   );
   el("recent-block").classList.toggle("hidden", !state.user);
   el("account-menu").classList.add("hidden");
-  if (state.user) loadRecentJobs();
+  el("notification-menu").classList.add("hidden");
+  clearInterval(state.notificationTimer);
+  state.notificationTimer = null;
+  if (state.user) {
+    loadRecentJobs();
+    loadNotifications();
+    state.notificationTimer = window.setInterval(loadNotifications, 60000);
+  }
 }
 
 async function loadAccount() {
@@ -844,6 +873,55 @@ async function loadAccount() {
 }
 
 el("dashboard-refresh").addEventListener("click", loadDashboardMetrics);
+function renderNotifications() {
+  const list = el("notification-list");
+  list.replaceChildren();
+  if (!state.notifications.length) {
+    const empty = document.createElement("p");
+    empty.className = "notification-empty";
+    empty.textContent = "暂无通知";
+    list.append(empty);
+    return;
+  }
+  state.notifications.forEach((notification) => {
+    const item = document.createElement("article");
+    item.className = "notification-item";
+    const title = document.createElement("strong");
+    title.textContent = notification.title;
+    const body = document.createElement("p");
+    body.textContent = notification.body;
+    const time = document.createElement("time");
+    time.textContent = new Date(notification.created_at).toLocaleString("zh-CN");
+    item.append(title, body, time);
+    list.append(item);
+  });
+}
+
+async function loadNotifications() {
+  if (!state.user) return;
+  try {
+    const payload = await api("/api/notifications");
+    state.notifications = payload.items;
+    el("notification-count").textContent = payload.unread_count > 99 ? "99+" : String(payload.unread_count);
+    el("notification-count").classList.toggle("hidden", !payload.unread_count);
+    renderNotifications();
+  } catch (_) {
+    state.notifications = [];
+  }
+}
+
+el("notification-button").addEventListener("click", async () => {
+  const menu = el("notification-menu");
+  const opening = menu.classList.contains("hidden");
+  menu.classList.toggle("hidden", !opening);
+  el("account-menu").classList.add("hidden");
+  if (!opening) return;
+  await loadNotifications();
+  if (!el("notification-count").classList.contains("hidden")) {
+    await api("/api/notifications/read", { method: "POST" });
+    await loadNotifications();
+  }
+});
 el("admin-credit-grant-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const submit = el("admin-credit-submit");
@@ -852,7 +930,8 @@ el("admin-credit-grant-form").addEventListener("submit", async (event) => {
   result.className = "admin-credit-result";
   result.textContent = "";
   try {
-    const grant = await api("/api/admin/credits/grant", {
+    const action = el("admin-credit-action").value;
+    const adjustment = await api(`/api/admin/credits/${action === "deduct" ? "deduct" : "grant"}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -862,7 +941,10 @@ el("admin-credit-grant-form").addEventListener("submit", async (event) => {
       }),
     });
     result.classList.add("success");
-    result.textContent = `已向 ${grant.email} 授予 ${grant.granted_credits.toLocaleString("zh-CN")} 额度，当前余额 ${grant.credits.toLocaleString("zh-CN")}。`;
+    const amount = Math.abs(adjustment.delta).toLocaleString("zh-CN");
+    result.textContent = action === "deduct"
+      ? `已从 ${adjustment.email} 扣减 ${amount} 额度，当前余额 ${adjustment.credits.toLocaleString("zh-CN")}。`
+      : `已向 ${adjustment.email} 授予 ${amount} 额度，当前余额 ${adjustment.credits.toLocaleString("zh-CN")}。`;
     el("admin-credit-amount").value = "";
     el("admin-credit-note").value = "";
   } catch (error) {

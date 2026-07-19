@@ -12,13 +12,14 @@ from fastapi.responses import FileResponse
 
 from app.api.auth import optional_user, require_admin, require_user, request_network_hash
 from app.api.schemas import (
+    AdminCreditAdjustmentResponse,
     AdminCreditGrantRequest,
-    AdminCreditGrantResponse,
     CreateJobRequest,
     DiscoveryRequest,
     DiscoveryResponse,
     ImportResponse,
     JobResponse,
+    NotificationListResponse,
     PaymentOrderRequest,
     PaymentOrderResponse,
     ResultsResponse,
@@ -153,6 +154,47 @@ def submit_routed_job(
         job_id=job_id,
         execution_target=execution_target,
         immediate_results=immediate_results.get(execution_target),
+    )
+
+
+def submit_stopped_job_continuation(job: Job) -> Job:
+    """Queue only addresses with no usable result, without charging the owner again."""
+    completed = {
+        str(result.get("email", "")).lower()
+        for result in job.results
+        if result.get("email") and not result.get("skipped")
+    }
+    remaining = [email for email in job.emails if email.lower() not in completed]
+    if not remaining:
+        raise ValueError("该任务没有可继续验证的邮箱")
+
+    if job.execution_target != "aggregate":
+        return verification_tasks.submit(
+            remaining,
+            job.worker_count,
+            owner_id=job.owner_id,
+            stop_on_deliverable=job.stop_on_deliverable,
+            execution_target=job.execution_target,
+        )
+
+    targets: dict[str, list[str]] = {}
+    child_target_by_email = {
+        email.lower(): child.execution_target
+        for child in job_store.children(job.id)
+        for email in child.emails
+    }
+    for email in remaining:
+        target = child_target_by_email.get(email.lower())
+        if target is None:
+            raise ValueError("任务分流记录不完整，无法继续验证")
+        targets.setdefault(target, []).append(email)
+    if len(targets) == 1:
+        target, emails = next(iter(targets.items()))
+        return verification_tasks.submit(
+            emails, job.worker_count, owner_id=job.owner_id, execution_target=target
+        )
+    return verification_tasks.submit_partitioned(
+        remaining, job.worker_count, targets, owner_id=job.owner_id
     )
 
 
@@ -402,25 +444,57 @@ def admin_metrics(_: Annotated[User, Depends(require_admin)]) -> dict[str, objec
     return metrics_store.snapshot()
 
 
-@router.post("/admin/credits/grant", response_model=AdminCreditGrantResponse)
+@router.post("/admin/credits/grant", response_model=AdminCreditAdjustmentResponse)
 def grant_admin_credits(
     payload: AdminCreditGrantRequest,
     admin: Annotated[User, Depends(require_admin)],
-) -> AdminCreditGrantResponse:
+) -> AdminCreditAdjustmentResponse:
     try:
-        grant = auth_store.grant_paid_credits(
+        adjustment = auth_store.adjust_paid_credits(
             payload.email, payload.credits, admin.id, payload.note
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return AdminCreditGrantResponse(
-        email=grant.user.email or payload.email,
-        granted_credits=grant.credits,
-        credits=grant.user.credits,
-        paid_credits=grant.user.paid_credits,
-        reference=grant.reference,
-        created_at=grant.created_at,
+    return AdminCreditAdjustmentResponse(
+        email=adjustment.user.email or payload.email,
+        delta=adjustment.delta,
+        credits=adjustment.user.credits,
+        paid_credits=adjustment.user.paid_credits,
+        reference=adjustment.reference,
+        created_at=adjustment.created_at,
     )
+
+
+@router.post("/admin/credits/deduct", response_model=AdminCreditAdjustmentResponse)
+def deduct_admin_credits(
+    payload: AdminCreditGrantRequest,
+    admin: Annotated[User, Depends(require_admin)],
+) -> AdminCreditAdjustmentResponse:
+    try:
+        adjustment = auth_store.adjust_paid_credits(
+            payload.email, -payload.credits, admin.id, payload.note
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return AdminCreditAdjustmentResponse(
+        email=adjustment.user.email or payload.email,
+        delta=adjustment.delta,
+        credits=adjustment.user.credits,
+        paid_credits=adjustment.user.paid_credits,
+        reference=adjustment.reference,
+        created_at=adjustment.created_at,
+    )
+
+
+@router.get("/notifications", response_model=NotificationListResponse)
+def list_notifications(user: Annotated[User, Depends(require_user)]) -> NotificationListResponse:
+    items, unread_count = auth_store.list_notifications(user.id)
+    return NotificationListResponse(items=items, unread_count=unread_count)
+
+
+@router.post("/notifications/read", status_code=204)
+def mark_notifications_read(user: Annotated[User, Depends(require_user)]) -> None:
+    auth_store.mark_notifications_read(user.id)
 
 
 @router.post("/discovery/candidates", response_model=DiscoveryResponse)
@@ -572,6 +646,22 @@ def stop_job(
         write_csv(job)
         job_store.persist(job)
     return serialize_job(job)
+
+
+@router.post("/jobs/{job_id}/resume", response_model=JobResponse, status_code=202)
+def resume_job(
+    job_id: str,
+    user: Annotated[User | None, Depends(optional_user)],
+    guest_token: Annotated[str | None, Header(alias="X-Job-Token")] = None,
+) -> JobResponse:
+    job = require_job_access(require_job(job_id), user, guest_token)
+    if job.status != "stopped":
+        raise HTTPException(status_code=409, detail="只有已停止的任务可以继续验证")
+    try:
+        continuation = submit_stopped_job_continuation(job)
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return serialize_job(continuation)
 
 
 @router.get("/jobs/{job_id}/results", response_model=ResultsResponse)

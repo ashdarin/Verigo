@@ -273,6 +273,14 @@ with TestClient(app) as guest:
     )
     assert stopped_guest_job.status_code == 200, stopped_guest_job.text
     assert stopped_guest_job.json()["status"] == "stopped"
+    resumed_guest_job = guest.post(
+        f"/api/jobs/{guest_single.json()['id']}/resume",
+        headers={"X-Job-Token": guest_single.json()["access_token"]},
+    )
+    assert resumed_guest_job.status_code == 202, resumed_guest_job.text
+    assert resumed_guest_job.json()["id"] != guest_single.json()["id"]
+    assert resumed_guest_job.json()["status"] == "queued"
+    job_store.stop(resumed_guest_job.json()["id"])
     yahoo_single = guest.post("/api/verify/single", json={"email": "person@yahoo.co.uk"})
     assert yahoo_single.status_code == 202, yahoo_single.text
     assert yahoo_single.json()["status"] == "completed"
@@ -480,7 +488,7 @@ with TestClient(app) as admin_account:
     )
     assert granted.status_code == 200, granted.text
     assert granted.json()["email"] == "manual-credit@example.com"
-    assert granted.json()["granted_credits"] == 25
+    assert granted.json()["delta"] == 25
     assert granted.json()["credits"] == 25
     assert granted.json()["paid_credits"] == 25
     with auth_store._connect() as connection:
@@ -489,7 +497,7 @@ with TestClient(app) as admin_account:
             (granted.json()["reference"],),
         ).fetchone()
         audit = connection.execute(
-            "SELECT user_id, granted_by_user_id, credits, note FROM admin_credit_grants WHERE reference=?",
+            "SELECT user_id, adjusted_by_user_id, delta, note FROM admin_credit_adjustments WHERE reference=?",
             (granted.json()["reference"],),
         ).fetchone()
     assert ledger == (25, "admin_credit_grant")
@@ -503,10 +511,35 @@ with TestClient(app) as admin_account:
         "/api/admin/credits/grant",
         json={"email": "missing@example.com", "credits": 1},
     ).status_code == 422
+    deducted = admin_account.post(
+        "/api/admin/credits/deduct",
+        json={"email": "manual-credit@example.com", "credits": 7, "note": "refund smoke test"},
+    )
+    assert deducted.status_code == 200, deducted.text
+    assert deducted.json()["delta"] == -7
+    assert deducted.json()["credits"] == 18
+    assert admin_account.post(
+        "/api/admin/credits/deduct",
+        json={"email": "manual-credit@example.com", "credits": 19},
+    ).status_code == 422
+    notifications, unread_count = auth_store.list_notifications(credit_target.id)
+    assert unread_count == 2
+    assert [item["kind"] for item in notifications] == ["credit_deduction", "credit_grant"]
+    with TestClient(app) as credited_account:
+        logged_in = credited_account.post(
+            "/api/auth/login",
+            json={"account": "manual-credit@example.com", "password": "correct-horse-2026"},
+        )
+        assert logged_in.status_code == 200, logged_in.text
+        inbox = credited_account.get("/api/notifications")
+        assert inbox.status_code == 200, inbox.text
+        assert inbox.json()["unread_count"] == 2
+        assert credited_account.post("/api/notifications/read").status_code == 204
+        assert credited_account.get("/api/notifications").json()["unread_count"] == 0
     assert auth_store.delete_user(credit_target.id) == []
     with auth_store._connect() as connection:
         assert connection.execute(
-            "SELECT 1 FROM admin_credit_grants WHERE user_id=?", (credit_target.id,)
+            "SELECT 1 FROM admin_credit_adjustments WHERE user_id=?", (credit_target.id,)
         ).fetchone() is None
 
 

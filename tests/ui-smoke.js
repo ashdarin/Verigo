@@ -197,7 +197,7 @@ async function checkAdminCredits(browser) {
   await page.route("**/api/admin/credits/grant", (route) => route.fulfill({
     contentType: "application/json",
     body: JSON.stringify({
-      email: "customer@example.com", granted_credits: 25, credits: 25,
+      email: "customer@example.com", delta: 25, credits: 25,
       paid_credits: 25, reference: "admin_grant:smoke", created_at: new Date().toISOString(),
     }),
   }));

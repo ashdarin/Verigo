@@ -98,13 +98,27 @@ class AdminCreditGrantRequest(BaseModel):
         return value.strip().lower()
 
 
-class AdminCreditGrantResponse(BaseModel):
+class AdminCreditAdjustmentResponse(BaseModel):
     email: str
-    granted_credits: int
+    delta: int
     credits: int
     paid_credits: int
     reference: str
     created_at: str
+
+
+class NotificationResponse(BaseModel):
+    id: str
+    kind: str
+    title: str
+    body: str
+    created_at: str
+    read_at: str | None
+
+
+class NotificationListResponse(BaseModel):
+    items: list[NotificationResponse]
+    unread_count: int
 
 
 class WorkerResultsRequest(BaseModel):

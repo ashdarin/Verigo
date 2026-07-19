@@ -34,7 +34,9 @@
     <div class="account-area">
       <span class="service-state"><span class="state-dot"></span>运行中</span>
       <button id="claim-trial-button" class="claim-trial hidden" type="button">验证邮箱领取体验额度</button>
+      <button id="notification-button" class="notification-button hidden" type="button" aria-label="通知">通知<span id="notification-count" class="notification-count hidden"></span></button>
       <button id="account-button" class="account-button" type="button">登录</button>
+      <div id="notification-menu" class="notification-menu hidden" aria-live="polite"><div id="notification-list" class="notification-list"></div></div>
       <div id="account-menu" class="account-menu hidden">
         <strong id="account-name"></strong>
         <small id="account-credits" class="account-credits"></small>
@@ -142,7 +144,7 @@
             <option value="unknown">待确认</option>
           </select>
         </div>
-        <div class="table-actions"><button id="stop-job-button" class="stop-action hidden" type="button">停止验证</button><button id="download-button" class="download-action" type="button" disabled>下载 CSV</button></div>
+        <div class="table-actions"><button id="resume-job-button" class="download-action hidden" type="button">继续未完成验证</button><button id="stop-job-button" class="stop-action hidden" type="button">停止验证</button><button id="download-button" class="download-action" type="button" disabled>下载 CSV</button></div>
       </div>
 
       <div class="table-wrap">
@@ -285,6 +287,8 @@
         <div><p class="eyebrow">管理员</p><h1 id="admin-credits-heading">授予账户额度</h1></div>
       </div>
       <form id="admin-credit-grant-form" class="admin-credit-grant-form">
+        <label for="admin-credit-action">操作</label>
+        <select id="admin-credit-action"><option value="grant">授予额度</option><option value="deduct">扣减额度</option></select>
         <label for="admin-credit-email">用户注册邮箱</label>
         <input id="admin-credit-email" type="email" autocomplete="email" maxlength="254" required>
         <label for="admin-credit-amount">授予额度</label>

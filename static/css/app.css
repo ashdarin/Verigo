@@ -44,6 +44,9 @@ button { cursor: pointer; }
 .account-menu .account-action { color: var(--ink); }
 .account-menu .account-action:hover { background: #edf6f1; }
 .account-menu .account-delete { color: var(--bad); }
+.notification-button { position: relative; min-height: 34px; padding: 0 9px; border: 1px solid var(--line); border-radius: 5px; background: #fff; color: var(--ink); font-size: 12px; font-weight: 700; }
+.notification-button:hover { border-color: var(--accent); color: var(--accent); }.notification-count { display: inline-grid; min-width: 16px; height: 16px; margin-left: 4px; place-items: center; border-radius: 8px; background: var(--bad); color: #fff; font-size: 10px; font-variant-numeric: tabular-nums; }
+.notification-menu { position: absolute; z-index: 20; top: 43px; right: 84px; width: min(360px, calc(100vw - 32px)); max-height: 380px; overflow: auto; border: 1px solid var(--line); border-radius: 6px; background: #fff; box-shadow: var(--shadow); color: var(--ink); }.notification-list { display: grid; }.notification-item { padding: 12px 13px; border-bottom: 1px solid var(--line); }.notification-item:last-child { border-bottom: 0; }.notification-item strong { display: block; font-size: 13px; }.notification-item p { margin: 5px 0 0; color: var(--muted); font-size: 12px; line-height: 1.45; }.notification-item time { display: block; margin-top: 6px; color: var(--muted); font-size: 10px; }.notification-empty { padding: 18px 13px; color: var(--muted); font-size: 12px; }
 .confirm-delete { display: flex; align-items: flex-start; gap: 8px; margin: 16px 0; font-weight: 500; line-height: 1.45; }
 .confirm-delete input { width: auto; min-height: 0; margin-top: 3px; }
 .danger-primary { background: var(--bad); }
@@ -186,6 +189,7 @@ th:nth-child(1) { width: 24%; } th:nth-child(2) { width: 12%; } th:nth-child(3) 
 .admin-credits-panel { width: min(100%, 560px); padding: 28px; border: 1px solid #dadce0; border-radius: 8px; background: #fff; }
 .admin-credits-heading { margin-bottom: 24px; }.admin-credits-heading h1 { font-size: 23px; }
 .admin-credit-grant-form { display: grid; gap: 9px; }.admin-credit-grant-form label { margin-top: 6px; color: #3c4043; font-size: 13px; font-weight: 650; }.admin-credit-grant-form input { width: 100%; min-height: 42px; }
+.admin-credit-grant-form select { width: 100%; min-height: 42px; }
 .admin-credit-grant-form .primary-action { margin-top: 12px; }.admin-credit-result { min-height: 20px; margin: 8px 0 0; color: #5f6368; font-size: 13px; line-height: 1.5; }.admin-credit-result.success { color: #188038; }.admin-credit-result.error { color: #b3261e; }
 .report-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; margin-bottom: 26px; }
 .report-heading h1 { font-size: 25px; }
@@ -278,6 +282,7 @@ th:nth-child(1) { width: 24%; } th:nth-child(2) { width: 12%; } th:nth-child(3) 
 @media (max-width: 560px) {
   .topbar { min-height: 108px; padding: 10px 16px 8px; }
   .account-area { gap: 6px; }
+  .notification-menu { right: 0; top: 42px; }
   .claim-trial { flex: 0 0 104px; min-height: 36px; padding: 0 7px; font-size: 10px; line-height: 1.15; }
   .account-button { flex: 0 0 52px; width: 52px; padding: 0; font-size: 0; }
   .account-button::after { content: "账户"; font-size: 12px; }
