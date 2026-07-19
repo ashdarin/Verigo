@@ -12,6 +12,8 @@ from fastapi.responses import FileResponse
 
 from app.api.auth import optional_user, require_admin, require_user, request_network_hash
 from app.api.schemas import (
+    AdminCreditGrantRequest,
+    AdminCreditGrantResponse,
     CreateJobRequest,
     DiscoveryRequest,
     DiscoveryResponse,
@@ -398,6 +400,27 @@ def record_analytics_engagement(
 @router.get("/admin/metrics")
 def admin_metrics(_: Annotated[User, Depends(require_admin)]) -> dict[str, object]:
     return metrics_store.snapshot()
+
+
+@router.post("/admin/credits/grant", response_model=AdminCreditGrantResponse)
+def grant_admin_credits(
+    payload: AdminCreditGrantRequest,
+    admin: Annotated[User, Depends(require_admin)],
+) -> AdminCreditGrantResponse:
+    try:
+        grant = auth_store.grant_paid_credits(
+            payload.email, payload.credits, admin.id, payload.note
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return AdminCreditGrantResponse(
+        email=grant.user.email or payload.email,
+        granted_credits=grant.credits,
+        credits=grant.user.credits,
+        paid_credits=grant.user.paid_credits,
+        reference=grant.reference,
+        created_at=grant.created_at,
+    )
 
 
 @router.post("/discovery/candidates", response_model=DiscoveryResponse)

@@ -112,6 +112,13 @@ def dashboard() -> FileResponse:
     )
 
 
+@app.get("/admin/credits", include_in_schema=False)
+def admin_credits() -> FileResponse:
+    return FileResponse(
+        STATIC_DIR / "index.html", headers={"X-Robots-Tag": "noindex, nofollow"}
+    )
+
+
 @app.get("/privacy", include_in_schema=False)
 def privacy() -> FileResponse:
     return FileResponse(STATIC_DIR / "privacy.html")

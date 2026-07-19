@@ -1,5 +1,7 @@
 const state = {
-  view: window.location.pathname === "/dashboard" ? "dashboard" : "single",
+  view: window.location.pathname === "/dashboard"
+    ? "dashboard"
+    : window.location.pathname === "/admin/credits" ? "admin-credits" : "single",
   mode: "paste",
   fileEmails: [],
   user: null,
@@ -98,7 +100,8 @@ async function api(url, options = {}) {
 }
 
 function switchView(view) {
-  if (view === "dashboard" && !state.user?.is_admin) {
+  const adminView = view === "dashboard" || view === "admin-credits";
+  if (adminView && !state.user?.is_admin) {
     if (!state.user) {
       el("auth-dialog").showModal();
       setAuthMode("login");
@@ -108,6 +111,7 @@ function switchView(view) {
   }
   const discovery = view === "discovery";
   const dashboard = view === "dashboard";
+  const adminCredits = view === "admin-credits";
   if (discovery && !state.user) {
     el("auth-dialog").showModal();
     setAuthMode("login");
@@ -115,12 +119,13 @@ function switchView(view) {
     return;
   }
   state.view = view;
-  el("verify-workspace").classList.toggle("hidden", discovery || dashboard);
+  el("verify-workspace").classList.toggle("hidden", discovery || dashboard || adminCredits);
   el("discovery-workspace").classList.toggle("hidden", !discovery);
   el("dashboard-workspace").classList.toggle("hidden", !dashboard);
+  el("admin-credits-workspace").classList.toggle("hidden", !adminCredits);
   el("single-panel").classList.toggle("hidden", view !== "single");
   el("batch-panel").classList.toggle("hidden", view !== "batch");
-  if (!discovery && !dashboard) {
+  if (!discovery && !dashboard && !adminCredits) {
     el("verify-eyebrow").textContent = view === "single" ? "免费单个验证" : "收费批量验证";
     el("verify-heading").textContent = view === "single" ? "验证单个收件地址" : "批量验证收件地址";
   }
@@ -133,11 +138,16 @@ function switchView(view) {
     loadDashboardMetrics();
     clearInterval(state.metricsTimer);
     state.metricsTimer = window.setInterval(loadDashboardMetrics, 30000);
+  } else if (adminCredits) {
+    document.title = "额度管理 | Verigo";
+    if (window.location.pathname !== "/admin/credits") window.history.pushState({}, "", "/admin/credits");
+    clearInterval(state.metricsTimer);
+    state.metricsTimer = null;
   } else {
     document.title = "Verigo";
     clearInterval(state.metricsTimer);
     state.metricsTimer = null;
-    if (window.location.pathname === "/dashboard") window.history.replaceState({}, "", "/");
+    if (["/dashboard", "/admin/credits"].includes(window.location.pathname)) window.history.replaceState({}, "", "/");
   }
   updateCount();
 }
@@ -819,6 +829,7 @@ function updateAccount() {
     : "";
   el("bind-email-button").classList.toggle("hidden", !state.user?.needs_email_binding);
   el("dashboard-nav").classList.toggle("hidden", !state.user?.is_admin);
+  el("admin-credits-nav").classList.toggle("hidden", !state.user?.is_admin);
   el("claim-trial-button").classList.toggle(
     "hidden", !state.user || state.user.needs_email_binding || state.user.email_verified,
   );
@@ -833,6 +844,34 @@ async function loadAccount() {
 }
 
 el("dashboard-refresh").addEventListener("click", loadDashboardMetrics);
+el("admin-credit-grant-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const submit = el("admin-credit-submit");
+  const result = el("admin-credit-result");
+  submit.disabled = true;
+  result.className = "admin-credit-result";
+  result.textContent = "";
+  try {
+    const grant = await api("/api/admin/credits/grant", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        email: el("admin-credit-email").value,
+        credits: Number(el("admin-credit-amount").value),
+        note: el("admin-credit-note").value,
+      }),
+    });
+    result.classList.add("success");
+    result.textContent = `已向 ${grant.email} 授予 ${grant.granted_credits.toLocaleString("zh-CN")} 额度，当前余额 ${grant.credits.toLocaleString("zh-CN")}。`;
+    el("admin-credit-amount").value = "";
+    el("admin-credit-note").value = "";
+  } catch (error) {
+    result.classList.add("error");
+    result.textContent = error.message;
+  } finally {
+    submit.disabled = false;
+  }
+});
 
 el("account-button").addEventListener("click", () => {
   if (state.user) el("account-menu").classList.toggle("hidden");
@@ -1049,6 +1088,7 @@ el("auth-form").addEventListener("submit", async (event) => {
     el("auth-form").reset();
     updateAccount();
     if (window.location.pathname === "/dashboard" && state.user.is_admin) switchView("dashboard");
+    if (window.location.pathname === "/admin/credits" && state.user.is_admin) switchView("admin-credits");
   } catch (error) {
     el("auth-error").textContent = error.message;
   } finally {
@@ -1098,9 +1138,9 @@ el("refresh-jobs").addEventListener("click", loadRecentJobs);
   updateCount();
   await loadAccount();
   await loadPublicConfig();
-  if (window.location.pathname === "/dashboard") {
+  if (["/dashboard", "/admin/credits"].includes(window.location.pathname)) {
     if (state.user?.is_admin) {
-      switchView("dashboard");
+      switchView(window.location.pathname === "/admin/credits" ? "admin-credits" : "dashboard");
     } else if (state.user) {
       window.location.replace("/");
       return;

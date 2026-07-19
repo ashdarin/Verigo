@@ -87,6 +87,26 @@ class PaymentOrderResponse(BaseModel):
     status: str
 
 
+class AdminCreditGrantRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=254)
+    credits: int = Field(ge=1, le=1_000_000)
+    note: str = Field(default="", max_length=200)
+
+    @field_validator("email")
+    @classmethod
+    def normalize_email(cls, value: str) -> str:
+        return value.strip().lower()
+
+
+class AdminCreditGrantResponse(BaseModel):
+    email: str
+    granted_credits: int
+    credits: int
+    paid_credits: int
+    reference: str
+    created_at: str
+
+
 class WorkerResultsRequest(BaseModel):
     results: list[dict[str, Any]] = Field(default_factory=list, max_length=5000)
 

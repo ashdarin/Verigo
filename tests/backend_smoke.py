@@ -467,6 +467,48 @@ with TestClient(app) as admin_account:
     assert metrics.json()["today"]["page_views"] >= 1
     assert len(metrics.json()["daily"]) == 14
 
+    credit_target = auth_store.create_user(
+        "manual-credit@example.com", "correct-horse-2026"
+    )
+    granted = admin_account.post(
+        "/api/admin/credits/grant",
+        json={
+            "email": "manual-credit@example.com",
+            "credits": 25,
+            "note": "manual payment smoke test",
+        },
+    )
+    assert granted.status_code == 200, granted.text
+    assert granted.json()["email"] == "manual-credit@example.com"
+    assert granted.json()["granted_credits"] == 25
+    assert granted.json()["credits"] == 25
+    assert granted.json()["paid_credits"] == 25
+    with auth_store._connect() as connection:
+        ledger = connection.execute(
+            "SELECT delta, kind FROM credit_ledger WHERE reference=?",
+            (granted.json()["reference"],),
+        ).fetchone()
+        audit = connection.execute(
+            "SELECT user_id, granted_by_user_id, credits, note FROM admin_credit_grants WHERE reference=?",
+            (granted.json()["reference"],),
+        ).fetchone()
+    assert ledger == (25, "admin_credit_grant")
+    assert audit == (
+        credit_target.id,
+        admin_id,
+        25,
+        "manual payment smoke test",
+    )
+    assert admin_account.post(
+        "/api/admin/credits/grant",
+        json={"email": "missing@example.com", "credits": 1},
+    ).status_code == 422
+    assert auth_store.delete_user(credit_target.id) == []
+    with auth_store._connect() as connection:
+        assert connection.execute(
+            "SELECT 1 FROM admin_credit_grants WHERE user_id=?", (credit_target.id,)
+        ).fetchone() is None
+
 
 for number in range(3):
     network_user = auth_store.create_user(

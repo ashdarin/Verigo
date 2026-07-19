@@ -28,6 +28,14 @@ class User:
     trial_credit_expires_at: str | None = None
 
 
+@dataclass(frozen=True)
+class AdminCreditGrant:
+    user: User
+    credits: int
+    reference: str
+    created_at: str
+
+
 class FreeUsageLimitError(ValueError):
     pass
 
@@ -201,6 +209,24 @@ class AuthStore:
                 )
                 connection.execute(
                     "CREATE INDEX IF NOT EXISTS idx_trial_network_grants ON trial_network_grants(network_hash, created_at)"
+                )
+                connection.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS admin_credit_grants (
+                        id TEXT PRIMARY KEY,
+                        user_id TEXT NOT NULL,
+                        granted_by_user_id TEXT NOT NULL,
+                        credits INTEGER NOT NULL,
+                        note TEXT NOT NULL DEFAULT '',
+                        reference TEXT NOT NULL UNIQUE,
+                        created_at TEXT NOT NULL,
+                        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+                        FOREIGN KEY(granted_by_user_id) REFERENCES users(id) ON DELETE CASCADE
+                    )
+                    """
+                )
+                connection.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_admin_credit_grants_user ON admin_credit_grants(user_id, created_at DESC)"
                 )
                 connection.execute("DELETE FROM sessions WHERE expires_at <= ?", (utc_now().isoformat(),))
                 connection.execute("DELETE FROM password_resets WHERE expires_at <= ?", (utc_now().isoformat(),))
@@ -528,6 +554,62 @@ class AuthStore:
             connection.commit()
             return paid_credits + promo_available - amount
 
+    def grant_paid_credits(
+        self, email: str, amount: int, granted_by_user_id: str, note: str = ""
+    ) -> AdminCreditGrant:
+        """Grant non-expiring paid credits and retain an administrator audit record."""
+        self.initialize()
+        normalized_email = email.strip().lower()
+        if not normalized_email or "@" not in normalized_email:
+            raise ValueError("请输入有效的注册邮箱")
+        if amount < 1:
+            raise ValueError("授予额度必须大于零")
+        now = utc_now().isoformat()
+        grant_id = uuid.uuid4().hex
+        reference = f"admin_grant:{grant_id}"
+        with closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                """
+                SELECT id, username, email, email_verified, credits, created_at
+                FROM users WHERE email=? COLLATE NOCASE
+                """,
+                (normalized_email,),
+            ).fetchone()
+            if row is None:
+                connection.rollback()
+                raise ValueError("未找到该注册邮箱对应的账户")
+            connection.execute(
+                "UPDATE users SET credits=credits+? WHERE id=?", (amount, row[0])
+            )
+            connection.execute(
+                """
+                INSERT INTO credit_ledger(user_id, delta, kind, reference, created_at)
+                VALUES (?, ?, 'admin_credit_grant', ?, ?)
+                """,
+                (row[0], amount, reference, now),
+            )
+            connection.execute(
+                """
+                INSERT INTO admin_credit_grants(
+                    id, user_id, granted_by_user_id, credits, note, reference, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (grant_id, row[0], granted_by_user_id, amount, note.strip(), reference, now),
+            )
+            updated_row = connection.execute(
+                """
+                SELECT id, username, email, email_verified, credits, created_at
+                FROM users WHERE id=?
+                """,
+                (row[0],),
+            ).fetchone()
+            user = self._user_from_row(connection, updated_row)
+            connection.commit()
+        return AdminCreditGrant(
+            user=user, credits=amount, reference=reference, created_at=now
+        )
+
     def refund_credits(self, user_id: str, amount: int, reference: str) -> None:
         """Refund a failed submission once, keyed by its original ledger reference."""
         self.initialize()
@@ -750,6 +832,10 @@ class AuthStore:
                     f"DELETE FROM credit_debit_grants WHERE reference IN ({placeholders})",
                     debit_references,
                 )
+            connection.execute(
+                "DELETE FROM admin_credit_grants WHERE user_id=? OR granted_by_user_id=?",
+                (user_id, user_id),
+            )
             for table in (
                 "sessions",
                 "email_verifications",

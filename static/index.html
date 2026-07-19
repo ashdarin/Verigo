@@ -29,6 +29,7 @@
       <button class="nav-item" type="button" data-view="batch">批量验证</button>
       <button class="nav-item" type="button" data-view="discovery">查找工作邮箱</button>
       <button id="dashboard-nav" class="nav-item hidden" type="button" data-view="dashboard">运营监控</button>
+      <button id="admin-credits-nav" class="nav-item hidden" type="button" data-view="admin-credits">额度管理</button>
     </nav>
     <div class="account-area">
       <span class="service-state"><span class="state-dot"></span>运行中</span>
@@ -275,6 +276,24 @@
           <div><dt>平均客单价</dt><dd id="metric-average-order-value">¥0.00</dd></div>
         </dl>
       </section>
+    </section>
+  </main>
+
+  <main id="admin-credits-workspace" class="admin-credits-workspace hidden">
+    <section class="admin-credits-panel" aria-labelledby="admin-credits-heading">
+      <div class="admin-credits-heading">
+        <div><p class="eyebrow">管理员</p><h1 id="admin-credits-heading">授予账户额度</h1></div>
+      </div>
+      <form id="admin-credit-grant-form" class="admin-credit-grant-form">
+        <label for="admin-credit-email">用户注册邮箱</label>
+        <input id="admin-credit-email" type="email" autocomplete="email" maxlength="254" required>
+        <label for="admin-credit-amount">授予额度</label>
+        <input id="admin-credit-amount" type="number" inputmode="numeric" min="1" max="1000000" step="1" required>
+        <label for="admin-credit-note">备注</label>
+        <input id="admin-credit-note" type="text" maxlength="200" autocomplete="off">
+        <p id="admin-credit-result" class="admin-credit-result" role="status"></p>
+        <button id="admin-credit-submit" class="primary-action" type="submit">确认授予</button>
+      </form>
     </section>
   </main>
 

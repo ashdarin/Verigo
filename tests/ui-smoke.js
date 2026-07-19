@@ -184,6 +184,41 @@ async function checkDashboard(browser) {
   return { dashboard: true };
 }
 
+async function checkAdminCredits(browser) {
+  const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  await page.route("**/api/auth/me", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({
+      id: "admin", email: "admin@example.com", email_verified: true,
+      credits: 0, paid_credits: 0, trial_credits: 0, trial_credit_expires_at: null,
+      needs_email_binding: false, is_admin: true,
+    }),
+  }));
+  await page.route("**/api/admin/credits/grant", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({
+      email: "customer@example.com", granted_credits: 25, credits: 25,
+      paid_credits: 25, reference: "admin_grant:smoke", created_at: new Date().toISOString(),
+    }),
+  }));
+  await page.goto("http://127.0.0.1:8000/admin/credits", { waitUntil: "networkidle" });
+  await page.waitForSelector("#admin-credits-workspace:not(.hidden)");
+  await page.fill("#admin-credit-email", "customer@example.com");
+  await page.fill("#admin-credit-amount", "25");
+  await page.click("#admin-credit-submit");
+  await page.waitForFunction(() => document.querySelector("#admin-credit-result")?.textContent.includes("25"));
+  const result = await page.evaluate(() => ({
+    overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+    navVisible: !document.querySelector("#admin-credits-nav")?.classList.contains("hidden"),
+    success: document.querySelector("#admin-credit-result")?.classList.contains("success"),
+  }));
+  if (result.overflow || !result.navVisible || !result.success) {
+    throw new Error(`admin credits: unexpected rendering ${JSON.stringify(result)}`);
+  }
+  await page.close();
+  return { adminCredits: true };
+}
+
 (async () => {
   const browser = await chromium.launch({ headless: true });
   try {
@@ -192,7 +227,8 @@ async function checkDashboard(browser) {
     const interaction = await checkAccountAndImport(browser);
     const mobileTrialAction = await checkMobileTrialAction(browser);
     const dashboard = await checkDashboard(browser);
-    console.log(JSON.stringify([desktop, mobile, interaction, mobileTrialAction, dashboard]));
+    const adminCredits = await checkAdminCredits(browser);
+    console.log(JSON.stringify([desktop, mobile, interaction, mobileTrialAction, dashboard, adminCredits]));
   } finally {
     await browser.close();
   }
