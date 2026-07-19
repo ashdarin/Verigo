@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import subprocess
 import threading
+import urllib.request
 from datetime import datetime, timedelta
 from typing import Any, Protocol
 
@@ -18,6 +19,7 @@ logger = logging.getLogger(__name__)
 TENCENT_QQ_TARGET = "tencent_qq"
 RESTART_WAITING_FOR_STOP = "restart_waiting_for_workspace_stop"
 SSH_BOOTSTRAP_COMPLETE = "ssh_bootstrap_complete"
+IDE_SESSION_ACTIVATED = "ide_session_activated"
 
 
 class WorkspaceApi(Protocol):
@@ -26,6 +28,8 @@ class WorkspaceApi(Protocol):
     def stop_workspace(self) -> str: ...
 
     def workspace_status(self) -> str | None: ...
+
+    def activate_workspace_session(self) -> None: ...
 
 
 class TencentCloudStudioApi:
@@ -58,6 +62,29 @@ class TencentCloudStudioApi:
             if workspace.SpaceKey == settings.cloudstudio_space_key:
                 return str(workspace.Status or "")
         return None
+
+    def activate_workspace_session(self) -> None:
+        """Open the token-authenticated IDE route that starts Cloud Studio hooks."""
+        token_request = models.CreateWorkspaceTokenRequest()
+        token_request.SpaceKey = settings.cloudstudio_space_key
+        token_request.TokenExpiredLimitSec = 120
+        token_request.Policies = ["all"]
+        response = self._client.CreateWorkspaceToken(token_request)
+        access_token = str(response.Token or "")
+        if not access_token:
+            raise RuntimeError("Cloud Studio returned an empty workspace access token")
+        request = urllib.request.Request(
+            "https://ide.cloud.tencent.com/tty/"
+            f"{settings.cloudstudio_space_key}/?report_open_type=vps_lifecycle",
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "User-Agent": "Mozilla/5.0",
+            },
+        )
+        with urllib.request.urlopen(request, timeout=30) as response:
+            body = response.read()
+        if b"workbench.web.main" not in body:
+            raise RuntimeError("Cloud Studio IDE session activation was not accepted")
 
     def bootstrap_worker(self) -> None:
         """Run the idempotent QQ worker bootstrap through Cloud Studio SSH."""
@@ -245,6 +272,35 @@ class WorkerLifecycleCoordinator:
         )
         logger.info("Cloud Studio SSH worker bootstrap completed")
 
+    def _activate_workspace_session(
+        self, runtime: WorkerRuntime, now: datetime, *, force: bool = False
+    ) -> None:
+        if runtime.last_wake_error == IDE_SESSION_ACTIVATED:
+            return
+        if not force and runtime.wake_requested_at and now < runtime.wake_requested_at + timedelta(
+            seconds=self.config.cloudstudio_wake_retry_seconds
+        ):
+            return
+        activate = getattr(self._workspace_api(), "activate_workspace_session", None)
+        if not callable(activate):
+            logger.error("Cloud Studio IDE session activation API is unavailable")
+            return
+        try:
+            activate()
+        except Exception as exc:
+            detail = str(exc).replace("\n", " ")[:500]
+            self.store.record_wake_attempt(
+                TENCENT_QQ_TARGET, deadline=runtime.wake_deadline_at, error=detail
+            )
+            logger.warning("Cloud Studio IDE session activation failed: %s", detail)
+            return
+        self.store.record_wake_attempt(
+            TENCENT_QQ_TARGET,
+            deadline=runtime.wake_deadline_at,
+            error=IDE_SESSION_ACTIVATED,
+        )
+        logger.info("Cloud Studio IDE session activation completed")
+
     def _wake_worker(self, runtime: WorkerRuntime, now: datetime) -> None:
         if runtime.wake_deadline_at:
             if now >= runtime.wake_deadline_at:
@@ -272,7 +328,7 @@ class WorkerLifecycleCoordinator:
                     logger.warning("Could not check Cloud Studio startup status: %s", exc)
                     return
                 if status == "RUNNING":
-                    self._bootstrap_worker(
+                    self._activate_workspace_session(
                         runtime, now, force=runtime.last_wake_error is None
                     )
             return
@@ -295,6 +351,19 @@ class WorkerLifecycleCoordinator:
             status = None
 
         if status == "RUNNING":
+            deadline = now + timedelta(
+                seconds=self.config.cloudstudio_startup_timeout_seconds
+            )
+            self.store.record_wake_attempt(
+                TENCENT_QQ_TARGET, deadline=deadline, error=None
+            )
+            self.store.set_queued_target_message(
+                TENCENT_QQ_TARGET, "Tencent QQ verification node is starting, please wait"
+            )
+            self._activate_workspace_session(
+                self.store.worker_runtime(TENCENT_QQ_TARGET), now, force=True
+            )
+            return
             if self.ssh_bootstrap_configured:
                 deadline = now + timedelta(
                     seconds=self.config.cloudstudio_startup_timeout_seconds
@@ -356,6 +425,9 @@ class WorkerLifecycleCoordinator:
             TENCENT_QQ_TARGET, "腾讯 QQ 验证节点正在启动，请稍候"
         )
         logger.info("Cloud Studio RunWorkspace accepted: request_id=%s", request_id)
+        self._activate_workspace_session(
+            self.store.worker_runtime(TENCENT_QQ_TARGET), now, force=True
+        )
 
     def _stop_idle_worker(self, runtime: WorkerRuntime, now: datetime) -> None:
         runtime = self.store.begin_worker_idle(TENCENT_QQ_TARGET)
