@@ -295,16 +295,14 @@
         <label for="admin-credit-email">用户注册邮箱</label>
         <input id="admin-credit-email" type="email" autocomplete="email" maxlength="254" required>
         <button id="admin-account-lookup" class="download-action" type="button">查询账户</button>
-        <label for="admin-credit-amount">授予额度</label>
-        <input id="admin-credit-amount" type="number" inputmode="numeric" min="1" max="1000000" step="1" required>
-        <label for="admin-credit-payment">实收或退款金额（元，可选）</label>
-        <input id="admin-credit-payment" type="number" inputmode="decimal" min="0" step="0.01">
+        <label for="admin-credit-amount">充值或退款金额（元）</label>
+        <input id="admin-credit-amount" type="number" inputmode="decimal" min="0.01" max="5000" step="0.01" required>
         <label for="admin-credit-note">备注</label>
         <input id="admin-credit-note" type="text" maxlength="200" autocomplete="off">
         <p id="admin-credit-result" class="admin-credit-result" role="status"></p>
         <button id="admin-credit-submit" class="primary-action" type="submit">确认授予</button>
       </form>
-      <section id="admin-account-summary" class="admin-account-summary hidden"></section>
+      <section id="admin-account-summary" class="admin-account-summary"><div class="report-card-heading"><div><h2>功能使用趋势</h2><p>单个验证、批量验证与工作邮箱查找</p></div></div><div id="admin-feature-chart" class="admin-feature-chart"></div><div id="admin-feature-legend" class="report-legend"></div></section>
       <section class="admin-accounts-section"><div class="report-card-heading"><div><h2>全部账户</h2><p>按注册时间排序</p></div><button id="admin-accounts-refresh" class="download-action" type="button">刷新</button></div><div id="admin-accounts-list" class="admin-accounts-list"></div></section>
     </section>
   </main>

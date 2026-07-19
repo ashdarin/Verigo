@@ -499,6 +499,10 @@ def admin_account_snapshot(
 def admin_accounts(_: Annotated[User, Depends(require_admin)]) -> list[dict[str, object]]:
     return auth_store.list_admin_accounts()
 
+@router.get("/admin/feature-usage")
+def admin_feature_usage(_: Annotated[User, Depends(require_admin)]) -> dict[str, object]:
+    return metrics_store.feature_usage()
+
 
 @router.get("/notifications", response_model=NotificationListResponse)
 def list_notifications(user: Annotated[User, Depends(require_user)]) -> NotificationListResponse:

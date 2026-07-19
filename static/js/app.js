@@ -149,6 +149,7 @@ function switchView(view) {
     clearInterval(state.metricsTimer);
     state.metricsTimer = null;
     loadAdminAccounts();
+    loadAdminFeatureUsage();
   } else if (wallet) {
     document.title = "资金与使用 | Verigo";
     if (window.location.pathname !== "/wallet") window.history.pushState({}, "", "/wallet");
@@ -885,8 +886,9 @@ el("dashboard-refresh").addEventListener("click", loadDashboardMetrics);
 async function loadWallet() { const data = await api("/api/wallet"); const set=(id,v)=>el(id).textContent=Number(v||0).toLocaleString("zh-CN"); set("wallet-available",data.available_verifications); el("wallet-paid").textContent=`${Number(data.paid_verifications||0).toLocaleString("zh-CN")} 次`; el("wallet-used").textContent=`${Number(data.paid_verifications_used||0).toLocaleString("zh-CN")} 次`; el("wallet-recharged").textContent=`¥${(Number(data.cumulative_recharge_fen||0)/100).toFixed(2)}`; el("wallet-value").textContent=`¥${Number(data.remaining_paid_value_yuan||0).toFixed(2)}`; el("wallet-spent").textContent=`¥${Number(data.paid_used_value_yuan||0).toFixed(2)}`; el("wallet-price").textContent=`100 次 ¥${(data.price_fen_per_100/100).toFixed(2)}`; el("wallet-trial-note").textContent=data.trial_verifications?`另有 ${data.trial_verifications} 体验次数`:"不含体验次数"; el("wallet-updated").textContent=`更新于 ${new Date().toLocaleString("zh-CN")}`; const days=data.usage_daily||[]; const max=Math.max(1,...days.map(x=>x.verifications)); el("wallet-usage-chart").innerHTML=days.map(x=>`<div class="wallet-bar" style="height:${Math.max(4,x.verifications/max*180)}px"><span>${x.verifications}</span></div>`).join(""); el("wallet-transactions").innerHTML=(data.transactions||[]).map(x=>`<div class="wallet-transaction"><div><strong>${x.title}</strong><small>${x.credits>0?"+":""}${x.credits} 次 ${x.note||""}</small></div><div><strong>${x.amount_fen==null?"—":`${x.credits<0?"-":"+"}¥${(x.amount_fen/100).toFixed(2)}`}</strong><small>${new Date(x.created_at).toLocaleString("zh-CN")}</small></div></div>`).join("")||"暂无资金流水"; }
 el("wallet-refresh").addEventListener("click", loadWallet);
 async function loadAdminAccounts(){const rows=await api("/api/admin/accounts/list");const sum=(key)=>rows.reduce((total,row)=>total+Number(row[key]||0),0);el("admin-metric-users").textContent=rows.length.toLocaleString("zh-CN");el("admin-metric-paid").textContent=sum("paid_verifications").toLocaleString("zh-CN");el("admin-metric-trial").textContent=sum("trial_verifications").toLocaleString("zh-CN");el("admin-metric-used").textContent=sum("used_verifications").toLocaleString("zh-CN");el("admin-accounts-list").innerHTML=rows.map(r=>`<button class="admin-account-row" data-email="${r.email}" type="button"><strong>${r.email}</strong><span>付费 ${r.paid_verifications}</span><span>体验 ${r.trial_verifications}</span><span>已用 ${r.used_verifications}</span></button>`).join("")||"暂无账户";document.querySelectorAll(".admin-account-row").forEach(b=>b.addEventListener("click",()=>{el("admin-credit-email").value=b.dataset.email;el("admin-account-lookup").click();}));}
+async function loadAdminFeatureUsage(){const data=await api("/api/admin/feature-usage");const max=Math.max(1,...data.daily.flatMap(day=>[day.single,day.batch,day.discovery]));el("admin-feature-chart").innerHTML=data.daily.map(day=>`<div class="admin-feature-day" title="${day.day}：单个 ${day.single}，批量 ${day.batch}，查找 ${day.discovery}"><i class="admin-feature-single" style="height:${day.single/max*100}%"></i><i class="admin-feature-batch" style="height:${day.batch/max*100}%"></i><i class="admin-feature-discovery" style="height:${day.discovery/max*100}%"></i></div>`).join("");el("admin-feature-legend").innerHTML=`<span>单个 ${data.totals.single}</span><span>批量 ${data.totals.batch}</span><span>查找 ${data.totals.discovery}</span>`;}
 el("admin-accounts-refresh").addEventListener("click",loadAdminAccounts);
-el("admin-account-lookup").addEventListener("click", async()=>{ const box=el("admin-account-summary"); try { const d=await api(`/api/admin/accounts?email=${encodeURIComponent(el("admin-credit-email").value)}`); box.classList.remove("hidden"); const audit=(d.adjustments||[]).map(x=>`<li>${x.delta>0?"+":""}${x.delta} 次 · ${x.amount_fen==null?"未登记金额":"¥"+(x.amount_fen/100).toFixed(2)} · ${x.note||"无备注"}</li>`).join("")||"<li>暂无管理员调整记录</li>"; box.innerHTML=`<strong>${d.email}</strong><dl><div><dt>可用次数</dt><dd>${d.available_verifications}</dd></div><div><dt>付费次数</dt><dd>${d.paid_verifications}</dd></div><div><dt>累计已验证</dt><dd>${d.verifications_used}</dd></div></dl><p>最近调整记录</p><ul>${audit}</ul>`; } catch(e){box.classList.remove("hidden");box.textContent=e.message;} });
+el("admin-account-lookup").addEventListener("click", async()=>{try{await api(`/api/admin/accounts?email=${encodeURIComponent(el("admin-credit-email").value)}`);}catch(error){el("admin-credit-result").textContent=error.message;}});
 function renderNotifications() {
   const list = el("notification-list");
   list.replaceChildren();
@@ -957,9 +959,9 @@ el("admin-credit-grant-form").addEventListener("submit", async (event) => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         email: el("admin-credit-email").value,
-        credits: Number(el("admin-credit-amount").value),
+        credits: Math.round(Number(el("admin-credit-amount").value) * 200),
         note: el("admin-credit-note").value,
-        amount_fen: el("admin-credit-payment").value === "" ? null : Math.round(Number(el("admin-credit-payment").value) * 100),
+        amount_fen: Math.round(Number(el("admin-credit-amount").value) * 100),
       }),
     });
     result.classList.add("success");
@@ -969,7 +971,6 @@ el("admin-credit-grant-form").addEventListener("submit", async (event) => {
       : `已向 ${adjustment.email} 授予 ${amount} 额度，当前余额 ${adjustment.credits.toLocaleString("zh-CN")}。`;
     el("admin-credit-amount").value = "";
     el("admin-credit-note").value = "";
-    el("admin-credit-payment").value = "";
   } catch (error) {
     result.classList.add("error");
     result.textContent = error.message;

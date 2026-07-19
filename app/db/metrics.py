@@ -361,5 +361,15 @@ class MetricsStore:
             "daily": [{"day": day, **daily_by_day[day]} for day in days],
         }
 
+    def feature_usage(self) -> dict[str, object]:
+        self.initialize()
+        days = [(utc_now() - timedelta(days=offset)).astimezone(ZoneInfo("Asia/Shanghai")).date().isoformat() for offset in range(13, -1, -1)]
+        with closing(self._connect()) as connection:
+            rows = connection.execute("""SELECT substr(created_at,1,10), SUM(CASE WHEN stop_on_deliverable=1 THEN 1 ELSE 0 END), SUM(CASE WHEN stop_on_deliverable=0 AND emails_json NOT LIKE '%,%' THEN 1 ELSE 0 END), SUM(CASE WHEN stop_on_deliverable=0 AND emails_json LIKE '%,%' THEN 1 ELSE 0 END) FROM jobs WHERE parent_id IS NULL AND execution_target != 'aggregate' AND created_at >= ? GROUP BY substr(created_at,1,10)""", (days[0],)).fetchall()
+        by_day={str(day):{"single":int(single),"batch":int(batch),"discovery":int(discovery)} for day,discovery,single,batch in rows}
+        daily=[{"day":day,**by_day.get(day,{"single":0,"batch":0,"discovery":0})} for day in days]
+        totals={key:sum(item[key] for item in daily) for key in ("single","batch","discovery")}
+        return {"daily":daily,"totals":totals}
+
 
 metrics_store = MetricsStore()
