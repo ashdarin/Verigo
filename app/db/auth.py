@@ -718,6 +718,9 @@ class AuthStore:
                 """SELECT credits, amount_fen, paid_at FROM payment_orders
                    WHERE user_id=? AND status='paid' ORDER BY paid_at DESC LIMIT 20""", (user_id,)
             ).fetchall()
+            paid_used = int(connection.execute(
+                "SELECT COALESCE(SUM(paid_credits), 0) FROM credit_debits WHERE user_id=?", (user_id,)
+            ).fetchone()[0])
         transactions = [
             {"kind": "payment", "title": "充值到账", "credits": int(r[0]), "amount_fen": int(r[1]), "note": "", "created_at": str(r[2])}
             for r in paid_orders
@@ -726,13 +729,28 @@ class AuthStore:
             for r in adjustments
         ]
         transactions.sort(key=lambda item: str(item["created_at"]), reverse=True)
+        paid_adjustments_fen = sum(
+            (int(row[1]) if row[1] is not None else 0)
+            for row in adjustments if int(row[0]) > 0
+        )
+        refund_adjustments_fen = sum(
+            (int(row[1]) if row[1] is not None else 0)
+            for row in adjustments if int(row[0]) < 0
+        )
+        paid_order_fen = sum(int(row[1]) for row in paid_orders)
+        price_fen_per_100 = settings.verification_price_fen_per_100
         return {
-            "price_fen_per_100": settings.verification_price_fen_per_100,
+            "price_fen_per_100": price_fen_per_100,
             "available_verifications": user.credits,
             "paid_verifications": user.paid_credits,
             "trial_verifications": user.trial_credits,
             "trial_expires_at": user.trial_credit_expires_at,
             "verifications_used": usage_total,
+            "paid_verifications_used": paid_used,
+            "cumulative_recharge_fen": paid_order_fen + paid_adjustments_fen,
+            "cumulative_refund_fen": refund_adjustments_fen,
+            "paid_used_value_yuan": round(paid_used * price_fen_per_100 / 10_000, 2),
+            "remaining_paid_value_yuan": round(user.paid_credits * price_fen_per_100 / 10_000, 2),
             "usage_daily": [{"day": str(day), "verifications": int(total)} for day, total in reversed(usage_rows)],
             "transactions": transactions[:20],
         }
