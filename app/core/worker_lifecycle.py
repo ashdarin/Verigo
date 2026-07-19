@@ -74,7 +74,8 @@ class TencentCloudStudioApi:
         access_token = str(response.Token or "")
         if not access_token:
             raise RuntimeError("Cloud Studio returned an empty workspace access token")
-        for attempt in range(3):
+        # RunWorkspace reaches RUNNING before the IDE frontend is consistently ready.
+        for attempt in range(6):
             request = urllib.request.Request(
                 "https://ide.cloud.tencent.com/tty/"
                 f"{settings.cloudstudio_space_key}/?report_open_type=vps_lifecycle",
@@ -90,8 +91,8 @@ class TencentCloudStudioApi:
                 body = b""
             if b"workbench.web.main" in body:
                 return
-            if attempt < 2:
-                time.sleep(2)
+            if attempt < 5:
+                time.sleep(10)
         raise RuntimeError("Cloud Studio IDE session activation was not accepted")
 
     def bootstrap_worker(self) -> None:
