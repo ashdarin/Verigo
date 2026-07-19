@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import subprocess
 import threading
 from datetime import datetime, timedelta
 from typing import Any, Protocol
@@ -9,12 +10,14 @@ from tencentcloud.common import credential
 from tencentcloud.cloudstudio.v20230508 import cloudstudio_client, models
 
 from app.config import settings
+from app.core.cloudstudio_startup import worker_start_command
 from app.db.jobs import JobStore, WorkerRuntime, job_store, utc_now
 
 
 logger = logging.getLogger(__name__)
 TENCENT_QQ_TARGET = "tencent_qq"
 RESTART_WAITING_FOR_STOP = "restart_waiting_for_workspace_stop"
+SSH_BOOTSTRAP_COMPLETE = "ssh_bootstrap_complete"
 
 
 class WorkspaceApi(Protocol):
@@ -56,6 +59,59 @@ class TencentCloudStudioApi:
                 return str(workspace.Status or "")
         return None
 
+    def bootstrap_worker(self) -> None:
+        """Run the idempotent QQ worker bootstrap through Cloud Studio SSH."""
+        request = models.CreateWorkspaceTokenRequest()
+        request.SpaceKey = settings.cloudstudio_space_key
+        request.TokenExpiredLimitSec = settings.cloudstudio_ssh_token_expiry_seconds
+        request.Policies = ["all"]
+        response = self._client.CreateWorkspaceToken(request)
+        access_token = str(response.Token or "")
+        if not access_token:
+            raise RuntimeError("Cloud Studio returned an empty workspace access token")
+
+        remote = (
+            f"{access_token}@{settings.cloudstudio_space_key}.ssh.cloudstudio.work"
+        )
+        command = [
+            "ssh",
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "PasswordAuthentication=no",
+            "-o",
+            "KbdInteractiveAuthentication=no",
+            "-o",
+            "StrictHostKeyChecking=yes",
+            "-o",
+            f"UserKnownHostsFile={settings.cloudstudio_ssh_known_hosts_path}",
+            "-o",
+            "ConnectTimeout=20",
+            "-i",
+            str(settings.cloudstudio_ssh_key_path),
+            remote,
+            worker_start_command(),
+        ]
+        result = subprocess.run(
+            command,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=90,
+            check=False,
+        )
+        if result.returncode:
+            # Never include the command here: it contains the temporary access token.
+            detail = (
+                result.stderr.replace(access_token, "[redacted]")
+                .strip()
+                .replace("\n", " ")[:300]
+            )
+            raise RuntimeError(
+                f"Cloud Studio SSH bootstrap failed (exit {result.returncode}): {detail}"
+            )
+
 
 class WorkerLifecycleCoordinator:
     def __init__(
@@ -80,6 +136,16 @@ class WorkerLifecycleCoordinator:
             and self.config.cloudstudio_secret_key
             and self.config.cloudstudio_region
             and self.config.cloudstudio_space_key
+        )
+
+    @property
+    def ssh_bootstrap_configured(self) -> bool:
+        return bool(
+            getattr(self.config, "cloudstudio_ssh_enabled", False)
+            and getattr(self.config, "cloudstudio_ssh_key_path", None)
+            and self.config.cloudstudio_ssh_key_path.is_file()
+            and getattr(self.config, "cloudstudio_ssh_known_hosts_path", None)
+            and self.config.cloudstudio_ssh_known_hosts_path.is_file()
         )
 
     def _workspace_api(self) -> WorkspaceApi:
@@ -147,6 +213,38 @@ class WorkerLifecycleCoordinator:
                 request_id,
             )
 
+    def _bootstrap_worker(
+        self, runtime: WorkerRuntime, now: datetime, *, force: bool = False
+    ) -> None:
+        if not self.ssh_bootstrap_configured:
+            return
+        if runtime.last_wake_error == SSH_BOOTSTRAP_COMPLETE:
+            return
+        if not force and runtime.wake_requested_at and now < runtime.wake_requested_at + timedelta(
+            seconds=self.config.cloudstudio_wake_retry_seconds
+        ):
+            return
+        bootstrap = getattr(self._workspace_api(), "bootstrap_worker", None)
+        if not callable(bootstrap):
+            logger.error("Cloud Studio SSH bootstrap API is unavailable")
+            return
+        try:
+            bootstrap()
+        except Exception as exc:
+            # Tencent's access token must never be logged, including via a command repr.
+            detail = str(exc).replace("\n", " ")[:500]
+            self.store.record_wake_attempt(
+                TENCENT_QQ_TARGET, deadline=runtime.wake_deadline_at, error=detail
+            )
+            logger.warning("Cloud Studio SSH bootstrap failed: %s", detail)
+            return
+        self.store.record_wake_attempt(
+            TENCENT_QQ_TARGET,
+            deadline=runtime.wake_deadline_at,
+            error=SSH_BOOTSTRAP_COMPLETE,
+        )
+        logger.info("Cloud Studio SSH worker bootstrap completed")
+
     def _wake_worker(self, runtime: WorkerRuntime, now: datetime) -> None:
         if runtime.wake_deadline_at:
             if now >= runtime.wake_deadline_at:
@@ -166,6 +264,16 @@ class WorkerLifecycleCoordinator:
                     self.store.clear_wake_state(TENCENT_QQ_TARGET)
                     self._wake_worker(
                         self.store.worker_runtime(TENCENT_QQ_TARGET), now
+                    )
+            else:
+                try:
+                    status = self._workspace_api().workspace_status()
+                except Exception as exc:
+                    logger.warning("Could not check Cloud Studio startup status: %s", exc)
+                    return
+                if status == "RUNNING":
+                    self._bootstrap_worker(
+                        runtime, now, force=runtime.last_wake_error is None
                     )
             return
 
@@ -187,6 +295,20 @@ class WorkerLifecycleCoordinator:
             status = None
 
         if status == "RUNNING":
+            if self.ssh_bootstrap_configured:
+                deadline = now + timedelta(
+                    seconds=self.config.cloudstudio_startup_timeout_seconds
+                )
+                self.store.record_wake_attempt(
+                    TENCENT_QQ_TARGET, deadline=deadline, error=None
+                )
+                self.store.set_queued_target_message(
+                    TENCENT_QQ_TARGET, "Tencent QQ verification node is starting, please wait"
+                )
+                self._bootstrap_worker(
+                    self.store.worker_runtime(TENCENT_QQ_TARGET), now, force=True
+                )
+                return
             deadline = now + timedelta(
                 seconds=self.config.cloudstudio_startup_timeout_seconds
             )

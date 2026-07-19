@@ -111,6 +111,16 @@ class Settings:
     cloudstudio_secret_key: str = os.getenv("VERIGO_CLOUDSTUDIO_SECRET_KEY", "")
     cloudstudio_region: str = os.getenv("VERIGO_CLOUDSTUDIO_REGION", "")
     cloudstudio_space_key: str = os.getenv("VERIGO_CLOUDSTUDIO_SPACE_KEY", "")
+    cloudstudio_ssh_enabled: bool = env_bool("VERIGO_CLOUDSTUDIO_SSH_ENABLED", False)
+    cloudstudio_ssh_key_path: Path = Path(
+        os.getenv("VERIGO_CLOUDSTUDIO_SSH_KEY_PATH", "")
+    )
+    cloudstudio_ssh_known_hosts_path: Path = Path(
+        os.getenv("VERIGO_CLOUDSTUDIO_SSH_KNOWN_HOSTS_PATH", "")
+    )
+    cloudstudio_ssh_token_expiry_seconds: int = max(
+        60, int(os.getenv("VERIGO_CLOUDSTUDIO_SSH_TOKEN_EXPIRY_SECONDS", "300"))
+    )
     cloudstudio_worker_online_seconds: int = max(
         15, int(os.getenv("VERIGO_CLOUDSTUDIO_WORKER_ONLINE_SECONDS", "45"))
     )

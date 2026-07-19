@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.core.worker_lifecycle import (
     RESTART_WAITING_FOR_STOP,
+    SSH_BOOTSTRAP_COMPLETE,
     WorkerLifecycleCoordinator,
 )
 from app.db.jobs import WorkerRuntime
@@ -23,7 +24,9 @@ class FakeApi:
         self.run_calls = 0
         self.stop_calls = 0
         self.fail_run = False
+        self.fail_bootstrap = False
         self.status = "STOPPED"
+        self.bootstrap_calls = 0
 
     def run_workspace(self) -> str:
         self.run_calls += 1
@@ -38,6 +41,11 @@ class FakeApi:
 
     def workspace_status(self) -> str:
         return self.status
+
+    def bootstrap_worker(self) -> None:
+        self.bootstrap_calls += 1
+        if self.fail_bootstrap:
+            raise RuntimeError("simulated SSH bootstrap failure")
 
 
 class FakeStore:
@@ -128,6 +136,9 @@ config = SimpleNamespace(
     cloudstudio_wake_retry_seconds=15,
     cloudstudio_idle_stop_seconds=60,
     cloudstudio_lifecycle_poll_seconds=5,
+    cloudstudio_ssh_enabled=False,
+    cloudstudio_ssh_key_path=Path(__file__),
+    cloudstudio_ssh_known_hosts_path=Path(__file__),
 )
 
 current_time = datetime(2026, 7, 19, tzinfo=timezone.utc)
@@ -177,6 +188,29 @@ current_time += timedelta(seconds=5)
 restart_coordinator.tick(current_time)
 assert restart_api.run_calls == 1
 assert restart_store.runtime.last_wake_error is None
+
+ssh_store = FakeStore()
+ssh_api = FakeApi()
+ssh_api.status = "RUNNING"
+ssh_coordinator = WorkerLifecycleCoordinator(
+    store=ssh_store,
+    api=ssh_api,
+    config=SimpleNamespace(**(vars(config) | {"cloudstudio_ssh_enabled": True})),
+)
+ssh_store.active = 1
+ssh_coordinator.tick(current_time)
+assert ssh_api.stop_calls == 0
+assert ssh_api.run_calls == 0
+assert ssh_api.bootstrap_calls == 1
+assert ssh_store.runtime.last_wake_error == SSH_BOOTSTRAP_COMPLETE
+
+current_time += timedelta(seconds=30)
+ssh_coordinator.tick(current_time)
+assert ssh_api.bootstrap_calls == 1
+
+ssh_store.runtime = replace(ssh_store.runtime, last_seen_at=current_time)
+ssh_coordinator.tick(current_time)
+assert ssh_store.runtime.wake_deadline_at is None
 
 store.runtime = WorkerRuntime(target=TARGET)
 api.fail_run = True
