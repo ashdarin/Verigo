@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import subprocess
 import threading
+import time
 import urllib.request
 from datetime import datetime, timedelta
 from typing import Any, Protocol
@@ -73,18 +74,25 @@ class TencentCloudStudioApi:
         access_token = str(response.Token or "")
         if not access_token:
             raise RuntimeError("Cloud Studio returned an empty workspace access token")
-        request = urllib.request.Request(
-            "https://ide.cloud.tencent.com/tty/"
-            f"{settings.cloudstudio_space_key}/?report_open_type=vps_lifecycle",
-            headers={
-                "Authorization": f"Bearer {access_token}",
-                "User-Agent": "Mozilla/5.0",
-            },
-        )
-        with urllib.request.urlopen(request, timeout=30) as response:
-            body = response.read()
-        if b"workbench.web.main" not in body:
-            raise RuntimeError("Cloud Studio IDE session activation was not accepted")
+        for attempt in range(3):
+            request = urllib.request.Request(
+                "https://ide.cloud.tencent.com/tty/"
+                f"{settings.cloudstudio_space_key}/?report_open_type=vps_lifecycle",
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                    "User-Agent": "Mozilla/5.0",
+                },
+            )
+            try:
+                with urllib.request.urlopen(request, timeout=30) as response:
+                    body = response.read()
+            except Exception:
+                body = b""
+            if b"workbench.web.main" in body:
+                return
+            if attempt < 2:
+                time.sleep(2)
+        raise RuntimeError("Cloud Studio IDE session activation was not accepted")
 
     def bootstrap_worker(self) -> None:
         """Run the idempotent QQ worker bootstrap through Cloud Studio SSH."""
