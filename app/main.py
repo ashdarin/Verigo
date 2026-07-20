@@ -11,6 +11,7 @@ from app.api.auth import auth_router
 from app.api.routes import router
 from app.config import BASE_DIR, settings
 from app.core.legacy import load_persistent_cache, save_persistent_cache
+from app.tasks.verification import requeue_recent_single_temporary_jobs
 from app.core.worker_lifecycle import worker_lifecycle
 from app.core.cloudshell_lifecycle import cloudshell_lifecycle
 from app.db.jobs import job_store
@@ -26,6 +27,7 @@ async def lifespan(_: FastAPI):
     settings.results_dir.mkdir(parents=True, exist_ok=True)
     job_store.initialize()
     job_store.release_legacy_deferred_retries()
+    requeue_recent_single_temporary_jobs()
     auth_store.initialize()
     metrics_store.initialize()
     load_persistent_cache()

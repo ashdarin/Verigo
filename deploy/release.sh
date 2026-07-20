@@ -111,6 +111,7 @@ fi
 
 set_application_owner
 chmod 600 /etc/verigo/verigo.env
+systemctl try-restart 'verigo-worker@*.service' || true
 systemctl restart verigo
 
 for _ in {1..20}; do

@@ -403,6 +403,28 @@ def schedule_remote_temporary_retry(job: Job) -> bool:
     return True
 
 
+def requeue_recent_single_temporary_jobs() -> int:
+    """Repair completed single checks left in a temporary state by an older worker."""
+    repaired = 0
+    for job in job_store.recent_completed_single_jobs(utc_now() - timedelta(hours=24)):
+        normalized = [normalize_result(result) for result in job.results]
+        if not any(smtp_temporary_status(result) for result in normalized):
+            continue
+        job.results = normalized
+        job.status = "queued"
+        job.finished_at = None
+        job.error = "检测到未完成的 SMTP 临时结果，已恢复自动重试"
+        job.worker_id = None
+        job.heartbeat_at = utc_now()
+        job.deferred_retry_at = None
+        job.temporary_retry_attempts = 0
+        job_store.persist(job)
+        repaired += 1
+    if repaired:
+        logger.info("Requeued %s completed single temporary SMTP jobs", repaired)
+    return repaired
+
+
 def run_job(job: Job) -> None:
     """Execute a claimed job and make incremental progress visible through SQLite."""
     job.status = "running"

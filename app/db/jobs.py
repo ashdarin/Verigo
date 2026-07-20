@@ -290,6 +290,19 @@ class JobStore:
             ).fetchall()
         return [self._job_from_row(row) for row in rows]
 
+    def recent_completed_single_jobs(self, since: datetime) -> list[Job]:
+        """Return standalone single-address jobs eligible for a narrow repair pass."""
+        self.initialize()
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                f"""SELECT {self._select_columns()} FROM jobs
+                WHERE status='completed' AND parent_id IS NULL AND execution_target != 'aggregate'
+                    AND created_at >= ? AND emails_json NOT LIKE '%,%'
+                ORDER BY created_at""",
+                (since.isoformat(),),
+            ).fetchall()
+        return [self._job_from_row(row) for row in rows]
+
     def children(self, parent_id: str) -> list[Job]:
         self.initialize()
         with closing(self._connect()) as connection:

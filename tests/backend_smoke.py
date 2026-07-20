@@ -49,6 +49,7 @@ from app.main import app
 from app.tasks.verification import (
     normalize_result,
     finalize_temporary_smtp_results,
+    requeue_recent_single_temporary_jobs,
     sync_parent_job,
     schedule_remote_temporary_retry,
 )
@@ -148,6 +149,17 @@ assert schedule_remote_temporary_retry(remote_retry_job)
 assert remote_retry_job.status == "queued"
 assert remote_retry_job.deferred_retry_at is not None
 assert remote_retry_job.temporary_retry_attempts == 1
+
+stale_single_temporary = Job(
+    id="smoketemp003", emails=["pengjie.ai@porsche.cn"], worker_count=1,
+    status="completed", finished_at=utc_now(), results=[normalize_result({
+        "email": "pengjie.ai@porsche.cn", "deliverable": False,
+        "smtp_result": "450 temporary SMTP failure",
+    })],
+)
+job_store.add(stale_single_temporary)
+assert requeue_recent_single_temporary_jobs() == 1
+assert job_store.get(stale_single_temporary.id).status == "queued"
 
 legacy_deferred_job = Job(
     id="smoketemp002", emails=["pengjie.ai@porsche.cn"], worker_count=1,
