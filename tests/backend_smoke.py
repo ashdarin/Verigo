@@ -4,6 +4,7 @@ import io
 import os
 import sys
 import tempfile
+from contextlib import nullcontext
 from pathlib import Path
 
 
@@ -92,6 +93,42 @@ assert greylisted["valid"] is True
 assert greylisted["checks"]["smtp"] is None
 assert greylisted["temporary_smtp_code"] == "450"
 assert "灰名单" in greylisted["smtp_result"]
+
+
+class TemporarySmtpServer:
+    def connect(self, *_args):
+        return 220, b"ready"
+
+    def ehlo(self, *_args):
+        return 250, b"ok"
+
+    def mail(self, *_args):
+        return 250, b"ok"
+
+    def rcpt(self, *_args):
+        return 450, b"4.2.0 Sender address rejected: Greylisted"
+
+    def quit(self):
+        return None
+
+
+legacy_module = load_legacy_module()
+original_smtp = legacy_module.smtplib.SMTP
+original_sleep = legacy_module.time.sleep
+try:
+    legacy_module.smtplib.SMTP = lambda **_kwargs: TemporarySmtpServer()
+    legacy_module.time.sleep = lambda _seconds: None
+    verifier = legacy_module.EmailVerifier()
+    verifier.smtp_gate = lambda _mx_host: nullcontext(True)
+    verifier.record_smtp_response = lambda *_args: None
+    verdict, detail = verifier.check_smtp_delivery(
+        "pengjie.ai@porsche.cn", "mail.example.test", "fast"
+    )
+finally:
+    legacy_module.smtplib.SMTP = original_smtp
+    legacy_module.time.sleep = original_sleep
+assert verdict is None
+assert "450" in detail
 
 deferred_job = Job(
     id="smoketemp001", emails=["pengjie.ai@porsche.cn"], worker_count=1,

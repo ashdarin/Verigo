@@ -545,7 +545,7 @@ class EmailVerifier:
             if not gate_acquired:
                 if config['strategy_type'] in ('qq_aggressive', 'qq_optimized'):
                     return None, f"QQ 验证节点正在退避等待: {mx_host}"
-                return False, f"SMTP连接排队超时: {mx_host}"
+                return None, f"SMTP连接排队超时: {mx_host}"
 
             for attempt in range(config['max_attempts']):
                 if attempt:
@@ -612,7 +612,7 @@ class EmailVerifier:
 
         if config['strategy_type'] in ('qq_aggressive', 'qq_optimized'):
             return None, f"{config['provider']} SMTP 暂时无法确认: {last_failure or '无有效响应'}"
-        return False, f"{config['provider']}多次SMTP尝试失败: {last_failure or '无有效响应'}"
+        return None, f"{config['provider']} SMTP暂时无法确认: {last_failure or '无有效响应'}"
 
     @staticmethod
     def _is_qq_policy_response(code, response):
@@ -845,7 +845,7 @@ class EmailVerifier:
 
         with self.smtp_gate(mx_host) as gate_acquired:
             if not gate_acquired:
-                return False, f"SMTP连接排队超时: {mx_host}"
+                return None, f"SMTP连接排队超时: {mx_host}"
             for attempt in range(config['max_attempts']):
                 if attempt:
                     time.sleep(config['mx_delay'])
@@ -878,11 +878,9 @@ class EmailVerifier:
                         return True, "250 邮箱存在"
                     if code == 550:
                         return False, "550 邮箱不存在"
-                    if 400 <= code < 500:
-                        if isinstance(response, bytes):
-                            response = response.decode("utf-8", errors="replace")
-                        return None, f"RCPT TO阶段返回 {code}: {str(response)[:160]}"
-                    last_failure = f"RCPT TO阶段返回 {code}"
+                    if isinstance(response, bytes):
+                        response = response.decode("utf-8", errors="replace")
+                    last_failure = f"RCPT TO阶段返回 {code}: {str(response)[:160]}"
                 except smtplib.SMTPServerDisconnected:
                     self.record_smtp_failure(mx_host)
                     last_failure = f"SMTP连接被服务器关闭（{phase}阶段）"
@@ -902,7 +900,9 @@ class EmailVerifier:
                         except Exception:
                             pass
 
-        return False, f"多次SMTP尝试失败: {last_failure or '无有效响应'}"
+        # A failed SMTP conversation is not proof that a recipient does not exist.
+        # Only an explicit RCPT 550 above is allowed to produce a negative verdict.
+        return None, f"SMTP暂时无法确认: {last_failure or '无有效响应'}"
 
     def verify_email_comprehensive(self, email, process_id=0):
         """综合验证邮箱 - 保持原版本逻辑，增加QQ和Outlook修复"""
