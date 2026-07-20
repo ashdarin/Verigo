@@ -769,12 +769,35 @@ class AuthStore:
             adjustments = connection.execute("SELECT delta, amount_fen, note, created_at FROM admin_credit_adjustments WHERE user_id=? ORDER BY created_at DESC LIMIT 10", (user.id,)).fetchall()
         return {"email": user.email, "email_verified": user.email_verified, "available_verifications": user.credits, "paid_verifications": user.paid_credits, "trial_verifications": user.trial_credits, "verifications_used": usage, "jobs": {str(status): int(count) for status, count in jobs}, "adjustments": [{"delta": int(delta), "amount_fen": int(amount) if amount is not None else None, "note": str(note), "created_at": str(created)} for delta, amount, note, created in adjustments]}
 
-    def list_admin_accounts(self, offset: int = 0, limit: int = 50) -> tuple[list[dict[str, object]], int]:
+    def list_admin_accounts(
+        self, offset: int = 0, limit: int = 50
+    ) -> tuple[list[dict[str, object]], int, dict[str, int]]:
         self.initialize()
         with closing(self._connect()) as connection:
             total = int(connection.execute("SELECT COUNT(*) FROM users WHERE email IS NOT NULL").fetchone()[0])
+            summary_row = connection.execute(
+                """
+                SELECT
+                    COALESCE(SUM(credits), 0),
+                    COALESCE((
+                        SELECT SUM(remaining_credits) FROM promo_credit_grants
+                        WHERE remaining_credits > 0 AND expires_at > ?
+                    ), 0),
+                    COALESCE((
+                        SELECT SUM(-delta) FROM credit_ledger
+                        WHERE kind='verification'
+                    ), 0)
+                FROM users WHERE email IS NOT NULL
+                """,
+                (utc_now().isoformat(),),
+            ).fetchone()
             rows = connection.execute("""SELECT u.id,u.email,u.email_verified,u.credits,u.created_at,COALESCE((SELECT SUM(remaining_credits) FROM promo_credit_grants p WHERE p.user_id=u.id AND p.remaining_credits>0 AND p.expires_at>?),0),COALESCE((SELECT SUM(-delta) FROM credit_ledger l WHERE l.user_id=u.id AND l.kind='verification'),0) FROM users u WHERE u.email IS NOT NULL ORDER BY u.created_at DESC LIMIT ? OFFSET ?""", (utc_now().isoformat(), limit, offset)).fetchall()
-        return ([{"email":str(r[1]),"email_verified":bool(r[2]),"paid_verifications":int(r[3]),"trial_verifications":int(r[5]),"used_verifications":int(r[6]),"created_at":str(r[4])} for r in rows], total)
+        summary = {
+            "paid_verifications": int(summary_row[0]),
+            "trial_verifications": int(summary_row[1]),
+            "used_verifications": int(summary_row[2]),
+        }
+        return ([{"email":str(r[1]),"email_verified":bool(r[2]),"paid_verifications":int(r[3]),"trial_verifications":int(r[5]),"used_verifications":int(r[6]),"created_at":str(r[4])} for r in rows], total, summary)
 
     def create_notification(self, user_id: str, kind: str, title: str, body: str) -> None:
         """Record a user-facing event for payment and other future workflows."""

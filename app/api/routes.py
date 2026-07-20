@@ -504,8 +504,11 @@ def admin_account_snapshot(
 
 @router.get("/admin/accounts/list")
 def admin_accounts(offset: int = Query(default=0, ge=0), limit: int = Query(default=50, ge=10, le=100), _: Annotated[User, Depends(require_admin)] = None) -> dict[str, object]:
-    items, total = auth_store.list_admin_accounts(offset, limit)
-    return {"items": items, "total": total, "offset": offset, "limit": limit}
+    items, total, summary = auth_store.list_admin_accounts(offset, limit)
+    return {
+        "items": items, "total": total, "summary": summary,
+        "offset": offset, "limit": limit,
+    }
 
 @router.get("/admin/feature-usage")
 def admin_feature_usage(_: Annotated[User, Depends(require_admin)]) -> dict[str, object]:

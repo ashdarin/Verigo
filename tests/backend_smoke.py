@@ -611,6 +611,11 @@ with TestClient(app) as admin_account:
     assert deducted.status_code == 200, deducted.text
     assert deducted.json()["delta"] == -7
     assert deducted.json()["credits"] == 18
+    account_list = admin_account.get("/api/admin/accounts/list?offset=0&limit=50")
+    assert account_list.status_code == 200, account_list.text
+    assert account_list.json()["total"] >= 2
+    assert account_list.json()["summary"]["paid_verifications"] >= 18
+    assert account_list.json()["summary"]["used_verifications"] >= 0
     assert admin_account.post(
         "/api/admin/credits/deduct",
         json={"email": "manual-credit@example.com", "credits": 19},
