@@ -5,7 +5,7 @@ from typing import Any
 
 
 TEMPORARY_SMTP_CODES = frozenset({"421", "450", "451", "452"})
-GREYLIST_MARKERS = ("greylist", "greylisted", "postgrey")
+GREYLIST_MARKERS = ("greylist", "greylisted", "postgrey", "灰名单")
 
 
 def smtp_temporary_status(result: dict[str, Any]) -> str | None:

@@ -48,6 +48,7 @@ from app.tasks.verification import (
     job_progress,
     normalize_result,
     finalize_temporary_smtp_results,
+    schedule_greylist_retry,
     schedule_remote_temporary_retry,
     summarize,
     sync_parent_job,
@@ -276,6 +277,7 @@ def serialize_job(job: Job) -> JobResponse:
         download_url=f"/api/jobs/{job.id}/download" if is_done else None,
         download_name=verification_filename(job) if is_done else None,
         queue_position=job_store.queue_position(job.id),
+        retry_at=job.deferred_retry_at.isoformat() if job.deferred_retry_at else None,
         stop_on_deliverable=job.stop_on_deliverable,
         qq_slow=any(is_qq_email(email) for email in job.emails),
         access_token=job.guest_token,
@@ -398,6 +400,10 @@ def complete_tencent_qq_job(
         return serialize_job(job)
     job = require_remote_job(job_id, (worker_id or "").strip(), execution_target)
     merge_worker_results(job, payload.results)
+    if schedule_greylist_retry(job):
+        job_store.persist(job)
+        sync_parent_job(job)
+        return serialize_job(job)
     if schedule_remote_temporary_retry(job):
         job_store.persist(job)
         sync_parent_job(job)

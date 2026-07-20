@@ -50,6 +50,7 @@ from app.tasks.verification import (
     normalize_result,
     finalize_temporary_smtp_results,
     requeue_recent_single_temporary_jobs,
+    schedule_greylist_retry,
     sync_parent_job,
     schedule_remote_temporary_retry,
 )
@@ -133,10 +134,30 @@ assert verdict is None
 assert "450" in detail
 
 finalize_temporary_smtp_results([greylisted])
-assert greylisted["deliverable"] is False
-assert greylisted["valid"] is False
-assert greylisted["temporary_retries_exhausted"] is True
-assert "连续 3 次" in greylisted["smtp_result"]
+assert greylisted["deliverable"] is None
+assert greylisted["valid"] is True
+assert greylisted["greylist_retry_exhausted"] is True
+
+ordinary_temporary = normalize_result({
+    "email": "temporary@example.com", "deliverable": None,
+    "smtp_result": "452 temporary SMTP failure",
+})
+finalize_temporary_smtp_results([ordinary_temporary])
+assert ordinary_temporary["deliverable"] is False
+assert ordinary_temporary["valid"] is False
+assert ordinary_temporary["temporary_retries_exhausted"] is True
+assert "连续 3 次" in ordinary_temporary["smtp_result"]
+
+greylist_retry_job = Job(
+    id="smoketemp005", emails=["pengjie.ai@porsche.cn"], worker_count=1,
+    status="running", results=[normalize_result({
+        "email": "pengjie.ai@porsche.cn", "deliverable": None,
+        "smtp_result": "450 Sender address rejected: Greylisted",
+    })],
+)
+assert schedule_greylist_retry(greylist_retry_job)
+assert greylist_retry_job.status == "queued"
+assert greylist_retry_job.deferred_retry_at is not None
 
 remote_retry_job = Job(
     id="smoketemp001", emails=["pengjie.ai@porsche.cn"], worker_count=1,

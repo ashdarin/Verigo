@@ -21,6 +21,7 @@ const state = {
   notificationTimer: null,
   adminAccountOffset: 0,
   completedTemporaryPolls: 0,
+  retryCountdownTimer: null,
 };
 
 const pageSize = 50;
@@ -414,11 +415,30 @@ function showJob(job) {
   el("progress-bar").style.width = `${job.progress}%`;
   const progressCopy = job.error
     || (job.status === "queued" && job.queue_position ? `排队中，前方还有 ${job.queue_position - 1} 个任务` : `${job.completed} / ${job.total} 已处理`);
-  el("progress-copy").textContent = job.qq_slow
-    ? `${progressCopy}；QQ 邮箱采用低并发和自动退避策略，请耐心等待。`
-    : progressCopy;
+  renderJobProgress(job, progressCopy);
   if (job.summary) renderSummary(job.summary);
   el("download-button").disabled = !job.download_url;
+}
+
+function renderJobProgress(job, progressCopy) {
+  clearInterval(state.retryCountdownTimer);
+  const suffix = job.qq_slow ? "；QQ 邮箱采用低并发和自动退避策略，请耐心等待。" : "";
+  const retryAt = job.retry_at ? new Date(job.retry_at) : null;
+  const render = () => {
+    if (!retryAt || Number.isNaN(retryAt.getTime())) {
+      el("progress-copy").textContent = `${progressCopy}${suffix}`;
+      return;
+    }
+    const seconds = Math.max(0, Math.ceil((retryAt.getTime() - Date.now()) / 1000));
+    const countdown = seconds >= 60
+      ? `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒`
+      : `${seconds} 秒`;
+    el("progress-copy").textContent = `${progressCopy}，${countdown} 后再次复核${suffix}`;
+  };
+  render();
+  if (retryAt && retryAt.getTime() > Date.now()) {
+    state.retryCountdownTimer = window.setInterval(render, 1000);
+  }
 }
 
 function formatJobName(timestamp) {

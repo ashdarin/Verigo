@@ -146,6 +146,8 @@ class Settings:
     worker_lease_seconds: int = int(os.getenv("VERIGO_WORKER_LEASE_SECONDS", "180"))
     temporary_smtp_immediate_retries: int = 3
     temporary_smtp_retry_seconds: float = 60.0
+    smtp_greylist_retry_seconds: int = 300
+    smtp_greylist_retry_max_attempts: int = 2
     verification_cache_hours: int = int(os.getenv("VERIGO_VERIFICATION_CACHE_HOURS", "24"))
     verified_email_recheck_days: int = int(os.getenv("VERIGO_VERIFIED_EMAIL_RECHECK_DAYS", "30"))
     mail_host: str = os.getenv("VERIGO_MAIL_HOST", "")

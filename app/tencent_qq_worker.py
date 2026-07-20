@@ -10,7 +10,7 @@ from typing import Any
 
 from app.config import settings
 from app.core.legacy import create_verifier
-from app.core.result_retry import smtp_temporary_status
+from app.core.result_retry import is_smtp_greylisted, smtp_temporary_status
 
 
 WORKER_TARGET = os.getenv("VERIGO_REMOTE_WORKER_TARGET", "tencent-qq")
@@ -99,6 +99,7 @@ def retry_temporary_smtp_results(
             if (
                 0 <= index < len(emails)
                 and smtp_temporary_status(result)
+                and not is_smtp_greylisted(result)
             )
         ]
         if not retry_items or stopped(job_id, control):
@@ -127,7 +128,7 @@ def retry_temporary_smtp_results(
                 by_index[original_index] = result
                 report_result(job_id, result)
     for result in by_index.values():
-        if smtp_temporary_status(result):
+        if smtp_temporary_status(result) and not is_smtp_greylisted(result):
             result["temporary_smtp_retry_count"] = settings.temporary_smtp_immediate_retries
     return [by_index[index] for index in sorted(by_index)]
 

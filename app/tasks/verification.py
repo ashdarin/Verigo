@@ -331,7 +331,7 @@ def retry_temporary_smtp_results(job: Job, by_index: dict[int, dict[str, Any]]) 
         retry_items = [
             (index, job.emails[index])
             for index, result in by_index.items()
-            if smtp_temporary_status(result)
+            if smtp_temporary_status(result) and not is_smtp_greylisted(result)
         ]
         if not retry_items or job_store.is_stopped(job.id):
             return
@@ -364,6 +364,12 @@ def finalize_temporary_smtp_results(results: list[dict[str, Any]]) -> None:
     for result in results:
         code = smtp_temporary_status(result)
         if not code:
+            continue
+        if is_smtp_greylisted(result):
+            result["deliverable"] = None
+            result["valid"] = True
+            result["greylist_retry_exhausted"] = True
+            result["message"] = f"{code} 邮件服务器灰名单复核后仍无法确认"
             continue
         raw_detail = str(result.get("smtp_raw_result") or result.get("smtp_result") or "")
         result["smtp_raw_result"] = raw_detail
@@ -403,12 +409,38 @@ def schedule_remote_temporary_retry(job: Job) -> bool:
     return True
 
 
+def schedule_greylist_retry(job: Job) -> bool:
+    """Honor SMTP greylisting's published retry window without tying up a worker."""
+    greylisted = [result for result in job.results if is_smtp_greylisted(result)]
+    if not greylisted or job.temporary_retry_attempts >= settings.smtp_greylist_retry_max_attempts:
+        return False
+
+    job.temporary_retry_attempts += 1
+    job.deferred_retry_at = utc_now() + timedelta(
+        seconds=settings.smtp_greylist_retry_seconds
+    )
+    job.status = "queued"
+    job.finished_at = None
+    job.worker_id = None
+    job.heartbeat_at = utc_now()
+    job.error = f"SMTP 灰名单，正在等待下一次复核（第 {job.temporary_retry_attempts}/2 次）"
+    for result in greylisted:
+        result["retry_at"] = job.deferred_retry_at.isoformat()
+    return True
+
+
 def requeue_recent_single_temporary_jobs() -> int:
     """Repair completed single checks left in a temporary state by an older worker."""
     repaired = 0
     for job in job_store.recent_completed_single_jobs(utc_now() - timedelta(hours=24)):
         normalized = [normalize_result(result) for result in job.results]
-        if not any(smtp_temporary_status(result) for result in normalized):
+        pending = [
+            result for result in normalized
+            if smtp_temporary_status(result)
+            and not result.get("temporary_retries_exhausted")
+            and not result.get("greylist_retry_exhausted")
+        ]
+        if not pending:
             continue
         job.results = normalized
         job.status = "queued"
@@ -499,6 +531,9 @@ def run_job(job: Job) -> None:
                 result["original_index"] = missing_indices[relative_index]
                 by_index[result["original_index"]] = normalize_result(result)
 
+        job.results = [by_index[index] for index in sorted(by_index)]
+        if schedule_greylist_retry(job):
+            return
         retry_temporary_smtp_results(job, by_index)
 
         job.results = [by_index[index] for index in sorted(by_index)]
