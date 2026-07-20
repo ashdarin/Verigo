@@ -223,6 +223,27 @@ class JobStore:
                 """
             ).rowcount
 
+    def clear_dns_negative_cache(self) -> int:
+        """Remove stale DNS-negative results after resolver logic changes."""
+        self.initialize()
+        with self._lock, closing(self._connect()) as connection:
+            rows = connection.execute(
+                "SELECT email, result_json FROM verification_cache"
+            ).fetchall()
+            stale = []
+            for email, result_json in rows:
+                try:
+                    checks = json.loads(result_json).get("checks") or {}
+                except json.JSONDecodeError:
+                    continue
+                if checks.get("domain") is False or checks.get("mx") is False:
+                    stale.append((email,))
+            if stale:
+                connection.executemany(
+                    "DELETE FROM verification_cache WHERE email=?", stale
+                )
+            return len(stale)
+
     def add(self, job: Job, max_active: int | None = None) -> None:
         self.initialize()
         with self._lock, closing(self._connect()) as connection:
@@ -697,7 +718,6 @@ class JobStore:
                 result.get("deliverable") is False
                 and ("RCPT TO" in detail or "邮箱不存在" in detail)
             )
-            cacheable = cacheable or checks.get("domain") is False or checks.get("mx") is False
             if cacheable and result.get("email"):
                 rows.append(
                     (

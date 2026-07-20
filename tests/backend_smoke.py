@@ -203,6 +203,15 @@ job_store.add(completed_retry_notice)
 assert job_store.clear_completed_retry_notices() == 1
 assert job_store.get(completed_retry_notice.id).error is None
 
+job_store.cache_results([{
+    "email": "mx-only-cache@example.com", "deliverable": False,
+    "checks": {"domain": False, "mx": False, "smtp": False},
+    "smtp_result": "域名不存在",
+}])
+assert "mx-only-cache@example.com" not in job_store.cached_results(
+    ["mx-only-cache@example.com"]
+)
+
 legacy_deferred_job = Job(
     id="smoketemp002", emails=["pengjie.ai@porsche.cn"], worker_count=1,
     status="queued", deferred_retry_at=utc_now(),
