@@ -444,6 +444,7 @@ def run_job(job: Job) -> None:
             job_store.record_catch_all(job)
             job.finished_at = utc_now()
             write_csv(job)
+            job.error = None
             job.status = "completed"
             return
 
@@ -506,6 +507,7 @@ def run_job(job: Job) -> None:
         job_store.record_catch_all(job)
         job.finished_at = utc_now()
         write_csv(job)
+        job.error = None
         job.status = "completed"
     except Exception as exc:
         logger.exception("Verification job %s failed", job.id)

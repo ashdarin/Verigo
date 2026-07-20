@@ -212,6 +212,17 @@ class JobStore:
                 """
             ).rowcount
 
+    def clear_completed_retry_notices(self) -> int:
+        """Remove obsolete retry notices after a repaired task has completed."""
+        self.initialize()
+        with self._lock, closing(self._connect()) as connection:
+            return connection.execute(
+                """
+                UPDATE jobs SET error = NULL
+                WHERE status = 'completed' AND error LIKE '检测到未完成的 SMTP 临时结果%'
+                """
+            ).rowcount
+
     def add(self, job: Job, max_active: int | None = None) -> None:
         self.initialize()
         with self._lock, closing(self._connect()) as connection:
@@ -391,6 +402,7 @@ class JobStore:
             job.started_at = job.started_at or now
             job.heartbeat_at = now
             job.deferred_retry_at = None
+            job.error = None
             connection.execute(
                 """
                 UPDATE jobs SET status = 'running', worker_id = ?, started_at = ?, heartbeat_at = ?,

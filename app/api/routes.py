@@ -407,6 +407,7 @@ def complete_tencent_qq_job(
     job_store.record_catch_all(job)
     job.finished_at = utc_now()
     write_csv(job)
+    job.error = None
     job.status = "completed"
     job_store.persist(job)
     sync_parent_job(job)

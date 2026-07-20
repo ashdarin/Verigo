@@ -161,6 +161,14 @@ job_store.add(stale_single_temporary)
 assert requeue_recent_single_temporary_jobs() == 1
 assert job_store.get(stale_single_temporary.id).status == "queued"
 
+completed_retry_notice = Job(
+    id="smoketemp004", emails=["confirmed@example.com"], worker_count=1,
+    status="completed", error="检测到未完成的 SMTP 临时结果，已恢复自动重试",
+)
+job_store.add(completed_retry_notice)
+assert job_store.clear_completed_retry_notices() == 1
+assert job_store.get(completed_retry_notice.id).error is None
+
 legacy_deferred_job = Job(
     id="smoketemp002", emails=["pengjie.ai@porsche.cn"], worker_count=1,
     status="queued", deferred_retry_at=utc_now(),
