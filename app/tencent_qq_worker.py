@@ -104,7 +104,7 @@ def retry_temporary_smtp_results(
         if not retry_items or stopped(job_id, control):
             return [by_index[index] for index in sorted(by_index)]
 
-        delay = settings.temporary_smtp_retry_seconds * (attempt + 1)
+        delay = settings.temporary_smtp_retry_seconds
         print(
             f"Retrying {len(retry_items)} temporary SMTP results for {job_id} after {delay:.1f}s",
             flush=True,
@@ -126,6 +126,9 @@ def retry_temporary_smtp_results(
                 result["original_index"] = original_index
                 by_index[original_index] = result
                 report_result(job_id, result)
+    for result in by_index.values():
+        if smtp_temporary_status(result):
+            result["temporary_smtp_retry_count"] = settings.temporary_smtp_immediate_retries
     return [by_index[index] for index in sorted(by_index)]
 
 

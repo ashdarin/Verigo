@@ -200,6 +200,18 @@ class JobStore:
                 )
             self._initialized = True
 
+    def release_legacy_deferred_retries(self) -> int:
+        """Release only tasks queued by the retired multi-minute retry policy."""
+        self.initialize()
+        with self._lock, closing(self._connect()) as connection:
+            return connection.execute(
+                """
+                UPDATE jobs SET deferred_retry_at = NULL, temporary_retry_attempts = 0
+                WHERE status = 'queued' AND deferred_retry_at IS NOT NULL
+                    AND error LIKE '%自动复核%'
+                """
+            ).rowcount
+
     def add(self, job: Job, max_active: int | None = None) -> None:
         self.initialize()
         with self._lock, closing(self._connect()) as connection:

@@ -25,6 +25,7 @@ STATIC_DIR = BASE_DIR / "static"
 async def lifespan(_: FastAPI):
     settings.results_dir.mkdir(parents=True, exist_ok=True)
     job_store.initialize()
+    job_store.release_legacy_deferred_retries()
     auth_store.initialize()
     metrics_store.initialize()
     load_persistent_cache()

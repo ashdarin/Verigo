@@ -47,7 +47,8 @@ from app.tasks.verification import (
     clean_emails,
     job_progress,
     normalize_result,
-    schedule_deferred_temporary_retry,
+    finalize_temporary_smtp_results,
+    schedule_remote_temporary_retry,
     summarize,
     sync_parent_job,
     verification_filename,
@@ -397,10 +398,11 @@ def complete_tencent_qq_job(
         return serialize_job(job)
     job = require_remote_job(job_id, (worker_id or "").strip(), execution_target)
     merge_worker_results(job, payload.results)
-    if schedule_deferred_temporary_retry(job, job.results):
+    if schedule_remote_temporary_retry(job):
         job_store.persist(job)
         sync_parent_job(job)
         return serialize_job(job)
+    finalize_temporary_smtp_results(job.results)
     job_store.cache_results(job.results)
     job_store.record_catch_all(job)
     job.finished_at = utc_now()

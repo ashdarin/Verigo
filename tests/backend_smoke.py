@@ -48,8 +48,9 @@ from app.db.jobs import Job, job_store, utc_now
 from app.main import app
 from app.tasks.verification import (
     normalize_result,
-    schedule_deferred_temporary_retry,
+    finalize_temporary_smtp_results,
     sync_parent_job,
+    schedule_remote_temporary_retry,
 )
 
 
@@ -130,18 +131,32 @@ finally:
 assert verdict is None
 assert "450" in detail
 
-deferred_job = Job(
+finalize_temporary_smtp_results([greylisted])
+assert greylisted["deliverable"] is False
+assert greylisted["valid"] is False
+assert greylisted["temporary_retries_exhausted"] is True
+assert "连续 3 次" in greylisted["smtp_result"]
+
+remote_retry_job = Job(
     id="smoketemp001", emails=["pengjie.ai@porsche.cn"], worker_count=1,
-    status="running", results=[greylisted], worker_id="smoke-worker",
+    status="running", results=[normalize_result({
+        "email": "pengjie.ai@porsche.cn", "deliverable": None,
+        "smtp_result": "450 temporary SMTP failure",
+    })], worker_id="smoke-worker",
 )
-job_store.add(deferred_job)
-assert schedule_deferred_temporary_retry(deferred_job, deferred_job.results)
-job_store.persist(deferred_job)
-stored_deferred_job = job_store.get(deferred_job.id)
-assert stored_deferred_job is not None
-assert stored_deferred_job.status == "queued"
-assert stored_deferred_job.deferred_retry_at is not None
-assert stored_deferred_job.temporary_retry_attempts == 1
+assert schedule_remote_temporary_retry(remote_retry_job)
+assert remote_retry_job.status == "queued"
+assert remote_retry_job.deferred_retry_at is not None
+assert remote_retry_job.temporary_retry_attempts == 1
+
+legacy_deferred_job = Job(
+    id="smoketemp002", emails=["pengjie.ai@porsche.cn"], worker_count=1,
+    status="queued", deferred_retry_at=utc_now(),
+    error="检测到 1 个 SMTP 临时响应，系统将在 12:00 自动复核",
+)
+job_store.add(legacy_deferred_job)
+assert job_store.release_legacy_deferred_retries() == 1
+assert job_store.get(legacy_deferred_job.id).deferred_retry_at is None
 
 object.__setattr__(settings, "tencent_qq_worker_allowed_emails", frozenset({"*"}))
 assert tencent_qq_target(["person@qq.com"], "other@example.com") == "tencent_qq"

@@ -336,7 +336,7 @@ def retry_temporary_smtp_results(job: Job, by_index: dict[int, dict[str, Any]]) 
         if not retry_items or job_store.is_stopped(job.id):
             return
 
-        delay = settings.temporary_smtp_retry_seconds * (attempt + 1)
+        delay = settings.temporary_smtp_retry_seconds
         logger.info(
             "Retrying %s temporary SMTP results for job %s after %.1fs",
             len(retry_items), job.id, delay,
@@ -359,39 +359,46 @@ def retry_temporary_smtp_results(job: Job, by_index: dict[int, dict[str, Any]]) 
                 by_index[original_index] = normalize_result(result)
 
 
-def schedule_deferred_temporary_retry(
-    job: Job, results: list[dict[str, Any]] | dict[int, dict[str, Any]]
-) -> bool:
-    """Requeue a task later when SMTP policy needs more time than a worker should wait."""
-    values = list(results.values()) if isinstance(results, dict) else results
-    temporary = [result for result in values if smtp_temporary_status(result)]
-    if (
-        not temporary
-        or job.temporary_retry_attempts >= settings.temporary_smtp_deferred_retry_max_attempts
-        or job_store.is_stopped(job.id)
+def finalize_temporary_smtp_results(results: list[dict[str, Any]]) -> None:
+    """Apply the configured three-attempt policy to unresolved SMTP 4xx results."""
+    for result in results:
+        code = smtp_temporary_status(result)
+        if not code:
+            continue
+        raw_detail = str(result.get("smtp_raw_result") or result.get("smtp_result") or "")
+        result["smtp_raw_result"] = raw_detail
+        result["deliverable"] = False
+        result["valid"] = False
+        checks = result.get("checks")
+        if isinstance(checks, dict):
+            checks["smtp"] = False
+        result["temporary_retries_exhausted"] = True
+        result["smtp_result"] = f"{code} 连续 3 次重试后仍无法投递"
+        result["message"] = f"{code} 邮件服务器连续 3 次临时失败，已判定无效"
+
+
+def schedule_remote_temporary_retry(job: Job) -> bool:
+    """Give an older remote worker the same three retries at 60-second intervals."""
+    temporary = [result for result in job.results if smtp_temporary_status(result)]
+    if not temporary or all(
+        int(result.get("temporary_smtp_retry_count", 0)) >= 3
+        for result in temporary
     ):
         return False
+    if job.temporary_retry_attempts >= settings.temporary_smtp_immediate_retries:
+        return False
 
-    delay = settings.temporary_smtp_deferred_retry_seconds * (
-        2 ** job.temporary_retry_attempts
-    )
-    retry_at = utc_now() + timedelta(seconds=delay)
     job.temporary_retry_attempts += 1
-    job.deferred_retry_at = retry_at
+    job.deferred_retry_at = utc_now() + timedelta(
+        seconds=settings.temporary_smtp_retry_seconds
+    )
     job.status = "queued"
     job.finished_at = None
     job.worker_id = None
     job.heartbeat_at = utc_now()
     job.error = (
-        f"检测到 {len(temporary)} 个 SMTP 临时响应，系统将在 "
-        f"{retry_at.astimezone(ZoneInfo('Asia/Shanghai')):%H:%M} 自动复核"
-    )
-    for result in temporary:
-        result["deferred_recheck_at"] = retry_at.isoformat()
-        result["temporary_retry_attempt"] = job.temporary_retry_attempts
-    logger.info(
-        "Deferred retry %s for job %s at %s (%s temporary results)",
-        job.temporary_retry_attempts, job.id, retry_at.isoformat(), len(temporary),
+        f"检测到 SMTP 临时响应，系统将在 60 秒内进行第 "
+        f"{job.temporary_retry_attempts}/3 次重试"
     )
     return True
 
@@ -472,8 +479,7 @@ def run_job(job: Job) -> None:
         retry_temporary_smtp_results(job, by_index)
 
         job.results = [by_index[index] for index in sorted(by_index)]
-        if schedule_deferred_temporary_retry(job, by_index):
-            return
+        finalize_temporary_smtp_results(job.results)
         job_store.cache_results(job.results)
         job_store.record_catch_all(job)
         job.finished_at = utc_now()
