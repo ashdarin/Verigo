@@ -20,6 +20,7 @@ const state = {
   notifications: [],
   notificationTimer: null,
   adminAccountOffset: 0,
+  completedTemporaryPolls: 0,
 };
 
 const pageSize = 50;
@@ -448,12 +449,28 @@ async function pollJob() {
     await loadResults();
     if (job.status === "completed" || job.status === "stopped") {
       if (state.user) await loadRecentJobs();
+      if (job.status === "completed" && hasUnresolvedTemporarySmtpResult() && state.completedTemporaryPolls < 45) {
+        state.completedTemporaryPolls += 1;
+        schedulePoll(2000);
+      } else {
+        state.completedTemporaryPolls = 0;
+      }
     } else if (job.status !== "failed") {
+      state.completedTemporaryPolls = 0;
       schedulePoll();
     }
   } catch (error) {
     errorBox.textContent = error.message;
   }
+}
+
+function hasUnresolvedTemporarySmtpResult() {
+  return state.results.some((item) => {
+    const detail = `${item.smtp_result || ""} ${item.message || ""}`;
+    return !item.temporary_retries_exhausted
+      && /\b(?:421|450|451|452)\b/.test(detail)
+      && /(临时|暂时|重试|灰名单)/.test(detail);
+  });
 }
 
 async function loadResults() {

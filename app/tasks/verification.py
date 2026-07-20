@@ -69,9 +69,9 @@ def normalize_result(result: dict[str, Any]) -> dict[str, Any]:
             checks["smtp"] = None
         result["temporary_smtp_code"] = code
         if is_smtp_greylisted({"smtp_result": detail}):
-            display_detail = f"{code} 邮件服务器临时灰名单，等待自动复核"
+            display_detail = f"{code} 邮件服务器临时灰名单，正在重试"
         else:
-            display_detail = f"{code} 邮件服务器暂时无法确认，等待自动复核"
+            display_detail = f"{code} 邮件服务器暂时无法确认，正在重试"
     elif code and code.startswith("5"):
         display_detail = f"{code} 邮箱服务器拒绝验证"
     elif any(word in detail_lower for word in ("smtp", "连接", "超时", "connection", "timeout")):
