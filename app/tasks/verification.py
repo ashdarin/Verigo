@@ -6,14 +6,14 @@ import re
 import secrets
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
 from app.config import settings
 from app.core.legacy import create_verifier
 from app.core.provider_policy import YAHOO_UNSUPPORTED_MESSAGE, is_yahoo_email
-from app.core.result_retry import is_temporary_smtp_452
+from app.core.result_retry import is_smtp_greylisted, smtp_temporary_status
 from app.core.security import token_hash
 from app.core.worker_lifecycle import TENCENT_QQ_TARGET, worker_lifecycle
 from app.core.cloudshell_lifecycle import GMAIL_TARGET, cloudshell_lifecycle
@@ -44,7 +44,7 @@ METHOD_LABELS = {
 
 
 def normalize_result(result: dict[str, Any]) -> dict[str, Any]:
-    """Return user-facing details without changing the verification verdict."""
+    """Normalize presentation and keep temporary SMTP failures inconclusive."""
     result = dict(result)
     detail = str(result.get("smtp_result") or result.get("message") or "")
     detail_lower = detail.lower()
@@ -61,7 +61,17 @@ def normalize_result(result: dict[str, Any]) -> dict[str, Any]:
     elif code == "550":
         display_detail = "550 不可投递"
     elif code and code.startswith("4"):
-        display_detail = f"{code} 暂时无法确认"
+        result["smtp_raw_result"] = detail
+        result["deliverable"] = None
+        result["valid"] = True
+        checks = result.get("checks")
+        if isinstance(checks, dict):
+            checks["smtp"] = None
+        result["temporary_smtp_code"] = code
+        if is_smtp_greylisted({"smtp_result": detail}):
+            display_detail = f"{code} 邮件服务器临时灰名单，等待自动复核"
+        else:
+            display_detail = f"{code} 邮件服务器暂时无法确认，等待自动复核"
     elif code and code.startswith("5"):
         display_detail = f"{code} 邮箱服务器拒绝验证"
     elif any(word in detail_lower for word in ("smtp", "连接", "超时", "connection", "timeout")):
@@ -315,33 +325,75 @@ def verify_until_deliverable(
     return by_index
 
 
-def retry_temporary_452_results(job: Job, by_index: dict[int, dict[str, Any]]) -> None:
-    retry_items = [
-        (index, job.emails[index])
-        for index, result in by_index.items()
-        if is_temporary_smtp_452(result)
-    ]
-    if not retry_items or job_store.is_stopped(job.id):
-        return
+def retry_temporary_smtp_results(job: Job, by_index: dict[int, dict[str, Any]]) -> None:
+    """Retry short-lived SMTP failures with the same policy for every provider."""
+    for attempt in range(settings.temporary_smtp_immediate_retries):
+        retry_items = [
+            (index, job.emails[index])
+            for index, result in by_index.items()
+            if smtp_temporary_status(result)
+        ]
+        if not retry_items or job_store.is_stopped(job.id):
+            return
 
-    logger.info("Retrying %s temporary 452 results for job %s", len(retry_items), job.id)
-    time.sleep(3)
-    verifier = create_verifier(1)
-    retry_emails = [email for _, email in retry_items]
-    retry_results = verifier.verify_batch_distributed(
-        retry_emails,
-        num_processes=1,
-        should_stop=lambda: job_store.is_stopped(job.id),
+        delay = settings.temporary_smtp_retry_seconds * (attempt + 1)
+        logger.info(
+            "Retrying %s temporary SMTP results for job %s after %.1fs",
+            len(retry_items), job.id, delay,
+        )
+        time.sleep(delay)
+        verifier = create_verifier(1)
+        retry_results = verifier.verify_batch_distributed(
+            [email for _, email in retry_items],
+            num_processes=1,
+            should_stop=lambda: job_store.is_stopped(job.id),
+        )
+        if job_store.is_stopped(job.id):
+            return
+        for retry_result in retry_results:
+            result = dict(retry_result)
+            relative_index = int(result.get("original_index", 0))
+            if 0 <= relative_index < len(retry_items):
+                original_index = retry_items[relative_index][0]
+                result["original_index"] = original_index
+                by_index[original_index] = normalize_result(result)
+
+
+def schedule_deferred_temporary_retry(
+    job: Job, results: list[dict[str, Any]] | dict[int, dict[str, Any]]
+) -> bool:
+    """Requeue a task later when SMTP policy needs more time than a worker should wait."""
+    values = list(results.values()) if isinstance(results, dict) else results
+    temporary = [result for result in values if smtp_temporary_status(result)]
+    if (
+        not temporary
+        or job.temporary_retry_attempts >= settings.temporary_smtp_deferred_retry_max_attempts
+        or job_store.is_stopped(job.id)
+    ):
+        return False
+
+    delay = settings.temporary_smtp_deferred_retry_seconds * (
+        2 ** job.temporary_retry_attempts
     )
-    if job_store.is_stopped(job.id):
-        return
-    for retry_result in retry_results:
-        result = dict(retry_result)
-        relative_index = int(result.get("original_index", 0))
-        if 0 <= relative_index < len(retry_items):
-            original_index = retry_items[relative_index][0]
-            result["original_index"] = original_index
-            by_index[original_index] = normalize_result(result)
+    retry_at = utc_now() + timedelta(seconds=delay)
+    job.temporary_retry_attempts += 1
+    job.deferred_retry_at = retry_at
+    job.status = "queued"
+    job.finished_at = None
+    job.worker_id = None
+    job.heartbeat_at = utc_now()
+    job.error = (
+        f"检测到 {len(temporary)} 个 SMTP 临时响应，系统将在 "
+        f"{retry_at.astimezone(ZoneInfo('Asia/Shanghai')):%H:%M} 自动复核"
+    )
+    for result in temporary:
+        result["deferred_recheck_at"] = retry_at.isoformat()
+        result["temporary_retry_attempt"] = job.temporary_retry_attempts
+    logger.info(
+        "Deferred retry %s for job %s at %s (%s temporary results)",
+        job.temporary_retry_attempts, job.id, retry_at.isoformat(), len(temporary),
+    )
+    return True
 
 
 def run_job(job: Job) -> None:
@@ -417,9 +469,11 @@ def run_job(job: Job) -> None:
                 result["original_index"] = missing_indices[relative_index]
                 by_index[result["original_index"]] = normalize_result(result)
 
-        retry_temporary_452_results(job, by_index)
+        retry_temporary_smtp_results(job, by_index)
 
         job.results = [by_index[index] for index in sorted(by_index)]
+        if schedule_deferred_temporary_retry(job, by_index):
+            return
         job_store.cache_results(job.results)
         job_store.record_catch_all(job)
         job.finished_at = utc_now()

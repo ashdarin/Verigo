@@ -36,12 +36,20 @@ import app.api.auth as auth_api
 from app.api.routes import gmail_target, submit_routed_job, tencent_qq_target
 from app.config import settings
 from app.core.legacy import load_legacy_module
-from app.core.result_retry import is_temporary_smtp_452
+from app.core.result_retry import (
+    is_smtp_greylisted,
+    is_temporary_smtp_452,
+    smtp_temporary_status,
+)
 from app.core.security import hash_password, token_hash
 from app.db.auth import auth_store
 from app.db.jobs import Job, job_store, utc_now
 from app.main import app
-from app.tasks.verification import sync_parent_job
+from app.tasks.verification import (
+    normalize_result,
+    schedule_deferred_temporary_retry,
+    sync_parent_job,
+)
 
 
 def completed_job(job_id: str, **kwargs) -> Job:
@@ -64,6 +72,39 @@ assert gmail_target(["person@example.com"], "smoke@example.com") == "local"
 assert is_temporary_smtp_452({"smtp_result": "452 temporary mailbox failure"})
 assert is_temporary_smtp_452({"message": "452 暂时无法确认"})
 assert not is_temporary_smtp_452({"smtp_result": "550 mailbox unavailable"})
+assert smtp_temporary_status({"smtp_result": "421 service not available"}) == "421"
+assert smtp_temporary_status({"smtp_result": "450 greylisted"}) == "450"
+assert smtp_temporary_status({"smtp_result": "451 local error"}) == "451"
+assert smtp_temporary_status({"smtp_result": "550 mailbox unavailable"}) is None
+assert is_smtp_greylisted({"smtp_result": "450 4.2.0 Sender address rejected: Greylisted"})
+
+greylisted = normalize_result(
+    {
+        "email": "pengjie.ai@porsche.cn",
+        "valid": False,
+        "deliverable": False,
+        "checks": {"format": True, "domain": True, "mx": True, "smtp": False},
+        "smtp_result": "RCPT TO阶段返回 450: Sender address rejected: Greylisted",
+    }
+)
+assert greylisted["deliverable"] is None
+assert greylisted["valid"] is True
+assert greylisted["checks"]["smtp"] is None
+assert greylisted["temporary_smtp_code"] == "450"
+assert "灰名单" in greylisted["smtp_result"]
+
+deferred_job = Job(
+    id="smoketemp001", emails=["pengjie.ai@porsche.cn"], worker_count=1,
+    status="running", results=[greylisted], worker_id="smoke-worker",
+)
+job_store.add(deferred_job)
+assert schedule_deferred_temporary_retry(deferred_job, deferred_job.results)
+job_store.persist(deferred_job)
+stored_deferred_job = job_store.get(deferred_job.id)
+assert stored_deferred_job is not None
+assert stored_deferred_job.status == "queued"
+assert stored_deferred_job.deferred_retry_at is not None
+assert stored_deferred_job.temporary_retry_attempts == 1
 
 object.__setattr__(settings, "tencent_qq_worker_allowed_emails", frozenset({"*"}))
 assert tencent_qq_target(["person@qq.com"], "other@example.com") == "tencent_qq"

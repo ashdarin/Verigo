@@ -144,6 +144,18 @@ class Settings:
     )
     worker_poll_seconds: float = float(os.getenv("VERIGO_WORKER_POLL_SECONDS", "1"))
     worker_lease_seconds: int = int(os.getenv("VERIGO_WORKER_LEASE_SECONDS", "180"))
+    temporary_smtp_immediate_retries: int = max(
+        0, min(3, int(os.getenv("VERIGO_TEMPORARY_SMTP_IMMEDIATE_RETRIES", "2")))
+    )
+    temporary_smtp_retry_seconds: float = max(
+        1.0, float(os.getenv("VERIGO_TEMPORARY_SMTP_RETRY_SECONDS", "5"))
+    )
+    temporary_smtp_deferred_retry_max_attempts: int = max(
+        0, min(3, int(os.getenv("VERIGO_TEMPORARY_SMTP_DEFERRED_RETRY_MAX_ATTEMPTS", "2")))
+    )
+    temporary_smtp_deferred_retry_seconds: int = max(
+        60, int(os.getenv("VERIGO_TEMPORARY_SMTP_DEFERRED_RETRY_SECONDS", "600"))
+    )
     verification_cache_hours: int = int(os.getenv("VERIGO_VERIFICATION_CACHE_HOURS", "24"))
     verified_email_recheck_days: int = int(os.getenv("VERIGO_VERIFIED_EMAIL_RECHECK_DAYS", "30"))
     mail_host: str = os.getenv("VERIGO_MAIL_HOST", "")

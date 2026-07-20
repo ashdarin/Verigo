@@ -38,6 +38,8 @@ class Job:
     stop_on_deliverable: bool = False
     execution_target: str = "local"
     parent_id: str | None = None
+    deferred_retry_at: datetime | None = None
+    temporary_retry_attempts: int = 0
 
 
 @dataclass(frozen=True)
@@ -62,6 +64,7 @@ class JobStore:
         "started_at", "finished_at", "error", "results_json", "csv_path",
         "owner_id", "guest_token_hash", "worker_id", "heartbeat_at", "stop_on_deliverable",
         "execution_target", "parent_id",
+        "deferred_retry_at", "temporary_retry_attempts",
     )
 
     def __init__(self, keep: int = 100) -> None:
@@ -99,6 +102,11 @@ class JobStore:
             stop_on_deliverable=bool(row["stop_on_deliverable"]),
             execution_target=str(row["execution_target"] or "local"),
             parent_id=row["parent_id"],
+            deferred_retry_at=(
+                datetime.fromisoformat(row["deferred_retry_at"])
+                if row["deferred_retry_at"] else None
+            ),
+            temporary_retry_attempts=int(row["temporary_retry_attempts"] or 0),
         )
 
     def initialize(self) -> None:
@@ -126,12 +134,14 @@ class JobStore:
                         heartbeat_at TEXT,
                         stop_on_deliverable INTEGER NOT NULL DEFAULT 0,
                         execution_target TEXT NOT NULL DEFAULT 'local',
-                        parent_id TEXT
+                        parent_id TEXT,
+                        deferred_retry_at TEXT,
+                        temporary_retry_attempts INTEGER NOT NULL DEFAULT 0
                     )
                     """
                 )
                 existing = {row[1] for row in connection.execute("PRAGMA table_info(jobs)")}
-                for name, kind in (("owner_id", "TEXT"), ("guest_token_hash", "TEXT"), ("worker_id", "TEXT"), ("heartbeat_at", "TEXT"), ("stop_on_deliverable", "INTEGER NOT NULL DEFAULT 0"), ("execution_target", "TEXT NOT NULL DEFAULT 'local'"), ("parent_id", "TEXT")):
+                for name, kind in (("owner_id", "TEXT"), ("guest_token_hash", "TEXT"), ("worker_id", "TEXT"), ("heartbeat_at", "TEXT"), ("stop_on_deliverable", "INTEGER NOT NULL DEFAULT 0"), ("execution_target", "TEXT NOT NULL DEFAULT 'local'"), ("parent_id", "TEXT"), ("deferred_retry_at", "TEXT"), ("temporary_retry_attempts", "INTEGER NOT NULL DEFAULT 0")):
                     if name not in existing:
                         connection.execute(f"ALTER TABLE jobs ADD COLUMN {name} {kind}")
                 connection.execute("CREATE INDEX IF NOT EXISTS idx_jobs_queue ON jobs(status, created_at)")
@@ -223,6 +233,8 @@ class JobStore:
             int(job.stop_on_deliverable),
             job.execution_target,
             job.parent_id,
+            job.deferred_retry_at.isoformat() if job.deferred_retry_at else None,
+            job.temporary_retry_attempts,
         )
         with self._lock, closing(self._connect()) as connection:
             connection.execute(
@@ -230,8 +242,9 @@ class JobStore:
                 INSERT INTO jobs (
                     id, emails_json, worker_count, status, created_at, started_at, finished_at,
                     error, results_json, csv_path, owner_id, guest_token_hash, worker_id, heartbeat_at,
-                    stop_on_deliverable, execution_target, parent_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    stop_on_deliverable, execution_target, parent_id, deferred_retry_at,
+                    temporary_retry_attempts
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     emails_json=excluded.emails_json, worker_count=excluded.worker_count,
                     status=excluded.status, started_at=excluded.started_at,
@@ -240,7 +253,9 @@ class JobStore:
                     owner_id=excluded.owner_id, guest_token_hash=excluded.guest_token_hash,
                     worker_id=excluded.worker_id, heartbeat_at=excluded.heartbeat_at,
                     stop_on_deliverable=excluded.stop_on_deliverable,
-                    execution_target=excluded.execution_target, parent_id=excluded.parent_id
+                    execution_target=excluded.execution_target, parent_id=excluded.parent_id,
+                    deferred_retry_at=excluded.deferred_retry_at,
+                    temporary_retry_attempts=excluded.temporary_retry_attempts
                 WHERE jobs.status != 'stopped' OR excluded.status = 'stopped'
                 """,
                 values,
@@ -336,8 +351,11 @@ class JobStore:
                 (stale_before.isoformat(),),
             )
             row = connection.execute(
-                f"SELECT {self._select_columns()} FROM jobs WHERE status = 'queued' AND execution_target = ? ORDER BY created_at LIMIT 1",
-                (execution_target,),
+                f"""SELECT {self._select_columns()} FROM jobs
+                WHERE status = 'queued' AND execution_target = ?
+                    AND (deferred_retry_at IS NULL OR deferred_retry_at <= ?)
+                ORDER BY created_at LIMIT 1""",
+                (execution_target, now.isoformat()),
             ).fetchone()
             if row is None:
                 connection.commit()
@@ -347,9 +365,11 @@ class JobStore:
             job.worker_id = worker_id
             job.started_at = job.started_at or now
             job.heartbeat_at = now
+            job.deferred_retry_at = None
             connection.execute(
                 """
-                UPDATE jobs SET status = 'running', worker_id = ?, started_at = ?, heartbeat_at = ?, error = NULL
+                UPDATE jobs SET status = 'running', worker_id = ?, started_at = ?, heartbeat_at = ?,
+                    deferred_retry_at = NULL, error = NULL
                 WHERE id = ?
                 """,
                 (worker_id, job.started_at.isoformat(), now.isoformat(), job.id),

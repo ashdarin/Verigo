@@ -872,12 +872,16 @@ class EmailVerifier:
                         last_failure = f"MAIL FROM阶段返回 {code}"
                         continue
                     phase = 'RCPT TO'
-                    code, _ = server.rcpt(email)
+                    code, response = server.rcpt(email)
                     self.record_smtp_response(mx_host, code)
                     if code == 250:
                         return True, "250 邮箱存在"
                     if code == 550:
                         return False, "550 邮箱不存在"
+                    if 400 <= code < 500:
+                        if isinstance(response, bytes):
+                            response = response.decode("utf-8", errors="replace")
+                        return None, f"RCPT TO阶段返回 {code}: {str(response)[:160]}"
                     last_failure = f"RCPT TO阶段返回 {code}"
                 except smtplib.SMTPServerDisconnected:
                     self.record_smtp_failure(mx_host)
