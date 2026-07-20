@@ -133,6 +133,19 @@ finally:
 assert verdict is None
 assert "450" in detail
 
+original_resolve = legacy_module.dns.resolver.resolve
+try:
+    def mx_only_resolver(_domain, record_type):
+        if record_type == "MX":
+            return [object()]
+        raise legacy_module.dns.resolver.NoAnswer()
+
+    legacy_module.dns.resolver.resolve = mx_only_resolver
+    mx_only_verifier = legacy_module.EmailVerifier()
+    assert mx_only_verifier.check_domain_exists("mx-only.example")
+finally:
+    legacy_module.dns.resolver.resolve = original_resolve
+
 finalize_temporary_smtp_results([greylisted])
 assert greylisted["deliverable"] is None
 assert greylisted["valid"] is True

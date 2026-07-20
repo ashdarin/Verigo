@@ -24,6 +24,7 @@ import time
 import smtplib
 import imaplib
 import email as email_module
+import dns.exception
 import dns.resolver
 import threading
 import json
@@ -472,7 +473,7 @@ class EmailVerifier:
             return 'normal'
 
     def check_domain_exists(self, domain):
-        """域名存在性检查 - 优化版：添加缓存"""
+        """Check DNS existence without requiring a website A record."""
         # 🔧 优化：使用DNS缓存检查域名是否已验证过
         cache_key = f"domain_{domain}"
         with self.dns_cache_lock:
@@ -481,10 +482,24 @@ class EmailVerifier:
                 if datetime.now() - cached_time < self.dns_cache_ttl:
                     return cached_result
         
+        result = False
         try:
-            socket.gethostbyname(domain)
-            result = True
-        except socket.gaierror:
+            for record_type in ('MX', 'A', 'AAAA', 'NS', 'SOA'):
+                try:
+                    answers = dns.resolver.resolve(domain, record_type)
+                    if answers:
+                        result = True
+                        break
+                except dns.resolver.NXDOMAIN:
+                    result = False
+                    break
+                except (dns.resolver.NoAnswer, dns.resolver.NoNameservers):
+                    continue
+                except dns.exception.DNSException:
+                    # A transient resolver failure must not become a false
+                    # "domain does not exist" verdict.
+                    continue
+        except dns.exception.DNSException:
             result = False
         
         # 缓存结果
