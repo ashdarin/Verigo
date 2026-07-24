@@ -16,7 +16,8 @@
   <meta name="twitter:card" content="summary">
   <script type="application/ld+json">{"@context":"https://schema.org","@type":"WebApplication","name":"Verigo","url":"https://verigo.site/","applicationCategory":"BusinessApplication","operatingSystem":"Web","description":"邮箱验证、批量验证与工作邮箱查找工具。"}</script>
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
-  <link rel="stylesheet" href="/static/css/app.css?v=report-v5">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" referrerpolicy="no-referrer">
+  <link rel="stylesheet" href="/static/css/app.css?v=locale-v2">
 </head>
 <body>
   <header class="topbar">
@@ -28,12 +29,13 @@
       <button class="nav-item active" type="button" data-view="single">单个验证</button>
       <button class="nav-item" type="button" data-view="batch">批量验证</button>
       <button class="nav-item" type="button" data-view="discovery">查找工作邮箱</button>
+      <button id="api-nav" class="nav-item" type="button">Developer API</button>
       <button id="dashboard-nav" class="nav-item hidden" type="button" data-view="dashboard">运营监控</button>
       <button id="admin-credits-nav" class="nav-item hidden" type="button" data-view="admin-credits">额度管理</button>
       <button id="wallet-nav" class="nav-item hidden" type="button" data-view="wallet">资金与使用</button>
     </nav>
     <div class="account-area">
-      <button id="locale-toggle" class="locale-toggle" type="button" aria-label="Switch to English" title="Switch to English"><span class="locale-globe" aria-hidden="true"></span><span id="locale-code">CN</span></button>
+      <button id="locale-toggle" class="locale-toggle" type="button" aria-label="Switch to English" title="Switch to English"><i class="fa-solid fa-globe" aria-hidden="true"></i><span id="locale-code">CN</span></button>
       <span class="service-state"><span class="state-dot"></span>运行中</span>
       <button id="claim-trial-button" class="claim-trial hidden" type="button">验证邮箱领取体验额度</button>
       <button id="notification-button" class="notification-button hidden" type="button" aria-label="通知">通知<span id="notification-count" class="notification-count hidden"></span></button>
@@ -43,7 +45,6 @@
         <strong id="account-name"></strong>
         <small id="account-credits" class="account-credits"></small>
         <button id="bind-email-button" type="button" class="hidden">绑定邮箱</button>
-        <button id="api-keys-button" type="button" class="account-action">Developer API</button>
         <button id="change-password-button" type="button" class="account-action">修改密码</button>
         <button id="delete-account-button" type="button" class="account-delete">删除账户</button>
         <button id="logout-button" type="button">退出登录</button>

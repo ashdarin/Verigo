@@ -54,7 +54,7 @@ const VerigoI18n = (() => {
     "关闭此窗口后，完整 Key 不会再次显示。": "The full key cannot be shown again after closing this window.", "有效 Key": "Active keys",
     "账户安全": "Account security", "原密码": "Current password", "新密码": "New password", "更新密码": "Update password",
     "找回密码": "Password reset", "注册邮箱": "Account email", "设置新密码": "Set a new password",
-    "免费验证候选邮箱": "Verify candidates free", "Developer API": "Developer API", "API Key": "API key",
+    "免费验证候选邮箱": "Verify candidates free", "Developer API": "Developer API", "API Key": "API key", "通知": "Notifications", "暂无通知": "No notifications",
     "使用 API Key 从你的应用提交邮箱验证任务。完整 Key 只会显示一次。": "Use an API key to submit verification jobs from your application. The full key is shown once.",
     "暂不支持 Yahoo 邮箱验证（含所有国家或地区后缀、ymail.com、rocketmail.com）。Yahoo 的反验证策略非常严格，当前全网常规验证均难以稳定通过，暂时没有可靠解决方案。": "Yahoo email verification is not supported, including regional Yahoo domains, ymail.com, and rocketmail.com. Yahoo's anti-verification controls do not currently permit reliable validation.",
     "暂不支持 Yahoo 邮箱验证（含所有国家或地区后缀，以及 ymail.com、rocketmail.com）。Yahoo 的反验证策略非常严格，当前全网常规验证都难以稳定通过，暂时没有可靠解决方案。": "Yahoo email verification is not supported, including regional Yahoo domains, ymail.com, and rocketmail.com. Yahoo's anti-verification controls do not currently permit reliable validation.",
@@ -73,7 +73,8 @@ const VerigoI18n = (() => {
     "域名通用收件": "Catch-all domain", "不支持验证": "Unsupported validation", "已停止": "Stopped",
     "已找到可投递邮箱，未继续验证": "A deliverable email was found; remaining candidates were not checked", "验证未返回结果": "Verification returned no result",
     "域名不存在": "Domain does not exist", "没有邮箱服务器": "No mail server found", "250 可投递": "250 Deliverable", "550 不可投递": "550 Undeliverable",
-    "邮箱服务器拒绝验证": "Mail server rejected validation", "邮箱服务器暂时无法确认": "Mail server could not confirm delivery yet"
+    "邮箱服务器拒绝验证": "Mail server rejected validation", "邮箱服务器暂时无法确认": "Mail server could not confirm delivery yet",
+    "请先登录后管理 API Key": "Sign in to manage API keys"
   };
 
   let locale = localStorage.getItem("verigo_locale") === "en" ? "en" : "zh";
@@ -101,13 +102,43 @@ const VerigoI18n = (() => {
     if (/^(\d+) 邮箱服务器拒绝验证$/.test(text)) return text.replace(/^(\d+) 邮箱服务器拒绝验证$/, "$1 Mail server rejected validation");
     if (/^(\d+) 邮件服务器临时灰名单，正在重试$/.test(text)) return text.replace(/^(\d+) 邮件服务器临时灰名单，正在重试$/, "$1 Mail server greylisted this request; retrying");
     if (/^(\d+) 邮件服务器暂时无法确认，正在重试$/.test(text)) return text.replace(/^(\d+) 邮件服务器暂时无法确认，正在重试$/, "$1 Mail server could not confirm yet; retrying");
-    if (/^[\u4e00-\u9fff]/.test(text)) return "Verification detail is available in the original language.";
     return text;
   }
 
   function text(value) { return localizeText(value); }
-  function resultValue(value) { return localizeText(value); }
-  function errorMessage(value) { return localizeText(value); }
+  function resultValue(value) {
+    const source = String(value || "");
+    const localized = localizeText(source);
+    if (locale !== "en" || localized !== source || !/[\u4e00-\u9fff]/.test(source)) return localized;
+    const smtpCode = source.match(/\b([245]\d{2})\b/)?.[1];
+    return smtpCode ? `Mail-server response (${smtpCode})` : "Mail-server response could not be classified";
+  }
+  function errorMessage(value) {
+    const source = String(value || "");
+    const localized = localizeText(source);
+    return locale === "en" && localized === source && /[\u4e00-\u9fff]/.test(source)
+      ? "The request could not be completed"
+      : localized;
+  }
+
+  function notificationTitle(notification) {
+    if (locale !== "en") return notification.title;
+    if (notification.kind === "credit_grant") return "Credits added";
+    if (notification.kind === "credit_deduction") return "Credits adjusted";
+    const localized = localizeText(notification.title);
+    return /[\u4e00-\u9fff]/.test(localized) ? "Account notification" : localized;
+  }
+
+  function notificationBody(notification) {
+    if (locale !== "en") return notification.body;
+    const amount = String(notification.body || "").match(/(\d[\d,]*)\s*额度/)?.[1];
+    if (notification.kind === "credit_grant" && amount) return `An administrator added ${amount} credits to your account.`;
+    if (notification.kind === "credit_deduction" && amount) return `An administrator deducted ${amount} credits from your account.`;
+    const localized = localizeText(notification.body);
+    return /[\u4e00-\u9fff]/.test(localized) ? "An account update is available." : localized;
+  }
+
+  function formatDate(value) { return new Date(value).toLocaleString(locale === "en" ? "en-US" : "zh-CN"); }
 
   function localizeElement(element) {
     if (!(element instanceof HTMLElement) || element.matches("script, style, #locale-code")) return;
@@ -179,5 +210,5 @@ const VerigoI18n = (() => {
     }).observe(document.body, { childList: true, subtree: true });
   }
 
-  return { init, set, text, resultValue, errorMessage, get locale() { return locale; } };
+  return { init, set, text, resultValue, errorMessage, notificationTitle, notificationBody, formatDate, get locale() { return locale; } };
 })();

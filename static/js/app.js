@@ -443,10 +443,11 @@ function renderJobProgress(job, progressCopy) {
 }
 
 function formatJobName(timestamp) {
-  if (!timestamp) return "邮箱验证";
+  const label = VerigoI18n.locale === "en" ? "Email verification" : "邮箱验证";
+  if (!timestamp) return label;
   const date = new Date(timestamp);
-  if (Number.isNaN(date.getTime())) return "邮箱验证";
-  return `邮箱验证 ${new Intl.DateTimeFormat("zh-CN", {
+  if (Number.isNaN(date.getTime())) return label;
+  return `${label} ${new Intl.DateTimeFormat(VerigoI18n.locale === "en" ? "en-US" : "zh-CN", {
     year: "numeric", month: "long", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false,
   }).format(date)}`;
 }
@@ -863,7 +864,7 @@ async function loadRecentJobs() {
     container.replaceChildren();
     if (!jobs.length) {
       const empty = document.createElement("small");
-      empty.textContent = "暂无任务";
+      empty.textContent = VerigoI18n.text("暂无任务");
       container.append(empty);
       return;
     }
@@ -874,7 +875,7 @@ async function loadRecentJobs() {
       const name = document.createElement("span");
       name.textContent = formatJobName(job.finished_at || job.started_at || job.created_at);
       const meta = document.createElement("small");
-      meta.textContent = `${statusLabels[job.status] || job.status} · ${job.total}`;
+      meta.textContent = `${VerigoI18n.text(statusLabels[job.status] || job.status)} · ${job.total}`;
       button.append(name, meta);
       button.addEventListener("click", async () => {
         clearTimeout(state.pollTimer);
@@ -901,11 +902,15 @@ function updateAccount() {
   const trialCredits = Number(state.user?.trial_credits || 0);
   el("account-credits").textContent = state.user
     ? state.user.is_admin
-      ? "无限额度"
-      : `${state.user.credits || 0} 验证次数${trialCredits ? ` · ${trialCredits} 体验次数` : ""}`
+      ? VerigoI18n.text("无限额度")
+      : VerigoI18n.locale === "en"
+        ? `${state.user.credits || 0} verifications${trialCredits ? ` · ${trialCredits} trial credits` : ""}`
+        : `${state.user.credits || 0} 验证次数${trialCredits ? ` · ${trialCredits} 体验次数` : ""}`
     : "";
   el("account-credits").title = state.user?.trial_credit_expires_at
-    ? `体验额度有效至 ${new Date(state.user.trial_credit_expires_at).toLocaleString("zh-CN")}`
+    ? VerigoI18n.locale === "en"
+      ? `Trial credits valid until ${VerigoI18n.formatDate(state.user.trial_credit_expires_at)}`
+      : `体验额度有效至 ${VerigoI18n.formatDate(state.user.trial_credit_expires_at)}`
     : "";
   el("bind-email-button").classList.toggle("hidden", !state.user?.needs_email_binding);
   el("dashboard-nav").classList.toggle("hidden", !state.user?.is_admin);
@@ -927,6 +932,10 @@ function updateAccount() {
   }
 }
 
+window.addEventListener("verigo:localechange", () => {
+  updateAccount();
+});
+
 async function loadAccount() {
   try { state.user = await api("/api/auth/me"); } catch (_) { state.user = null; }
   updateAccount();
@@ -945,7 +954,7 @@ function renderNotifications() {
   if (!state.notifications.length) {
     const empty = document.createElement("p");
     empty.className = "notification-empty";
-    empty.textContent = "暂无通知";
+    empty.textContent = VerigoI18n.text("暂无通知");
     list.append(empty);
     return;
   }
@@ -953,15 +962,17 @@ function renderNotifications() {
     const item = document.createElement("article");
     item.className = "notification-item";
     const title = document.createElement("strong");
-    title.textContent = notification.title;
+    title.textContent = VerigoI18n.notificationTitle(notification);
     const body = document.createElement("p");
-    body.textContent = notification.body;
+    body.textContent = VerigoI18n.notificationBody(notification);
     const time = document.createElement("time");
-    time.textContent = new Date(notification.created_at).toLocaleString("zh-CN");
+    time.textContent = VerigoI18n.formatDate(notification.created_at);
     item.append(title, body, time);
     list.append(item);
   });
 }
+
+window.addEventListener("verigo:localechange", renderNotifications);
 
 async function loadNotifications() {
   if (!state.user) return;
@@ -1114,7 +1125,15 @@ function openApiKeysDialog() {
   loadApiKeys();
 }
 
-el("api-keys-button").addEventListener("click", openApiKeysDialog);
+el("api-nav").addEventListener("click", () => {
+  if (!state.user) {
+    el("auth-dialog").showModal();
+    setAuthMode("login");
+    el("auth-error").textContent = VerigoI18n.text("请先登录后管理 API Key");
+    return;
+  }
+  openApiKeysDialog();
+});
 el("close-api-keys").addEventListener("click", () => el("api-keys-dialog").close());
 el("api-keys-dialog").addEventListener("close", clearCreatedApiKey);
 el("api-keys-refresh").addEventListener("click", loadApiKeys);

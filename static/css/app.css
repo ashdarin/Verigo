@@ -32,10 +32,7 @@ button { cursor: pointer; }
 .account-area { position: relative; min-width: 0; display: flex; align-items: center; justify-content: flex-end; gap: 14px; }
 .locale-toggle { min-width: 58px; height: 34px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 0 8px; border: 1px solid #50685d; border-radius: 5px; background: #1d382e; color: #fff; font-size: 11px; font-weight: 800; }
 .locale-toggle:hover { border-color: #8cae9e; background: #28483b; }
-.locale-globe { position: relative; display: inline-block; width: 14px; height: 14px; border: 1.5px solid currentColor; border-radius: 50%; }
-.locale-globe::before, .locale-globe::after { position: absolute; content: ""; }
-.locale-globe::before { top: 2px; bottom: 2px; left: 3px; right: 3px; border-left: 1px solid currentColor; border-right: 1px solid currentColor; border-radius: 50%; }
-.locale-globe::after { top: 5px; left: -1.5px; right: -1.5px; border-top: 1px solid currentColor; }
+.locale-toggle .fa-globe { font-size: 14px; line-height: 1; }
 .service-state { display: flex; align-items: center; gap: 7px; color: #c1d0ca; font-size: 11px; }
 .state-dot { width: 7px; height: 7px; border-radius: 50%; background: #72d8a5; box-shadow: 0 0 0 3px rgba(114,216,165,.16); }
 .account-button { min-width: 0; max-width: 220px; min-height: 36px; overflow: hidden; padding: 0 14px; border: 1px solid #50685d; border-radius: 5px; background: #1d382e; color: #fff; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
@@ -314,19 +311,22 @@ th:nth-child(1) { width: 24%; } th:nth-child(2) { width: 12%; } th:nth-child(3) 
 }
 
 @media (max-width: 560px) {
-  .topbar { min-height: 108px; padding: 10px 16px 8px; }
+  .topbar { min-height: 150px; padding: 10px 16px 8px; }
+  .product-nav { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 3px; }
+  .product-nav .nav-item { width: 100%; min-height: 32px; }
   .account-area { gap: 4px; }
   .locale-toggle { min-width: 44px; width: 44px; padding: 0; gap: 3px; font-size: 9px; }
   .notification-menu { right: 0; top: 42px; }
   .claim-trial { flex: 0 0 104px; min-height: 36px; padding: 0 7px; font-size: 10px; line-height: 1.15; }
   .account-button { flex: 0 0 52px; width: 52px; padding: 0; font-size: 0; }
   .account-button::after { content: "账户"; font-size: 12px; }
+  html[lang="en"] .account-button::after { content: "Account"; font-size: 10px; }
   .api-key-token-row { grid-template-columns: 1fr; }
   .api-key-token-row .secondary-action { width: 100%; }
-  .workspace { min-height: calc(100vh - 108px); }
-  .discovery-workspace { min-height: calc(100vh - 108px); }
-  .dashboard-workspace { min-height: calc(100vh - 108px); padding: 22px 16px 30px; }
-  .admin-credits-workspace { min-height: calc(100vh - 108px); padding: 22px 16px; }.admin-credits-panel { padding: 20px; }
+  .workspace { min-height: calc(100vh - 150px); }
+  .discovery-workspace { min-height: calc(100vh - 150px); }
+  .dashboard-workspace { min-height: calc(100vh - 150px); padding: 22px 16px 30px; }
+  .admin-credits-workspace { min-height: calc(100vh - 150px); padding: 22px 16px; }.admin-credits-panel { padding: 20px; }
   .site-footer { align-items: flex-start; flex-direction: column; gap: 8px; }
   .report-heading { align-items: stretch; flex-direction: column; margin-bottom: 20px; }
   .report-actions { justify-content: space-between; }

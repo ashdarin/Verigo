@@ -22,13 +22,18 @@ async function checkViewport(browser, name, width, height) {
       progressVisible: visible(".progress-section"),
       tableVisible: visible(".table-wrap"),
       apiDocsHref: document.querySelector('.site-footer a[href="/api-docs"]')?.getAttribute("href"),
+      apiNavVisible: visible("#api-nav"),
     };
   });
 
   if (!result.title.includes("Verigo")) throw new Error(`${name}: unexpected title`);
   if (result.overflow) throw new Error(`${name}: page has horizontal overflow`);
-  if (!result.startVisible || !result.progressVisible || !result.tableVisible || result.apiDocsHref !== "/api-docs") {
+  if (!result.startVisible || !result.progressVisible || !result.tableVisible || !result.apiNavVisible || result.apiDocsHref !== "/api-docs") {
     throw new Error(`${name}: a primary UI region is hidden`);
+  }
+  await page.click("#api-nav");
+  if (!(await page.locator("#auth-dialog").evaluate((node) => node.open))) {
+    throw new Error(`${name}: API navigation must request sign-in when logged out`);
   }
   if (errors.length) throw new Error(`${name}: console errors: ${errors.join(" | ")}`);
   await page.close();
@@ -56,10 +61,9 @@ async function checkAccountAndImport(browser) {
     throw new Error("account: email verification should use the in-app dialog");
   }
   await page.click("#close-email-verification");
-  await page.click("#account-button");
-  await page.click("#api-keys-button");
+  await page.click("#api-nav");
   if (!(await page.locator("#api-keys-dialog").evaluate((node) => node.open))) {
-    throw new Error("api keys: management must be available from the signed-in account menu");
+    throw new Error("api keys: management must be available from the main navigation");
   }
   await page.fill("#api-key-name", "browser smoke");
   await page.click("#api-key-create-submit");
@@ -141,8 +145,7 @@ async function checkMobileTrialAction(browser) {
   await page.fill("#auth-password", "browser-smoke-2026");
   await page.click("#auth-submit");
   await page.waitForFunction(() => !document.querySelector("#claim-trial-button")?.classList.contains("hidden"));
-  await page.click("#account-button");
-  await page.click("#api-keys-button");
+  await page.click("#api-nav");
   if (!(await page.locator("#api-keys-dialog").evaluate((node) => node.open))) {
     throw new Error("mobile API keys: management dialog should open");
   }
@@ -155,6 +158,24 @@ async function checkMobileTrialAction(browser) {
 
 async function checkEnglishLocale(browser) {
   const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  await page.route("**/api/auth/me", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({
+      id: "locale-user", email: "locale@example.com", email_verified: true,
+      credits: 10, paid_credits: 10, trial_credits: 0, trial_credit_expires_at: null,
+      needs_email_binding: false, is_admin: false,
+    }),
+  }));
+  await page.route("**/api/notifications", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({
+      unread_count: 1,
+      items: [{
+        id: "locale-credit", kind: "credit_grant", title: "额度已到账",
+        body: "管理员已向你的账户增加 1,000 额度。", created_at: "2026-07-24T12:00:00Z", read_at: null,
+      }],
+    }),
+  }));
   await page.goto("http://127.0.0.1:8000", { waitUntil: "networkidle" });
   await page.click("#locale-toggle");
   await page.fill("#single-email-input", "locale-check@yahoo.com");
@@ -170,12 +191,19 @@ async function checkEnglishLocale(browser) {
       .map((node) => node.textContent.trim())
       .filter(Boolean),
     values: [...document.querySelectorAll("#results-body td")].map((node) => node.textContent.trim()),
+    notification: document.querySelector("#notification-list")?.textContent.trim(),
+    fallbackDetail: VerigoI18n.resultValue("服务器暂未确认 450"),
+    accountLabel: getComputedStyle(document.querySelector("#account-button"), "::after").content,
+    localeIcon: document.querySelector("#locale-toggle i")?.className,
   }));
   if (result.lang !== "en" || result.code !== "EN" || result.overflow || result.chinese.length) {
     throw new Error(`english locale: unexpected rendering ${JSON.stringify(result)}`);
   }
   if (!result.values.includes("Unsupported validation")) {
     throw new Error(`english locale: result detail was not localized ${JSON.stringify(result.values)}`);
+  }
+  if (!result.notification.includes("Credits added") || !result.notification.includes("An administrator added 1,000 credits to your account.") || result.fallbackDetail !== "Mail-server response (450)" || result.accountLabel !== '"Account"' || !result.localeIcon.includes("fa-solid")) {
+    throw new Error(`english locale: notification or fallback was not localized ${JSON.stringify(result)}`);
   }
   await page.close();
   return { englishLocale: true };
