@@ -13,7 +13,7 @@ from urllib.request import Request as UrlRequest, urlopen
 from collections import defaultdict, deque
 from typing import Annotated
 
-from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Request, Response
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.config import settings
@@ -114,6 +114,30 @@ class UserResponse(BaseModel):
     is_admin: bool
 
 
+class ApiKeyCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=64)
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("请输入 API Key 名称")
+        return value
+
+
+class ApiKeyResponse(BaseModel):
+    id: str
+    name: str
+    prefix: str
+    created_at: str
+    last_used_at: str | None
+
+
+class ApiKeyCreatedResponse(ApiKeyResponse):
+    token: str = Field(description="Only returned once when the API Key is created.")
+
+
 class AttemptLimiter:
     def __init__(self) -> None:
         self._events: dict[str, deque[float]] = defaultdict(deque)
@@ -190,10 +214,28 @@ def serialize_user(user: User) -> UserResponse:
     )
 
 
+def api_key_from_headers(authorization: str | None, api_key: str | None) -> str | None:
+    if api_key:
+        return api_key.strip()
+    if not authorization:
+        return None
+    scheme, _, token = authorization.partition(" ")
+    return token.strip() if scheme.lower() == "bearer" and token.strip() else None
+
+
 def optional_user(
+    request: Request,
     session: Annotated[str | None, Cookie(alias=settings.session_cookie_name)] = None,
+    authorization: Annotated[str | None, Header()] = None,
+    api_key: Annotated[str | None, Header(alias="X-API-Key")] = None,
 ) -> User | None:
-    return auth_store.user_for_session(session)
+    user = auth_store.user_for_session(session)
+    if user is not None:
+        request.state.auth_via_api_key = False
+        return user
+    user = auth_store.user_for_api_key(api_key_from_headers(authorization, api_key))
+    request.state.auth_via_api_key = user is not None
+    return user
 
 
 def require_user(user: Annotated[User | None, Depends(optional_user)]) -> User:
@@ -202,8 +244,22 @@ def require_user(user: Annotated[User | None, Depends(optional_user)]) -> User:
     return user
 
 
-def require_admin(user: Annotated[User | None, Depends(optional_user)]) -> User:
+def require_session_user(
+    request: Request,
+    user: Annotated[User | None, Depends(optional_user)],
+) -> User:
     user = require_user(user)
+    if getattr(request.state, "auth_via_api_key", False):
+        raise HTTPException(status_code=403, detail="请使用浏览器登录会话管理 API Key")
+    return user
+
+
+def require_admin(
+    request: Request, user: Annotated[User | None, Depends(optional_user)]
+) -> User:
+    user = require_user(user)
+    if getattr(request.state, "auth_via_api_key", False):
+        raise HTTPException(status_code=403, detail="API Key 无权访问运营后台")
     if (
         not user.email_verified
         or not user.email
@@ -374,6 +430,35 @@ def delete_account(
 @auth_router.get("/me", response_model=UserResponse | None)
 def me(user: Annotated[User | None, Depends(optional_user)]) -> UserResponse | None:
     return serialize_user(user) if user else None
+
+
+@auth_router.get("/api-keys", response_model=list[ApiKeyResponse], summary="List API Keys")
+def list_api_keys(user: Annotated[User, Depends(require_session_user)]) -> list[ApiKeyResponse]:
+    return [ApiKeyResponse(**item) for item in auth_store.list_api_keys(user.id)]
+
+
+@auth_router.post(
+    "/api-keys",
+    response_model=ApiKeyCreatedResponse,
+    status_code=201,
+    summary="Create API Key",
+)
+def create_api_key(
+    payload: ApiKeyCreateRequest, user: Annotated[User, Depends(require_session_user)]
+) -> ApiKeyCreatedResponse:
+    try:
+        key, token = auth_store.create_api_key(user.id, payload.name)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return ApiKeyCreatedResponse(**key, token=token)
+
+
+@auth_router.delete("/api-keys/{key_id}", status_code=204, summary="Revoke API Key")
+def revoke_api_key(
+    key_id: str, user: Annotated[User, Depends(require_session_user)]
+) -> None:
+    if not auth_store.revoke_api_key(user.id, key_id):
+        raise HTTPException(status_code=404, detail="API Key 不存在或已撤销")
 
 
 @auth_router.get("/public-config")

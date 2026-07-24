@@ -43,7 +43,13 @@ async def lifespan(_: FastAPI):
         save_persistent_cache()
 
 
-app = FastAPI(title=settings.app_name, lifespan=lifespan)
+app = FastAPI(
+    title=f"{settings.app_name} API",
+    description="Verigo email verification API. User endpoints accept a Bearer API Key.",
+    docs_url=None,
+    redoc_url=None,
+    lifespan=lifespan,
+)
 app.include_router(auth_router)
 app.include_router(router)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -79,6 +85,11 @@ async def collect_page_views(request, call_next):
 @app.get("/", include_in_schema=False)
 def index() -> FileResponse:
     return FileResponse(STATIC_DIR / "index.html")
+
+
+@app.get("/api-docs", include_in_schema=False)
+def api_docs() -> FileResponse:
+    return FileResponse(STATIC_DIR / "api-docs.html")
 
 
 @app.get("/robots.txt", include_in_schema=False, response_class=PlainTextResponse)

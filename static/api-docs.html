@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="index,follow">
+  <title>Verigo API Documentation</title>
+  <style>
+    :root { color-scheme: light; font-family: Arial, sans-serif; color: #17212b; background: #f6f8fa; }
+    body { margin: 0; line-height: 1.55; }
+    header { background: #112e3b; color: #fff; padding: 28px 20px; }
+    main, header > div { max-width: 920px; margin: 0 auto; }
+    main { padding: 28px 20px 48px; }
+    h1, h2 { margin: 0 0 12px; letter-spacing: 0; }
+    h2 { margin-top: 32px; font-size: 20px; }
+    a { color: #0969da; }
+    code { font-family: Consolas, monospace; font-size: .92em; }
+    pre { overflow-x: auto; background: #17212b; color: #f2f5f7; padding: 16px; border-radius: 6px; }
+    table { width: 100%; border-collapse: collapse; background: #fff; }
+    th, td { border: 1px solid #d0d7de; padding: 10px; text-align: left; vertical-align: top; }
+    th { background: #eef3f7; }
+    .method { color: #0a7f39; font-weight: 700; white-space: nowrap; }
+    .note { border-left: 4px solid #0969da; padding: 10px 14px; background: #eaf3ff; }
+  </style>
+</head>
+<body>
+  <header><div><h1>Verigo API</h1><p>邮箱验证服务的程序化接口</p></div></header>
+  <main>
+    <p>Base URL: <code>https://verigo.site</code>. 完整机器可读规范见 <a href="/openapi.json">OpenAPI JSON</a>。</p>
+    <h2>认证</h2>
+    <p>先创建 Verigo 账户并登录。通过登录会话创建 API Key，密钥只在创建响应中出现一次，请立即保存在安全的密钥管理工具中。</p>
+    <pre><code>curl -c cookies.txt -X POST https://verigo.site/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"account":"you@example.com","password":"your-password"}'
+
+curl -b cookies.txt -X POST https://verigo.site/api/auth/api-keys \
+  -H "Content-Type: application/json" \
+  -d '{"name":"production"}'</code></pre>
+    <p>对用户接口提供密钥：<code>Authorization: Bearer vg_live_...</code> 或 <code>X-API-Key: vg_live_...</code>。</p>
+    <div class="note">API Key 仅可访问账户本人的用户接口，不能访问运营后台或远程工作节点接口。可在 <code>GET /api/auth/api-keys</code> 列出，并用 <code>DELETE /api/auth/api-keys/{key_id}</code> 立即撤销。</div>
+    <h2>提交与查询</h2>
+    <table>
+      <thead><tr><th>方法</th><th>路径</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td class="method">POST</td><td><code>/api/jobs</code></td><td>提交批量邮箱验证任务；按任务中的邮箱数量消耗账户额度。</td></tr>
+        <tr><td class="method">GET</td><td><code>/api/jobs/{job_id}</code></td><td>获取任务状态、进度和汇总。</td></tr>
+        <tr><td class="method">GET</td><td><code>/api/jobs/{job_id}/results</code></td><td>分页读取结果，可使用 <code>offset</code>、<code>limit</code>、<code>search</code>、<code>deliverability</code> 过滤。</td></tr>
+        <tr><td class="method">GET</td><td><code>/api/jobs/{job_id}/download</code></td><td>任务完成后下载 CSV 结果。</td></tr>
+        <tr><td class="method">GET</td><td><code>/api/jobs</code></td><td>读取近期任务，<code>limit</code> 范围为 1-50。</td></tr>
+        <tr><td class="method">POST</td><td><code>/api/jobs/{job_id}/stop</code></td><td>停止正在执行的任务。</td></tr>
+        <tr><td class="method">POST</td><td><code>/api/jobs/{job_id}/resume</code></td><td>继续已停止任务中尚未完成的邮箱。</td></tr>
+        <tr><td class="method">GET</td><td><code>/api/wallet</code></td><td>读取可用验证额度与使用记录。</td></tr>
+        <tr><td class="method">POST</td><td><code>/api/discovery/candidates</code></td><td>按姓名和域名生成候选邮箱地址。</td></tr>
+      </tbody>
+    </table>
+    <h2>示例</h2>
+    <pre><code>curl -X POST https://verigo.site/api/jobs \
+  -H "Authorization: Bearer vg_live_your_api_key" \
+  -H "Content-Type: application/json" \
+  -d '{"emails":["alice@example.com","bob@example.com"],"worker_count":2}'
+
+curl https://verigo.site/api/jobs/JOB_ID/results?limit=100 \
+  -H "X-API-Key: vg_live_your_api_key"</code></pre>
+    <h2>响应与限制</h2>
+    <p>成功的任务创建返回 <code>202</code>；认证失败返回 <code>401</code>；额度不足或无效请求返回 <code>422</code>；队列繁忙返回 <code>429</code>。单任务上限与并发限制由账户服务配置决定。</p>
+  </main>
+</body>
+</html>

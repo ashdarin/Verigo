@@ -716,6 +716,37 @@ for number in range(3):
     assert network_verified.trial_credits == (10 if number < 2 else 0)
 
 
+api_user = auth_store.create_user("api-user@example.com", "correct-horse-2026")
+api_code = auth_store.create_email_verification(api_user.id)
+auth_store.confirm_email_verification(api_user.id, api_code, network_hash="api-key-test")
+with TestClient(app) as api_client:
+    assert api_client.get("/api-docs").status_code == 200
+    assert api_client.get("/openapi.json").status_code == 200
+    login = api_client.post(
+        "/api/auth/login",
+        json={"account": "api-user@example.com", "password": "correct-horse-2026"},
+    )
+    assert login.status_code == 200, login.text
+    created_key = api_client.post("/api/auth/api-keys", json={"name": "smoke"})
+    assert created_key.status_code == 201, created_key.text
+    key_payload = created_key.json()
+    assert key_payload["token"].startswith("vg_live_")
+    assert key_payload["prefix"] == key_payload["token"][:16]
+    key_headers = {"Authorization": f"Bearer {key_payload['token']}"}
+    api_client.cookies.clear()
+    assert api_client.get("/api/jobs", headers=key_headers).status_code == 200
+    assert api_client.get("/api/auth/api-keys", headers=key_headers).status_code == 403
+    assert api_client.post(
+        "/api/auth/login",
+        json={"account": "api-user@example.com", "password": "correct-horse-2026"},
+    ).status_code == 200
+    keys = api_client.get("/api/auth/api-keys")
+    assert keys.status_code == 200 and len(keys.json()) == 1
+    assert api_client.delete(f"/api/auth/api-keys/{key_payload['id']}").status_code == 204
+    api_client.cookies.clear()
+    assert api_client.get("/api/jobs", headers=key_headers).status_code == 401
+
+
 legacy_id = "legacy-smoke-user"
 with auth_store._connect() as connection:
     connection.execute(

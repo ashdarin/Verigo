@@ -152,6 +152,24 @@ class AuthStore:
                 connection.execute("CREATE INDEX IF NOT EXISTS sessions_user_id ON sessions(user_id)")
                 connection.execute(
                     """
+                    CREATE TABLE IF NOT EXISTS api_keys (
+                        id TEXT PRIMARY KEY,
+                        user_id TEXT NOT NULL,
+                        name TEXT NOT NULL,
+                        token_hash TEXT NOT NULL UNIQUE,
+                        prefix TEXT NOT NULL,
+                        created_at TEXT NOT NULL,
+                        last_used_at TEXT,
+                        revoked_at TEXT,
+                        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+                    )
+                    """
+                )
+                connection.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_api_keys_user ON api_keys(user_id, created_at DESC)"
+                )
+                connection.execute(
+                    """
                     CREATE TABLE IF NOT EXISTS password_resets (
                         user_id TEXT PRIMARY KEY,
                         code_hash TEXT NOT NULL,
@@ -1025,6 +1043,92 @@ class AuthStore:
         with closing(self._connect()) as connection:
             connection.execute("DELETE FROM sessions WHERE token_hash = ?", (token_hash(token),))
 
+    def create_api_key(self, user_id: str, name: str) -> tuple[dict[str, str | None], str]:
+        """Create a user key. The caller is responsible for showing the token once."""
+        self.initialize()
+        token = f"vg_live_{new_token()}"
+        now = utc_now().isoformat()
+        key = {
+            "id": uuid.uuid4().hex,
+            "name": name,
+            "prefix": token[:16],
+            "created_at": now,
+            "last_used_at": None,
+        }
+        with closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            active_count = connection.execute(
+                "SELECT COUNT(*) FROM api_keys WHERE user_id=? AND revoked_at IS NULL",
+                (user_id,),
+            ).fetchone()[0]
+            if active_count >= 10:
+                connection.rollback()
+                raise ValueError("每个账户最多保留 10 个有效 API Key")
+            connection.execute(
+                """
+                INSERT INTO api_keys(id, user_id, name, token_hash, prefix, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (key["id"], user_id, name, token_hash(token), key["prefix"], now),
+            )
+            connection.commit()
+        return key, token
+
+    def list_api_keys(self, user_id: str) -> list[dict[str, str | None]]:
+        self.initialize()
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                """
+                SELECT id, name, prefix, created_at, last_used_at
+                FROM api_keys
+                WHERE user_id=? AND revoked_at IS NULL
+                ORDER BY created_at DESC
+                """,
+                (user_id,),
+            ).fetchall()
+        return [
+            {
+                "id": str(row[0]),
+                "name": str(row[1]),
+                "prefix": str(row[2]),
+                "created_at": str(row[3]),
+                "last_used_at": str(row[4]) if row[4] else None,
+            }
+            for row in rows
+        ]
+
+    def revoke_api_key(self, user_id: str, key_id: str) -> bool:
+        self.initialize()
+        with closing(self._connect()) as connection:
+            changed = connection.execute(
+                """
+                UPDATE api_keys SET revoked_at=?
+                WHERE id=? AND user_id=? AND revoked_at IS NULL
+                """,
+                (utc_now().isoformat(), key_id, user_id),
+            ).rowcount
+        return changed == 1
+
+    def user_for_api_key(self, token: str | None) -> User | None:
+        if not token or not token.startswith("vg_live_"):
+            return None
+        self.initialize()
+        now = utc_now().isoformat()
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                """
+                SELECT users.id, users.username, users.email, users.email_verified, users.credits, users.created_at,
+                       api_keys.id
+                FROM api_keys JOIN users ON users.id = api_keys.user_id
+                WHERE api_keys.token_hash=? AND api_keys.revoked_at IS NULL
+                """,
+                (token_hash(token),),
+            ).fetchone()
+            if row is None:
+                return None
+            connection.execute("UPDATE api_keys SET last_used_at=? WHERE id=?", (now, row[6]))
+            return self._user_from_row(connection, row)
+
     def delete_user(self, user_id: str) -> list[str]:
         """Delete account-owned records and return result files that may be removed."""
         self.initialize()
@@ -1071,6 +1175,7 @@ class AuthStore:
             )
             for table in (
                 "sessions",
+                "api_keys",
                 "email_verifications",
                 "email_bindings",
                 "password_resets",
