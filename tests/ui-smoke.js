@@ -185,11 +185,7 @@ async function checkEnglishLocale(browser) {
     lang: document.documentElement.lang,
     code: document.querySelector("#locale-code")?.textContent,
     overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
-    chinese: [...document.querySelectorAll("body *")]
-      .filter((node) => node.children.length === 0 && /[\u4e00-\u9fff]/.test(node.textContent || ""))
-      .filter((node) => getComputedStyle(node).display !== "none")
-      .map((node) => node.textContent.trim())
-      .filter(Boolean),
+    chinese: (() => { const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT); const values = []; let node; while ((node = walker.nextNode())) { const value = node.nodeValue.trim(); if (value && /[\u4e00-\u9fff]/.test(value) && node.parentElement?.getClientRects().length) values.push(value); } return values; })(),
     values: [...document.querySelectorAll("#results-body td")].map((node) => node.textContent.trim()),
     notification: document.querySelector("#notification-list")?.textContent.trim(),
     fallbackDetail: VerigoI18n.resultValue("服务器暂未确认 450"),
@@ -207,6 +203,55 @@ async function checkEnglishLocale(browser) {
   }
   await page.close();
   return { englishLocale: true };
+}
+
+async function checkEnglishDiscoveryAndDocs(browser) {
+  const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  await page.route("**/api/auth/me", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({
+      id: "coverage-user", email: "coverage@example.com", email_verified: true,
+      credits: 10, paid_credits: 10, trial_credits: 0, trial_credit_expires_at: null,
+      needs_email_binding: false, is_admin: false,
+    }),
+  }));
+  await page.route("**/api/jobs?limit=8", (route) => route.fulfill({ contentType: "application/json", body: "[]" }));
+  await page.route("**/api/notifications", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: [], unread_count: 0 }) }));
+  await page.goto("http://127.0.0.1:8000", { waitUntil: "networkidle" });
+  await page.click("#locale-toggle");
+  await page.click('[data-view="batch"]');
+  await page.fill("#email-input", "coverage@qq.com");
+  await page.click('[data-view="discovery"]');
+  const main = await page.evaluate(() => ({
+    chinese: (() => { const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT); const values = []; let node; while ((node = walker.nextNode())) { const value = node.nodeValue.trim(); if (value && /[\u4e00-\u9fff]/.test(value) && node.parentElement?.getClientRects().length) values.push(value); } return values; })(),
+    title: document.querySelector("#discovery-workspace h1")?.textContent,
+    search: document.querySelector("#discovery-start")?.textContent,
+    qqNotice: document.querySelector("#qq-rate-notice")?.textContent,
+    nodeMessage: VerigoI18n.text("腾讯 QQ 验证节点正在启动，请稍候"),
+  }));
+  if (main.chinese.length || main.title !== "Find a work email by name" || main.search !== "Find emails" || !main.qqNotice.includes("automatic backoff") || main.nodeMessage !== "Tencent QQ verification node is starting. Please wait.") {
+    throw new Error(`english discovery: untranslated content ${JSON.stringify(main)}`);
+  }
+  await page.close();
+
+  const docs = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  await docs.goto("http://127.0.0.1:8000/api-docs", { waitUntil: "domcontentloaded" });
+  await docs.click("#docs-locale-toggle");
+  const documentation = await docs.evaluate(() => ({
+    lang: document.documentElement.lang,
+    code: document.querySelector("#docs-locale-code")?.textContent,
+    overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+    chinese: (() => { const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT); const values = []; let node; while ((node = walker.nextNode())) { const value = node.nodeValue.trim(); if (value && /[\u4e00-\u9fff]/.test(value) && node.parentElement?.getClientRects().length) values.push(value); } return values; })(),
+  }));
+  if (documentation.lang !== "en" || documentation.code !== "EN" || documentation.overflow || documentation.chinese.length) {
+    throw new Error(`english API documentation: untranslated content ${JSON.stringify(documentation)}`);
+  }
+  await docs.click("#docs-locale-toggle");
+  if ((await docs.locator("html").getAttribute("lang")) !== "zh-CN") {
+    throw new Error("API documentation: locale toggle must restore Chinese");
+  }
+  await docs.close();
+  return { englishDiscoveryAndDocs: true };
 }
 
 async function checkDashboard(browser) {
@@ -298,9 +343,10 @@ async function checkAdminCredits(browser) {
     const interaction = await checkAccountAndImport(browser);
     const mobileTrialAction = await checkMobileTrialAction(browser);
     const englishLocale = await checkEnglishLocale(browser);
+    const englishDiscoveryAndDocs = await checkEnglishDiscoveryAndDocs(browser);
     const dashboard = await checkDashboard(browser);
     const adminCredits = await checkAdminCredits(browser);
-    console.log(JSON.stringify([desktop, mobile, interaction, mobileTrialAction, englishLocale, dashboard, adminCredits]));
+    console.log(JSON.stringify([desktop, mobile, interaction, mobileTrialAction, englishLocale, englishDiscoveryAndDocs, dashboard, adminCredits]));
   } finally {
     await browser.close();
   }

@@ -54,11 +54,20 @@ const VerigoI18n = (() => {
     "关闭此窗口后，完整 Key 不会再次显示。": "The full key cannot be shown again after closing this window.", "有效 Key": "Active keys",
     "账户安全": "Account security", "原密码": "Current password", "新密码": "New password", "更新密码": "Update password",
     "找回密码": "Password reset", "注册邮箱": "Account email", "设置新密码": "Set a new password",
-    "免费验证候选邮箱": "Verify candidates free", "Developer API": "Developer API", "API Key": "API key", "通知": "Notifications", "暂无通知": "No notifications",
+    "免费验证候选邮箱": "Verify candidates free", "Developer API": "Developer API", "API Key": "API key", "通知": "Notifications", "暂无通知": "No notifications", "暂无任务": "No recent jobs", "名字": "First name", "姓氏": "Last name", "公司域名": "Company domain",
     "使用 API Key 从你的应用提交邮箱验证任务。完整 Key 只会显示一次。": "Use an API key to submit verification jobs from your application. The full key is shown once.",
     "暂不支持 Yahoo 邮箱验证（含所有国家或地区后缀、ymail.com、rocketmail.com）。Yahoo 的反验证策略非常严格，当前全网常规验证均难以稳定通过，暂时没有可靠解决方案。": "Yahoo email verification is not supported, including regional Yahoo domains, ymail.com, and rocketmail.com. Yahoo's anti-verification controls do not currently permit reliable validation.",
     "暂不支持 Yahoo 邮箱验证（含所有国家或地区后缀，以及 ymail.com、rocketmail.com）。Yahoo 的反验证策略非常严格，当前全网常规验证都难以稳定通过，暂时没有可靠解决方案。": "Yahoo email verification is not supported, including regional Yahoo domains, ymail.com, and rocketmail.com. Yahoo's anti-verification controls do not currently permit reliable validation.",
-    "此操作会删除账户、任务记录、额度流水和可下载结果，无法撤销。正在处理的任务必须先完成。": "This permanently deletes your account, jobs, credit history, and downloadable results. Active jobs must finish first."
+    "此操作会删除账户、任务记录、额度流水和可下载结果，无法撤销。正在处理的任务必须先完成。": "This permanently deletes your account, jobs, credit history, and downloadable results. Active jobs must finish first.",
+    "检测到 QQ 邮箱：将采用专属低并发与自动退避策略，验证速度会较慢，请耐心等待。": "QQ email detected. Verification uses dedicated low concurrency and automatic backoff, so it may take longer.",
+    "QQ 专属低并发": "QQ low concurrency", "自定义模式": "Custom mode", "正在解析…": "Parsing...", "选择文件": "Choose file",
+    "正在提交…": "Submitting...", "请输入一个邮箱地址": "Enter one email address", "请至少输入一个邮箱地址": "Enter at least one email address", "单个验证一次只能提交一个邮箱地址": "Single check accepts one email address at a time",
+    "没有符合条件的结果": "No results match the current filters", "正在等待首条验证结果": "Waiting for the first verification result", "下载失败": "Download failed", "未验证": "Not verified", "正在生成验证结果": "Generating verification results",
+    "验证已停止，已保留当前结果。": "Verification stopped. Current results were kept.", "正在从候选地址中确认结果": "Confirming results from candidate addresses", "已找到": "Found", "等待验证": "Waiting for verification",
+    "加载中...": "Loading...", "还没有 API Key。": "No API keys yet.", "撤销": "Revoke", "已复制": "Copied", "尚未使用": "Not used yet",
+    "请先登录管理员账户": "Sign in with an administrator account", "请先登录后使用工作邮箱查找": "Sign in to use work email discovery", "收费批量验证": "Paid bulk verification", "批量验证收件地址": "Verify email addresses in bulk", "创建账户": "Create account",
+    "腾讯 QQ 验证节点正在启动，请稍候": "Tencent QQ verification node is starting. Please wait.", "腾讯 QQ 验证节点正在重启，请稍候": "Tencent QQ verification node is restarting. Please wait.",
+    "腾讯 QQ 验证节点启动超时，请稍后重新提交": "Tencent QQ verification node timed out while starting. Please submit again later.", "腾讯 QQ 验证节点启动失败，请稍后重新提交": "Tencent QQ verification node failed to start. Please submit again later."
   };
 
   const backend = {
@@ -102,6 +111,20 @@ const VerigoI18n = (() => {
     if (/^(\d+) 邮箱服务器拒绝验证$/.test(text)) return text.replace(/^(\d+) 邮箱服务器拒绝验证$/, "$1 Mail server rejected validation");
     if (/^(\d+) 邮件服务器临时灰名单，正在重试$/.test(text)) return text.replace(/^(\d+) 邮件服务器临时灰名单，正在重试$/, "$1 Mail server greylisted this request; retrying");
     if (/^(\d+) 邮件服务器暂时无法确认，正在重试$/.test(text)) return text.replace(/^(\d+) 邮件服务器暂时无法确认，正在重试$/, "$1 Mail server could not confirm yet; retrying");
+    if (/^(\d+) 个邮箱$/.test(text)) return text.replace(/^(\d+) 个邮箱$/, "$1 email addresses");
+    if (/^开始验证 · (\d+) 额度$/.test(text)) return text.replace(/^开始验证 · (\d+) 额度$/, "Start verification · $1 credits");
+    if (/^(.*)；QQ 邮箱采用低并发和自动退避策略，请耐心等待。$/.test(text)) return `${localizeText(text.replace(/^(.*)；QQ 邮箱采用低并发和自动退避策略，请耐心等待。$/, "$1"))}; QQ email uses low concurrency and automatic backoff. Please wait.`;
+    if (/^查找 (\d+) 个候选邮箱$/.test(text)) return text.replace(/^查找 (\d+) 个候选邮箱$/, "Finding $1 candidate email addresses");
+    if (/^(\d+) 个候选邮箱$/.test(text)) return text.replace(/^(\d+) 个候选邮箱$/, "$1 candidate email addresses");
+    if (/^免费验证候选邮箱 · (\d+) 个地址$/.test(text)) return text.replace(/^免费验证候选邮箱 · (\d+) 个地址$/, "Verify $1 candidate email addresses free");
+    if (/^已生成 (\d+) 个候选地址。QQ 邮箱验证采用专属低并发策略，验证速度较慢，请耐心等待。$/.test(text)) return text.replace(/^已生成 (\d+) 个候选地址。QQ 邮箱验证采用专属低并发策略，验证速度较慢，请耐心等待。$/, "Generated $1 candidate addresses. QQ email verification uses dedicated low concurrency, so it may take longer.");
+    if (/^已生成 (\d+) 个候选地址$/.test(text)) return text.replace(/^已生成 (\d+) 个候选地址$/, "Generated $1 candidate addresses");
+    if (/^已找到唯一可确认邮箱：(.+)$/.test(text)) return text.replace(/^已找到唯一可确认邮箱：(.+)$/, "One confirmed email address found: $1");
+    if (/^找到 (\d+) 个可确认地址，请结合职位或公开信息进一步确认。$/.test(text)) return text.replace(/^找到 (\d+) 个可确认地址，请结合职位或公开信息进一步确认。$/, "Found $1 plausible addresses. Confirm with role or public information.");
+    if (/^没有可确认地址，部分候选暂时无法确认。请稍后重试或检查域名。$/.test(text)) return "No addresses could be confirmed. Some candidates are temporarily inconclusive; try again later or check the domain.";
+    if (/^未找到可确认地址。请检查姓名和域名，或对方可能已离职。$/.test(text)) return "No addresses could be confirmed. Check the name and domain, or the person may no longer be with the company.";
+    if (/^腾讯 QQ 验证节点启动失败，正在重试（(\d+)\/(\d+)）$/.test(text)) return text.replace(/^腾讯 QQ 验证节点启动失败，正在重试（(\d+)\/(\d+)）$/, "Tencent QQ verification node failed to start; retrying ($1/$2)");
+    if (/^腾讯 QQ 验证节点失败: (.+)$/.test(text)) return text.replace(/^腾讯 QQ 验证节点失败: (.+)$/, "Tencent QQ verification node failed: $1");
     return text;
   }
 
@@ -142,6 +165,17 @@ const VerigoI18n = (() => {
 
   function localizeElement(element) {
     if (!(element instanceof HTMLElement) || element.matches("script, style, #locale-code")) return;
+    if (element.children.length) {
+      [...element.childNodes]
+        .filter((node) => node.nodeType === Node.TEXT_NODE && node.nodeValue.trim())
+        .forEach((node, index) => {
+          const key = `i18nNode${index}`;
+          if (!element.dataset[key]) element.dataset[key] = node.nodeValue;
+          const source = element.dataset[key];
+          const nextText = locale === "en" ? localizeText(source) : source;
+          if (node.nodeValue !== nextText) node.nodeValue = nextText;
+        });
+    }
     if (!element.children.length) {
       if (!element.dataset.i18nText) element.dataset.i18nText = element.textContent;
       let source = element.dataset.i18nText;

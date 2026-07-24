@@ -70,7 +70,7 @@ function updateProviderNotice(emails) {
   const hasQq = emails.some(isQqEmail);
   notice.classList.toggle("hidden", !hasQq);
   notice.textContent = hasQq
-    ? "检测到 QQ 邮箱：将采用专属低并发与自动退避策略，验证速度会较慢，请耐心等待。"
+    ? VerigoI18n.text("检测到 QQ 邮箱：将采用专属低并发与自动退避策略，验证速度会较慢，请耐心等待。")
     : "";
 }
 
@@ -79,11 +79,11 @@ function updateCount() {
   updateProviderNotice(currentEmails());
   count.textContent = total.toLocaleString();
   if (state.view === "single") {
-    startButton.textContent = "免费验证";
+    startButton.textContent = VerigoI18n.text("免费验证");
   } else if (total > 0) {
-    startButton.textContent = `开始验证 · ${total.toLocaleString()} 额度`;
+    startButton.textContent = VerigoI18n.text(`开始验证 · ${total.toLocaleString()} 额度`);
   } else {
-    startButton.textContent = "开始验证";
+    startButton.textContent = VerigoI18n.text("开始验证");
   }
 }
 
@@ -405,7 +405,7 @@ function showJob(job) {
   const [modeLabel, modeClass] = job.qq_slow
     ? ["QQ 专属低并发", "mode-qq"]
     : (modeLabels[job.worker_count] || ["自定义模式", "mode-standard"]);
-  mode.textContent = modeLabel;
+  mode.textContent = VerigoI18n.text(modeLabel);
   mode.className = `mode-badge ${modeClass}`;
   const isActive = job.status === "queued" || job.status === "running";
   el("stop-job-button").classList.toggle("hidden", !isActive);
@@ -427,14 +427,14 @@ function renderJobProgress(job, progressCopy) {
   const retryAt = job.retry_at ? new Date(job.retry_at) : null;
   const render = () => {
     if (!retryAt || Number.isNaN(retryAt.getTime())) {
-      el("progress-copy").textContent = `${progressCopy}${suffix}`;
+      el("progress-copy").textContent = VerigoI18n.text(`${progressCopy}${suffix}`);
       return;
     }
     const seconds = Math.max(0, Math.ceil((retryAt.getTime() - Date.now()) / 1000));
     const countdown = seconds >= 60
       ? `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒`
       : `${seconds} 秒`;
-    el("progress-copy").textContent = `${progressCopy}，${countdown} 后再次复核${suffix}`;
+    el("progress-copy").textContent = VerigoI18n.text(`${progressCopy}，${countdown} 后再次复核${suffix}`);
   };
   render();
   if (retryAt && retryAt.getTime() > Date.now()) {
@@ -688,7 +688,7 @@ function renderDiscoveryResults() {
 }
 
 function showDiscoveryJob(job) {
-  el("discovery-title").textContent = `查找 ${job.total} 个候选邮箱`;
+  el("discovery-title").textContent = VerigoI18n.text(`查找 ${job.total} 个候选邮箱`);
   const status = el("discovery-status");
   status.textContent = statusLabels[job.status] || job.status;
   status.className = `status status-${job.status}`;
@@ -700,37 +700,37 @@ function showDiscoveryJob(job) {
   const progressCopy = job.status === "queued" && job.queue_position
     ? `排队中，前方还有 ${job.queue_position - 1} 个任务`
     : `${job.completed} / ${job.total} 已处理`;
-  el("discovery-progress-copy").textContent = job.qq_slow
+  el("discovery-progress-copy").textContent = VerigoI18n.text(job.qq_slow
     ? `${progressCopy}；QQ 邮箱采用低并发和自动退避策略，请耐心等待。`
-    : progressCopy;
+    : progressCopy);
 }
 
 function updateDiscoveryVerdict(job) {
   const verdict = el("discovery-verdict");
   if (job.status === "stopped") {
     verdict.className = "discovery-verdict warn";
-    verdict.textContent = "验证已停止，已保留当前结果。";
+    verdict.textContent = VerigoI18n.text("验证已停止，已保留当前结果。");
     return;
   }
   if (job.status !== "completed") {
     verdict.className = "discovery-verdict";
-    verdict.textContent = "正在从候选地址中确认结果";
+    verdict.textContent = VerigoI18n.text("正在从候选地址中确认结果");
     return;
   }
   const good = state.discovery.results.filter((item) => resultType(item) === "deliverable");
   const unknown = state.discovery.results.filter((item) => resultType(item) === "unknown");
   if (good.length === 1) {
     verdict.className = "discovery-verdict good";
-    verdict.textContent = `已找到唯一可确认邮箱：${good[0].email}`;
+    verdict.textContent = VerigoI18n.text(`已找到唯一可确认邮箱：${good[0].email}`);
   } else if (good.length > 1) {
     verdict.className = "discovery-verdict warn";
-    verdict.textContent = `找到 ${good.length} 个可确认地址，请结合职位或公开信息进一步确认。`;
+    verdict.textContent = VerigoI18n.text(`找到 ${good.length} 个可确认地址，请结合职位或公开信息进一步确认。`);
   } else if (unknown.length) {
     verdict.className = "discovery-verdict warn";
-    verdict.textContent = "没有可确认地址，部分候选暂时无法确认。请稍后重试或检查域名。";
+    verdict.textContent = VerigoI18n.text("没有可确认地址，部分候选暂时无法确认。请稍后重试或检查域名。");
   } else {
     verdict.className = "discovery-verdict warn";
-    verdict.textContent = "未找到可确认地址。请检查姓名和域名，或对方可能已离职。";
+    verdict.textContent = VerigoI18n.text("未找到可确认地址。请检查姓名和域名，或对方可能已离职。");
   }
 }
 
@@ -784,18 +784,18 @@ el("discovery-start").addEventListener("click", async () => {
     list.classList.remove("hidden");
     const verifyButton = el("discovery-verify");
     verifyButton.disabled = false;
-    verifyButton.textContent = `免费验证候选邮箱 · ${state.discovery.candidates.length} 个地址`;
-    el("discovery-title").textContent = `${state.discovery.candidates.length} 个候选邮箱`;
-    el("discovery-status").textContent = "已找到";
+    verifyButton.textContent = VerigoI18n.text(`免费验证候选邮箱 · ${state.discovery.candidates.length} 个地址`);
+    el("discovery-title").textContent = VerigoI18n.text(`${state.discovery.candidates.length} 个候选邮箱`);
+    el("discovery-status").textContent = VerigoI18n.text("已找到");
     el("discovery-status").className = "status status-completed";
     el("discovery-progress-percent").textContent = "0%";
     el("discovery-progress-bar").style.width = "0%";
-    el("discovery-progress-copy").textContent = "等待验证";
+    el("discovery-progress-copy").textContent = VerigoI18n.text("等待验证");
     const hasQqCandidate = state.discovery.candidates.some(isQqEmail);
     el("discovery-verdict").className = hasQqCandidate ? "discovery-verdict warn" : "discovery-verdict";
-    el("discovery-verdict").textContent = hasQqCandidate
+    el("discovery-verdict").textContent = VerigoI18n.text(hasQqCandidate
       ? `已生成 ${state.discovery.candidates.length} 个候选地址。QQ 邮箱验证采用专属低并发策略，验证速度较慢，请耐心等待。`
-      : `已生成 ${state.discovery.candidates.length} 个候选地址`;
+      : `已生成 ${state.discovery.candidates.length} 个候选地址`);
     renderDiscoveryResults();
   } catch (requestError) {
     error.textContent = requestError.message;

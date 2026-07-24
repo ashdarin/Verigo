@@ -5,11 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="index,follow">
   <title>Verigo API Documentation</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" referrerpolicy="no-referrer">
   <style>
     :root { color-scheme: light; font-family: Arial, sans-serif; color: #17212b; background: #f6f8fa; }
     body { margin: 0; line-height: 1.55; }
     header { background: #112e3b; color: #fff; padding: 28px 20px; }
-    main, header > div { max-width: 920px; margin: 0 auto; }
+    main, .header-inner { max-width: 920px; margin: 0 auto; }
+    .header-inner { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
     main { padding: 28px 20px 48px; }
     h1, h2 { margin: 0 0 12px; letter-spacing: 0; }
     h2 { margin-top: 32px; font-size: 20px; }
@@ -21,28 +23,23 @@
     th { background: #eef3f7; }
     .method { color: #0a7f39; font-weight: 700; white-space: nowrap; }
     .note { border-left: 4px solid #0969da; padding: 10px 14px; background: #eaf3ff; }
+    .locale-toggle { display: inline-flex; align-items: center; gap: 6px; min-height: 34px; padding: 0 10px; border: 1px solid rgba(255,255,255,.45); border-radius: 5px; background: transparent; color: #fff; font: inherit; font-size: 12px; font-weight: 700; cursor: pointer; }
+    .locale-toggle:hover { background: rgba(255,255,255,.1); }
+    [hidden] { display: none !important; }
+    @media (max-width: 560px) { header { padding: 20px 16px; } main { padding: 22px 16px 36px; } .header-inner { gap: 12px; } h1 { font-size: 25px; } table { table-layout: fixed; font-size: 12px; } th, td { padding: 8px; overflow-wrap: anywhere; } td code { white-space: normal; } pre { max-width: 100%; box-sizing: border-box; padding: 12px; font-size: 11px; } }
   </style>
 </head>
 <body>
-  <header><div><h1>Verigo API</h1><p>邮箱验证服务的程序化接口</p></div></header>
+  <header><div class="header-inner"><div><h1>Verigo API</h1><p id="docs-subtitle">邮箱验证服务的程序化接口</p></div><button id="docs-locale-toggle" class="locale-toggle" type="button" aria-label="Switch to English" title="Switch to English"><i class="fa-solid fa-globe" aria-hidden="true"></i><span id="docs-locale-code">CN</span></button></div></header>
   <main>
-    <p class="note">在官网登录后，点击顶部导航栏中的 <strong>Developer API</strong>，即可创建、复制和撤销 API Key。</p>
-    <p>Base URL: <code>https://verigo.site</code>. 完整机器可读规范见 <a href="/openapi.json">OpenAPI JSON</a>。</p>
-    <h2>认证</h2>
-    <p>先创建 Verigo 账户并登录。通过登录会话创建 API Key，密钥只在创建响应中出现一次，请立即保存在安全的密钥管理工具中。</p>
-    <pre><code>curl -c cookies.txt -X POST https://verigo.site/api/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"account":"you@example.com","password":"your-password"}'
-
-curl -b cookies.txt -X POST https://verigo.site/api/auth/api-keys \
-  -H "Content-Type: application/json" \
-  -d '{"name":"production"}'</code></pre>
-    <p>对用户接口提供密钥：<code>Authorization: Bearer vg_live_...</code> 或 <code>X-API-Key: vg_live_...</code>。</p>
-    <div class="note">API Key 仅可访问账户本人的用户接口，不能访问运营后台或远程工作节点接口。可在 <code>GET /api/auth/api-keys</code> 列出，并用 <code>DELETE /api/auth/api-keys/{key_id}</code> 立即撤销。</div>
-    <h2>提交与查询</h2>
-    <table>
-      <thead><tr><th>方法</th><th>路径</th><th>说明</th></tr></thead>
-      <tbody>
+    <section id="docs-zh">
+      <p class="note">在官网登录后，点击顶部导航栏中的 <strong>Developer API</strong>，即可创建、复制和撤销 API Key。</p>
+      <p>Base URL: <code>https://verigo.site</code>。完整机器可读规范见 <a href="/openapi.json">OpenAPI JSON</a>。</p>
+      <h2>认证</h2>
+      <p>先创建 Verigo 账户并登录。通过登录会话创建 API Key，密钥只在创建响应中出现一次，请立即保存在安全的密钥管理工具中。</p>
+      <div class="note">API Key 仅可访问账户本人的用户接口，不能访问运营后台或远程工作节点接口。可在 <code>GET /api/auth/api-keys</code> 列出，并用 <code>DELETE /api/auth/api-keys/{key_id}</code> 立即撤销。</div>
+      <h2>提交与查询</h2>
+      <table><thead><tr><th>方法</th><th>路径</th><th>说明</th></tr></thead><tbody>
         <tr><td class="method">POST</td><td><code>/api/jobs</code></td><td>提交批量邮箱验证任务；按任务中的邮箱数量消耗账户额度。</td></tr>
         <tr><td class="method">GET</td><td><code>/api/jobs/{job_id}</code></td><td>获取任务状态、进度和汇总。</td></tr>
         <tr><td class="method">GET</td><td><code>/api/jobs/{job_id}/results</code></td><td>分页读取结果，可使用 <code>offset</code>、<code>limit</code>、<code>search</code>、<code>deliverability</code> 过滤。</td></tr>
@@ -52,18 +49,72 @@ curl -b cookies.txt -X POST https://verigo.site/api/auth/api-keys \
         <tr><td class="method">POST</td><td><code>/api/jobs/{job_id}/resume</code></td><td>继续已停止任务中尚未完成的邮箱。</td></tr>
         <tr><td class="method">GET</td><td><code>/api/wallet</code></td><td>读取可用验证额度与使用记录。</td></tr>
         <tr><td class="method">POST</td><td><code>/api/discovery/candidates</code></td><td>按姓名和域名生成候选邮箱地址。</td></tr>
-      </tbody>
-    </table>
-    <h2>示例</h2>
-    <pre><code>curl -X POST https://verigo.site/api/jobs \
+      </tbody></table>
+      <h2>示例</h2>
+    </section>
+    <section id="docs-en" hidden>
+      <p class="note">After signing in, open <strong>Developer API</strong> from the top navigation to create, copy, and revoke API keys.</p>
+      <p>Base URL: <code>https://verigo.site</code>. The machine-readable specification is available as <a href="/openapi.json">OpenAPI JSON</a>.</p>
+      <h2>Authentication</h2>
+      <p>Create a Verigo account and sign in first. API keys are created with a browser session and their full value is shown only once. Store it in a secure secret manager immediately.</p>
+      <div class="note">An API key can access only the authenticated account's user endpoints. It cannot access operations or remote-worker endpoints. List keys with <code>GET /api/auth/api-keys</code> and revoke one immediately with <code>DELETE /api/auth/api-keys/{key_id}</code>.</div>
+      <h2>Submit and Query</h2>
+      <table><thead><tr><th>Method</th><th>Path</th><th>Description</th></tr></thead><tbody>
+        <tr><td class="method">POST</td><td><code>/api/jobs</code></td><td>Submit a bulk email-verification job. Credits are consumed by the number of email addresses in the job.</td></tr>
+        <tr><td class="method">GET</td><td><code>/api/jobs/{job_id}</code></td><td>Retrieve a job's status, progress, and summary.</td></tr>
+        <tr><td class="method">GET</td><td><code>/api/jobs/{job_id}/results</code></td><td>Read paginated results. Filter with <code>offset</code>, <code>limit</code>, <code>search</code>, and <code>deliverability</code>.</td></tr>
+        <tr><td class="method">GET</td><td><code>/api/jobs/{job_id}/download</code></td><td>Download CSV results after a job completes.</td></tr>
+        <tr><td class="method">GET</td><td><code>/api/jobs</code></td><td>Read recent jobs. <code>limit</code> ranges from 1 to 50.</td></tr>
+        <tr><td class="method">POST</td><td><code>/api/jobs/{job_id}/stop</code></td><td>Stop a running job.</td></tr>
+        <tr><td class="method">POST</td><td><code>/api/jobs/{job_id}/resume</code></td><td>Resume unprocessed addresses in a stopped job.</td></tr>
+        <tr><td class="method">GET</td><td><code>/api/wallet</code></td><td>Retrieve available verification credits and usage history.</td></tr>
+        <tr><td class="method">POST</td><td><code>/api/discovery/candidates</code></td><td>Generate candidate email addresses from a name and domain.</td></tr>
+      </tbody></table>
+      <h2>Examples</h2>
+    </section>
+    <pre><code>curl -c cookies.txt -X POST https://verigo.site/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"account":"you@example.com","password":"your-password"}'
+
+curl -b cookies.txt -X POST https://verigo.site/api/auth/api-keys \
+  -H "Content-Type: application/json" \
+  -d '{"name":"production"}'
+
+curl -X POST https://verigo.site/api/jobs \
   -H "Authorization: Bearer vg_live_your_api_key" \
   -H "Content-Type: application/json" \
   -d '{"emails":["alice@example.com","bob@example.com"],"worker_count":2}'
 
 curl https://verigo.site/api/jobs/JOB_ID/results?limit=100 \
   -H "X-API-Key: vg_live_your_api_key"</code></pre>
-    <h2>响应与限制</h2>
-    <p>成功的任务创建返回 <code>202</code>；认证失败返回 <code>401</code>；额度不足或无效请求返回 <code>422</code>；队列繁忙返回 <code>429</code>。单任务上限与并发限制由账户服务配置决定。</p>
+    <section id="docs-tail-zh"><h2>响应与限制</h2><p>成功的任务创建返回 <code>202</code>；认证失败返回 <code>401</code>；额度不足或无效请求返回 <code>422</code>；队列繁忙返回 <code>429</code>。单任务上限与并发限制由账户服务配置决定。</p></section>
+    <section id="docs-tail-en" hidden><h2>Responses and Limits</h2><p>Successful job creation returns <code>202</code>; authentication failure returns <code>401</code>; insufficient credits or invalid requests return <code>422</code>; and a busy queue returns <code>429</code>. Per-job and concurrency limits are configured by the account service.</p></section>
   </main>
+  <script>
+    (() => {
+      let locale = localStorage.getItem("verigo_locale") === "en" ? "en" : "zh";
+      const apply = () => {
+        const english = locale === "en";
+        document.documentElement.lang = english ? "en" : "zh-CN";
+        document.title = english ? "Verigo API Documentation" : "Verigo API 文档";
+        document.getElementById("docs-zh").hidden = english;
+        document.getElementById("docs-en").hidden = !english;
+        document.getElementById("docs-tail-zh").hidden = english;
+        document.getElementById("docs-tail-en").hidden = !english;
+        document.getElementById("docs-subtitle").textContent = english ? "Programmatic email verification" : "邮箱验证服务的程序化接口";
+        document.getElementById("docs-locale-code").textContent = english ? "EN" : "CN";
+        const label = english ? "Switch to Chinese" : "Switch to English";
+        const toggle = document.getElementById("docs-locale-toggle");
+        toggle.setAttribute("aria-label", label);
+        toggle.title = label;
+      };
+      apply();
+      document.getElementById("docs-locale-toggle").addEventListener("click", () => {
+        locale = locale === "en" ? "zh" : "en";
+        localStorage.setItem("verigo_locale", locale);
+        apply();
+      });
+    })();
+  </script>
 </body>
 </html>
