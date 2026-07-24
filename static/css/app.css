@@ -166,6 +166,27 @@ th:nth-child(1) { width: 24%; } th:nth-child(2) { width: 12%; } th:nth-child(3) 
 .auth-dialog input { margin-bottom: 16px; }
 .auth-dialog .primary-action { margin-top: 5px; }
 .dialog-copy { margin: 12px 0 18px; color: var(--muted); line-height: 1.55; }
+.api-doc-link { margin: -6px 0 18px; font-size: 12px; font-weight: 700; }
+.api-doc-link a { color: var(--accent); }
+.api-key-created { margin: 0 25px 20px; padding: 14px; border: 1px solid #88bda3; border-radius: 6px; background: #edf8f1; color: #174d35; }
+.api-key-created strong { display: block; font-size: 13px; }
+.api-key-created p { margin: 9px 0 0; font-size: 12px; line-height: 1.45; }
+.api-key-token-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; margin-top: 10px; }
+.api-key-token-row input { min-width: 0; margin: 0; padding: 10px; border: 1px solid #88bda3; border-radius: 4px; background: #fff; font-family: Consolas, monospace; font-size: 12px; }
+.api-key-token-row .secondary-action { width: auto; min-height: 38px; padding: 0 12px; }
+.api-key-list-section { margin: 0 25px 25px; border-top: 1px solid var(--line); }
+.api-key-list-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 0 8px; }
+.api-key-list-heading h3 { margin: 0; font-size: 14px; }
+.api-key-list-heading .text-action { margin: 0; }
+.api-keys-list { border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.api-key-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 11px; border-bottom: 1px solid var(--line); background: #fff; }
+.api-key-row:last-child { border-bottom: 0; }
+.api-key-row strong, .api-key-row small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.api-key-row strong { font-size: 13px; }
+.api-key-row small { margin-top: 3px; color: var(--muted); font-family: Consolas, monospace; font-size: 11px; }
+.api-key-row .account-delete { width: auto; padding: 7px 8px; border: 0; border-radius: 4px; background: transparent; color: var(--bad); font-size: 12px; }
+.api-key-row .account-delete:hover { background: #faefee; }
+.api-keys-empty { padding: 16px; color: var(--muted); font-size: 12px; }
 .text-action { display: block; margin: -7px 0 13px; padding: 0; border: 0; background: transparent; color: var(--accent); font-size: 12px; font-weight: 700; }
 .text-action:hover { color: var(--accent-dark); text-decoration: underline; }
 .turnstile-container { min-height: 65px; margin: 2px 0 14px; }
@@ -269,6 +290,9 @@ th:nth-child(1) { width: 24%; } th:nth-child(2) { width: 12%; } th:nth-child(3) 
   .discovery-workspace { grid-template-columns: 1fr; }
   .dashboard-workspace { min-height: calc(100vh - 108px); padding: 26px 20px 32px; }
   .admin-credits-workspace { min-height: calc(100vh - 108px); padding: 32px 20px; }
+  .admin-credits-panel { grid-template-columns: minmax(0, 1fr); }
+  .admin-credits-heading, .admin-credit-grant-form, .admin-account-summary { grid-column: 1; }
+  .admin-account-summary { grid-row: auto; }
   .site-footer { padding: 16px; }
   .report-scorecards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .report-scorecard:nth-child(2) { border-right: 0; }
@@ -290,6 +314,8 @@ th:nth-child(1) { width: 24%; } th:nth-child(2) { width: 12%; } th:nth-child(3) 
   .claim-trial { flex: 0 0 104px; min-height: 36px; padding: 0 7px; font-size: 10px; line-height: 1.15; }
   .account-button { flex: 0 0 52px; width: 52px; padding: 0; font-size: 0; }
   .account-button::after { content: "账户"; font-size: 12px; }
+  .api-key-token-row { grid-template-columns: 1fr; }
+  .api-key-token-row .secondary-action { width: 100%; }
   .workspace { min-height: calc(100vh - 108px); }
   .discovery-workspace { min-height: calc(100vh - 108px); }
   .dashboard-workspace { min-height: calc(100vh - 108px); padding: 22px 16px 30px; }

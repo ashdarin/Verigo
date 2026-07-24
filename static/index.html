@@ -42,6 +42,7 @@
         <strong id="account-name"></strong>
         <small id="account-credits" class="account-credits"></small>
         <button id="bind-email-button" type="button" class="hidden">绑定邮箱</button>
+        <button id="api-keys-button" type="button" class="account-action">Developer API</button>
         <button id="change-password-button" type="button" class="account-action">修改密码</button>
         <button id="delete-account-button" type="button" class="account-delete">删除账户</button>
         <button id="logout-button" type="button">退出登录</button>
@@ -319,6 +320,7 @@
       <a href="/email-verification">邮箱验证指南</a>
       <a href="/bulk-email-verification">批量验证</a>
       <a href="/email-list-cleaning">名单清洗</a>
+      <a href="/api-docs">API 文档</a>
       <a href="/privacy">隐私与数据说明</a>
       <a href="/acceptable-use">使用边界</a>
     </nav>
@@ -388,6 +390,27 @@
     </form>
   </dialog>
 
+  <dialog id="api-keys-dialog" class="auth-dialog">
+    <form id="api-key-create-form" method="dialog">
+      <div class="dialog-heading"><div><p class="eyebrow">Developer API</p><h2>API Key</h2></div><button id="close-api-keys" class="dialog-close" type="button" aria-label="关闭">×</button></div>
+      <p class="dialog-copy">使用 API Key 从你的应用提交邮箱验证任务。完整 Key 只会显示一次。</p>
+      <p class="api-doc-link"><a href="/api-docs" target="_blank" rel="noopener">查看 API 文档</a></p>
+      <label for="api-key-name">Key 名称</label>
+      <input id="api-key-name" type="text" maxlength="64" placeholder="例如：生产环境" required>
+      <p id="api-key-create-error" class="form-error" role="alert"></p>
+      <button id="api-key-create-submit" class="primary-action" type="submit">创建 API Key</button>
+    </form>
+    <section id="api-key-created" class="api-key-created hidden" aria-live="polite">
+      <strong>请立即复制并安全保存</strong>
+      <div class="api-key-token-row"><input id="api-key-token" type="text" readonly aria-label="新创建的 API Key"><button id="copy-api-key" class="secondary-action" type="button">复制</button></div>
+      <p>关闭此窗口后，完整 Key 不会再次显示。</p>
+    </section>
+    <section class="api-key-list-section">
+      <div class="api-key-list-heading"><h3>有效 Key</h3><button id="api-keys-refresh" class="text-action" type="button">刷新</button></div>
+      <div id="api-keys-list" class="api-keys-list" aria-live="polite"></div>
+    </section>
+  </dialog>
+
   <dialog id="change-password-dialog" class="auth-dialog">
     <form id="change-password-form" method="dialog">
       <div class="dialog-heading"><div><p class="eyebrow">账户安全</p><h2>修改密码</h2></div><button id="close-change-password" class="dialog-close" type="button" aria-label="关闭">×</button></div>
@@ -419,6 +442,6 @@
     </form>
   </dialog>
 
-  <script src="/static/js/app.js?v=report-v9" defer></script>
+  <script src="/static/js/app.js?v=report-v10" defer></script>
 </body>
 </html>

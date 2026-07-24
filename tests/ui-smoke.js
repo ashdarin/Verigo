@@ -21,12 +21,13 @@ async function checkViewport(browser, name, width, height) {
       startVisible: visible("#start-button"),
       progressVisible: visible(".progress-section"),
       tableVisible: visible(".table-wrap"),
+      apiDocsHref: document.querySelector('.site-footer a[href="/api-docs"]')?.getAttribute("href"),
     };
   });
 
   if (!result.title.includes("Verigo")) throw new Error(`${name}: unexpected title`);
   if (result.overflow) throw new Error(`${name}: page has horizontal overflow`);
-  if (!result.startVisible || !result.progressVisible || !result.tableVisible) {
+  if (!result.startVisible || !result.progressVisible || !result.tableVisible || result.apiDocsHref !== "/api-docs") {
     throw new Error(`${name}: a primary UI region is hidden`);
   }
   if (errors.length) throw new Error(`${name}: console errors: ${errors.join(" | ")}`);
@@ -55,6 +56,15 @@ async function checkAccountAndImport(browser) {
     throw new Error("account: email verification should use the in-app dialog");
   }
   await page.click("#close-email-verification");
+  await page.click("#account-button");
+  await page.click("#api-keys-button");
+  if (!(await page.locator("#api-keys-dialog").evaluate((node) => node.open))) {
+    throw new Error("api keys: management must be available from the signed-in account menu");
+  }
+  await page.fill("#api-key-name", "browser smoke");
+  await page.click("#api-key-create-submit");
+  await page.waitForFunction(() => document.querySelector("#api-key-token")?.value.startsWith("vg_live_"));
+  await page.click("#close-api-keys");
   await page.click("#account-button");
   await page.click("#change-password-button");
   if (!(await page.locator("#change-password-dialog").evaluate((node) => node.open))) {
@@ -131,8 +141,13 @@ async function checkMobileTrialAction(browser) {
   await page.fill("#auth-password", "browser-smoke-2026");
   await page.click("#auth-submit");
   await page.waitForFunction(() => !document.querySelector("#claim-trial-button")?.classList.contains("hidden"));
+  await page.click("#account-button");
+  await page.click("#api-keys-button");
+  if (!(await page.locator("#api-keys-dialog").evaluate((node) => node.open))) {
+    throw new Error("mobile API keys: management dialog should open");
+  }
   if (await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth)) {
-    throw new Error("mobile trial action: page has horizontal overflow after login");
+    throw new Error("mobile API keys: page has horizontal overflow");
   }
   await page.close();
   return { mobileTrialAction: true };

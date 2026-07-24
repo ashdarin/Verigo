@@ -1038,6 +1038,107 @@ el("change-password-button").addEventListener("click", () => {
   el("change-password-error").textContent = "";
   el("change-password-dialog").showModal();
 });
+function formatApiKeyTime(value) {
+  return value ? new Date(value).toLocaleString("zh-CN") : "尚未使用";
+}
+
+function clearCreatedApiKey() {
+  el("api-key-token").value = "";
+  el("api-key-created").classList.add("hidden");
+  el("copy-api-key").textContent = "复制";
+}
+
+async function loadApiKeys() {
+  const list = el("api-keys-list");
+  list.textContent = "加载中...";
+  try {
+    const keys = await api("/api/auth/api-keys");
+    list.replaceChildren();
+    if (!keys.length) {
+      const empty = document.createElement("p");
+      empty.className = "api-keys-empty";
+      empty.textContent = "还没有 API Key。";
+      list.append(empty);
+      return;
+    }
+    keys.forEach((key) => {
+      const row = document.createElement("div");
+      row.className = "api-key-row";
+      const info = document.createElement("div");
+      const name = document.createElement("strong");
+      name.textContent = key.name;
+      const detail = document.createElement("small");
+      detail.textContent = `${key.prefix}... · ${formatApiKeyTime(key.last_used_at)}`;
+      info.append(name, detail);
+      const revoke = document.createElement("button");
+      revoke.type = "button";
+      revoke.className = "account-delete";
+      revoke.textContent = "撤销";
+      revoke.addEventListener("click", async () => {
+        if (!window.confirm(`撤销 API Key “${key.name}”？此操作不能恢复。`)) return;
+        revoke.disabled = true;
+        try {
+          await api(`/api/auth/api-keys/${key.id}`, { method: "DELETE" });
+          await loadApiKeys();
+        } catch (error) {
+          revoke.disabled = false;
+          el("api-key-create-error").textContent = error.message;
+        }
+      });
+      row.append(info, revoke);
+      list.append(row);
+    });
+  } catch (error) {
+    list.textContent = `无法加载 API Key：${error.message}`;
+  }
+}
+
+function openApiKeysDialog() {
+  el("account-menu").classList.add("hidden");
+  el("api-key-create-form").reset();
+  el("api-key-create-error").textContent = "";
+  clearCreatedApiKey();
+  el("api-keys-dialog").showModal();
+  loadApiKeys();
+}
+
+el("api-keys-button").addEventListener("click", openApiKeysDialog);
+el("close-api-keys").addEventListener("click", () => el("api-keys-dialog").close());
+el("api-keys-dialog").addEventListener("close", clearCreatedApiKey);
+el("api-keys-refresh").addEventListener("click", loadApiKeys);
+el("api-key-create-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const submit = el("api-key-create-submit");
+  submit.disabled = true;
+  el("api-key-create-error").textContent = "";
+  try {
+    const key = await api("/api/auth/api-keys", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: el("api-key-name").value }),
+    });
+    el("api-key-token").value = key.token;
+    el("api-key-created").classList.remove("hidden");
+    el("api-key-create-form").reset();
+    await loadApiKeys();
+  } catch (error) {
+    el("api-key-create-error").textContent = error.message;
+  } finally {
+    submit.disabled = false;
+  }
+});
+el("copy-api-key").addEventListener("click", async () => {
+  const token = el("api-key-token").value;
+  if (!token) return;
+  try {
+    await navigator.clipboard.writeText(token);
+    el("copy-api-key").textContent = "已复制";
+  } catch (_) {
+    el("api-key-token").select();
+    document.execCommand("copy");
+    el("copy-api-key").textContent = "已复制";
+  }
+});
 el("close-change-password").addEventListener("click", () => el("change-password-dialog").close());
 el("change-password-form").addEventListener("submit", async (event) => {
   event.preventDefault();
