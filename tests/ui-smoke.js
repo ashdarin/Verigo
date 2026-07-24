@@ -153,6 +153,34 @@ async function checkMobileTrialAction(browser) {
   return { mobileTrialAction: true };
 }
 
+async function checkEnglishLocale(browser) {
+  const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  await page.goto("http://127.0.0.1:8000", { waitUntil: "networkidle" });
+  await page.click("#locale-toggle");
+  await page.fill("#single-email-input", "locale-check@yahoo.com");
+  await page.click("#start-button");
+  await page.waitForFunction(() => document.querySelectorAll("#results-body td").length >= 5);
+  const result = await page.evaluate(() => ({
+    lang: document.documentElement.lang,
+    code: document.querySelector("#locale-code")?.textContent,
+    overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+    chinese: [...document.querySelectorAll("body *")]
+      .filter((node) => node.children.length === 0 && /[\u4e00-\u9fff]/.test(node.textContent || ""))
+      .filter((node) => getComputedStyle(node).display !== "none")
+      .map((node) => node.textContent.trim())
+      .filter(Boolean),
+    values: [...document.querySelectorAll("#results-body td")].map((node) => node.textContent.trim()),
+  }));
+  if (result.lang !== "en" || result.code !== "EN" || result.overflow || result.chinese.length) {
+    throw new Error(`english locale: unexpected rendering ${JSON.stringify(result)}`);
+  }
+  if (!result.values.includes("Unsupported validation")) {
+    throw new Error(`english locale: result detail was not localized ${JSON.stringify(result.values)}`);
+  }
+  await page.close();
+  return { englishLocale: true };
+}
+
 async function checkDashboard(browser) {
   const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
   await page.route("**/api/auth/me", (route) => route.fulfill({
@@ -241,9 +269,10 @@ async function checkAdminCredits(browser) {
     const mobile = await checkViewport(browser, "mobile", 390, 844);
     const interaction = await checkAccountAndImport(browser);
     const mobileTrialAction = await checkMobileTrialAction(browser);
+    const englishLocale = await checkEnglishLocale(browser);
     const dashboard = await checkDashboard(browser);
     const adminCredits = await checkAdminCredits(browser);
-    console.log(JSON.stringify([desktop, mobile, interaction, mobileTrialAction, dashboard, adminCredits]));
+    console.log(JSON.stringify([desktop, mobile, interaction, mobileTrialAction, englishLocale, dashboard, adminCredits]));
   } finally {
     await browser.close();
   }

@@ -32,6 +32,7 @@ const singleInput = el("single-email-input");
 const count = el("email-count");
 const startButton = el("start-button");
 const errorBox = el("form-error");
+VerigoI18n.init();
 const statusLabels = { queued: "排队中", running: "验证中", completed: "已完成", failed: "失败", stopped: "已停止" };
 const modeLabels = {
   1: ["稳定模式", "mode-stable"],
@@ -99,7 +100,7 @@ async function api(url, options = {}) {
   if (!response.ok) {
     const detail = body?.detail;
     const message = Array.isArray(detail) ? detail.map((item) => item.msg).join("；") : detail;
-    throw new Error(message || `请求失败 (${response.status})`);
+    throw new Error(VerigoI18n.errorMessage(message || `请求失败 (${response.status})`));
   }
   return body;
 }
@@ -533,7 +534,13 @@ function renderResults() {
   rows.forEach((item) => {
     const [label, className] = resultMeta(item);
     const row = document.createElement("tr");
-    const values = [item.email, null, item.domain_type || "-", item.verification_method || item.strategy || "-", item.smtp_result || item.message || "-"];
+    const values = [
+      item.email,
+      null,
+      item.domain_type || "-",
+      VerigoI18n.resultValue(item.verification_method || item.strategy || "-"),
+      VerigoI18n.resultValue(item.smtp_result || item.message || "-"),
+    ];
     values.forEach((value, index) => {
       const cell = document.createElement("td");
       if (index === 1) {
@@ -660,7 +667,12 @@ function renderDiscoveryResults() {
   state.discovery.results.forEach((item) => {
     const [label, className] = resultMeta(item);
     const row = document.createElement("tr");
-    [item.email, label, item.verification_method || item.strategy || "-", item.smtp_result || item.message || "-"].forEach((value, index) => {
+    [
+      item.email,
+      label,
+      VerigoI18n.resultValue(item.verification_method || item.strategy || "-"),
+      VerigoI18n.resultValue(item.smtp_result || item.message || "-"),
+    ].forEach((value, index) => {
       const cell = document.createElement("td");
       if (index === 1) {
         const pill = document.createElement("span");
