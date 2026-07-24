@@ -4,7 +4,7 @@ const VerigoI18n = (() => {
     "运营监控": "Operations", "额度管理": "Credit management", "资金与使用": "Wallet",
     "运行中": "Online", "验证邮箱领取体验额度": "Verify email for trial credits", "登录": "Sign in",
     "绑定邮箱": "Link email", "修改密码": "Change password", "删除账户": "Delete account", "退出登录": "Sign out",
-    "免费单个验证": "Free single check", "验证单个收件地址": "Verify one email address", "邮箱地址": "Email address",
+    "免费单个验证": "Free single check", "验证单个收件地址": "Verify an email", "邮箱地址": "Email address",
     "手动输入": "Paste list", "文件导入": "Import file", "邮箱列表": "Email list", "导入数据": "Import data",
     "选择文件": "Choose file", "验证速度": "Verification speed", "稳定": "Steady", "标准": "Standard", "快速": "Fast", "极速": "Fastest",
     "免费验证": "Free verification", "最近任务": "Recent jobs", "任务工作台": "Job workspace", "等待任务": "Waiting for a job",
@@ -65,7 +65,7 @@ const VerigoI18n = (() => {
     "没有符合条件的结果": "No results match the current filters", "正在等待首条验证结果": "Waiting for the first verification result", "下载失败": "Download failed", "未验证": "Not verified", "正在生成验证结果": "Generating verification results",
     "验证已停止，已保留当前结果。": "Verification stopped. Current results were kept.", "正在从候选地址中确认结果": "Confirming results from candidate addresses", "已找到": "Found", "等待验证": "Waiting for verification",
     "加载中...": "Loading...", "还没有 API Key。": "No API keys yet.", "撤销": "Revoke", "已复制": "Copied", "尚未使用": "Not used yet",
-    "请先登录管理员账户": "Sign in with an administrator account", "请先登录后使用工作邮箱查找": "Sign in to use work email discovery", "收费批量验证": "Paid bulk verification", "批量验证收件地址": "Verify email addresses in bulk", "创建账户": "Create account",
+    "请先登录管理员账户": "Sign in with an administrator account", "请先登录后使用工作邮箱查找": "Sign in to use work email discovery", "收费批量验证": "Paid bulk verification", "批量验证收件地址": "Verify emails in bulk", "创建账户": "Create account", "例如：生产环境": "e.g. Production",
     "腾讯 QQ 验证节点正在启动，请稍候": "Tencent QQ verification node is starting. Please wait.", "腾讯 QQ 验证节点正在重启，请稍候": "Tencent QQ verification node is restarting. Please wait.",
     "腾讯 QQ 验证节点启动超时，请稍后重新提交": "Tencent QQ verification node timed out while starting. Please submit again later.", "腾讯 QQ 验证节点启动失败，请稍后重新提交": "Tencent QQ verification node failed to start. Please submit again later."
   };

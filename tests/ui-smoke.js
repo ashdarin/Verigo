@@ -254,6 +254,46 @@ async function checkEnglishDiscoveryAndDocs(browser) {
   return { englishDiscoveryAndDocs: true };
 }
 
+async function checkEnglishDesktopHeadingAndApiKeys(browser) {
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  await page.route("**/api/auth/me", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({
+      id: "desktop-locale-user", email: "desktop@example.com", email_verified: true,
+      credits: 10, paid_credits: 10, trial_credits: 0, trial_credit_expires_at: null,
+      needs_email_binding: false, is_admin: false,
+    }),
+  }));
+  await page.route("**/api/jobs?limit=8", (route) => route.fulfill({ contentType: "application/json", body: "[]" }));
+  await page.route("**/api/notifications", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: [], unread_count: 0 }) }));
+  await page.route("**/api/auth/api-keys", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify([{ id: "desktop-key", name: "production", prefix: "vg_live_12345678", last_used_at: null }]),
+  }));
+  await page.goto("http://127.0.0.1:8000", { waitUntil: "networkidle" });
+  await page.click("#locale-toggle");
+  const measureHeading = () => page.evaluate(() => {
+    const heading = document.querySelector("#verify-heading").getBoundingClientRect();
+    const count = document.querySelector("#email-count").getBoundingClientRect();
+    return { text: document.querySelector("#verify-heading").textContent, overlaps: heading.right > count.left, headingRight: heading.right, countLeft: count.left };
+  });
+  const single = await measureHeading();
+  await page.click('[data-view="batch"]');
+  const batch = await measureHeading();
+  await page.click("#api-nav");
+  await page.waitForFunction(() => document.querySelectorAll(".api-key-row").length === 1);
+  const apiKeys = await page.evaluate(() => ({
+    placeholder: document.querySelector("#api-key-name").getAttribute("placeholder"),
+    detail: document.querySelector(".api-key-row small")?.textContent,
+    chinese: (() => { const walker = document.createTreeWalker(document.querySelector("#api-keys-dialog"), NodeFilter.SHOW_TEXT); const values = []; let node; while ((node = walker.nextNode())) { const value = node.nodeValue.trim(); if (value && /[\u4e00-\u9fff]/.test(value) && node.parentElement?.getClientRects().length) values.push(value); } return values; })(),
+  }));
+  if (single.text !== "Verify an email" || batch.text !== "Verify emails in bulk" || single.overlaps || batch.overlaps || apiKeys.placeholder !== "e.g. Production" || !apiKeys.detail?.includes("Not used yet") || apiKeys.chinese.length) {
+    throw new Error(`english desktop heading/API keys: invalid rendering ${JSON.stringify({ single, batch, apiKeys })}`);
+  }
+  await page.close();
+  return { englishDesktopHeadingAndApiKeys: true };
+}
+
 async function checkDashboard(browser) {
   const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
   await page.route("**/api/auth/me", (route) => route.fulfill({
@@ -344,9 +384,10 @@ async function checkAdminCredits(browser) {
     const mobileTrialAction = await checkMobileTrialAction(browser);
     const englishLocale = await checkEnglishLocale(browser);
     const englishDiscoveryAndDocs = await checkEnglishDiscoveryAndDocs(browser);
+    const englishDesktopHeadingAndApiKeys = await checkEnglishDesktopHeadingAndApiKeys(browser);
     const dashboard = await checkDashboard(browser);
     const adminCredits = await checkAdminCredits(browser);
-    console.log(JSON.stringify([desktop, mobile, interaction, mobileTrialAction, englishLocale, englishDiscoveryAndDocs, dashboard, adminCredits]));
+    console.log(JSON.stringify([desktop, mobile, interaction, mobileTrialAction, englishLocale, englishDiscoveryAndDocs, englishDesktopHeadingAndApiKeys, dashboard, adminCredits]));
   } finally {
     await browser.close();
   }

@@ -135,8 +135,8 @@ function switchView(view) {
   el("single-panel").classList.toggle("hidden", view !== "single");
   el("batch-panel").classList.toggle("hidden", view !== "batch");
   if (!discovery && !dashboard && !adminCredits && !wallet) {
-    el("verify-eyebrow").textContent = view === "single" ? "免费单个验证" : "收费批量验证";
-    el("verify-heading").textContent = view === "single" ? "验证单个收件地址" : "批量验证收件地址";
+    el("verify-eyebrow").textContent = VerigoI18n.text(view === "single" ? "免费单个验证" : "收费批量验证");
+    el("verify-heading").textContent = VerigoI18n.text(view === "single" ? "验证单个收件地址" : "批量验证收件地址");
   }
   document.querySelectorAll("[data-view]").forEach((button) => {
     button.classList.toggle("active", button.dataset.view === view);
@@ -1062,25 +1062,25 @@ el("change-password-button").addEventListener("click", () => {
   el("change-password-dialog").showModal();
 });
 function formatApiKeyTime(value) {
-  return value ? new Date(value).toLocaleString("zh-CN") : "尚未使用";
+  return value ? VerigoI18n.formatDate(value) : VerigoI18n.text("尚未使用");
 }
 
 function clearCreatedApiKey() {
   el("api-key-token").value = "";
   el("api-key-created").classList.add("hidden");
-  el("copy-api-key").textContent = "复制";
+  el("copy-api-key").textContent = VerigoI18n.text("复制");
 }
 
 async function loadApiKeys() {
   const list = el("api-keys-list");
-  list.textContent = "加载中...";
+  list.textContent = VerigoI18n.text("加载中...");
   try {
     const keys = await api("/api/auth/api-keys");
     list.replaceChildren();
     if (!keys.length) {
       const empty = document.createElement("p");
       empty.className = "api-keys-empty";
-      empty.textContent = "还没有 API Key。";
+      empty.textContent = VerigoI18n.text("还没有 API Key。");
       list.append(empty);
       return;
     }
@@ -1096,7 +1096,7 @@ async function loadApiKeys() {
       const revoke = document.createElement("button");
       revoke.type = "button";
       revoke.className = "account-delete";
-      revoke.textContent = "撤销";
+      revoke.textContent = VerigoI18n.text("撤销");
       revoke.addEventListener("click", async () => {
         if (!window.confirm(`撤销 API Key “${key.name}”？此操作不能恢复。`)) return;
         revoke.disabled = true;
@@ -1112,7 +1112,7 @@ async function loadApiKeys() {
       list.append(row);
     });
   } catch (error) {
-    list.textContent = `无法加载 API Key：${error.message}`;
+    list.textContent = VerigoI18n.locale === "en" ? `Unable to load API keys: ${error.message}` : `无法加载 API Key：${error.message}`;
   }
 }
 
@@ -1163,11 +1163,11 @@ el("copy-api-key").addEventListener("click", async () => {
   if (!token) return;
   try {
     await navigator.clipboard.writeText(token);
-    el("copy-api-key").textContent = "已复制";
+    el("copy-api-key").textContent = VerigoI18n.text("已复制");
   } catch (_) {
     el("api-key-token").select();
     document.execCommand("copy");
-    el("copy-api-key").textContent = "已复制";
+    el("copy-api-key").textContent = VerigoI18n.text("已复制");
   }
 });
 el("close-change-password").addEventListener("click", () => el("change-password-dialog").close());
