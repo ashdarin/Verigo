@@ -176,7 +176,7 @@ class VerificationTasks:
         self,
         emails: list[str],
         worker_count: int,
-        target_emails: dict[str, list[str]],
+        target_emails: list[tuple[str, list[str]]],
         owner_id: str | None = None,
         job_id: str | None = None,
         immediate_results_by_target: dict[str, list[dict[str, Any]]] | None = None,
@@ -185,7 +185,7 @@ class VerificationTasks:
         all_emails = clean_emails(emails)
         partitions = [
             (target, clean_emails(partition_emails))
-            for target, partition_emails in target_emails.items()
+            for target, partition_emails in target_emails
             if partition_emails
         ]
         partitioned_emails = [email for _, partition in partitions for email in partition]

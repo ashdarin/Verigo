@@ -60,8 +60,16 @@ from app.tasks.verification import (
 
 
 router = APIRouter(prefix="/api")
-TENCENT_QQ_DOMAINS = frozenset({"qq.com", "vip.qq.com", "foxmail.com"})
-GMAIL_DOMAINS = frozenset({"gmail.com", "googlemail.com"})
+DOMESTIC_EMAIL_DOMAINS = frozenset({
+    "qq.com", "vip.qq.com", "foxmail.com", "163.com", "126.com", "yeah.net",
+    "sina.com", "sina.cn", "sohu.com", "aliyun.com", "aliyun.cn", "139.com",
+    "189.cn", "wo.cn", "21cn.com", "tom.com",
+})
+FOREIGN_EMAIL_DOMAINS = frozenset({
+    "gmail.com", "googlemail.com", "outlook.com", "hotmail.com", "live.com",
+    "icloud.com", "me.com", "mac.com", "proton.me", "protonmail.com", "pm.me",
+    "aol.com", "yandex.com", "yandex.ru", "zoho.com",
+})
 REMOTE_WORKERS = {"tencent-qq": "tencent_qq", "gmail": "gmail"}
 
 
@@ -76,14 +84,25 @@ def tencent_qq_target(emails: list[str], owner_email: str | None) -> str:
     if not qq_worker_allowed(owner_email) or not emails:
         return "local"
     domains = {email.rsplit("@", 1)[-1].lower() for email in emails if "@" in email}
-    return "tencent_qq" if domains and domains <= TENCENT_QQ_DOMAINS else "local"
+    return "tencent_qq" if domains and all(is_domestic_email_domain(domain) for domain in domains) else "local"
 
 
 def gmail_target(emails: list[str], owner_email: str | None) -> str:
     if not gmail_worker_allowed(owner_email) or not emails:
         return "local"
     domains = {email.rsplit("@", 1)[-1].lower() for email in emails if "@" in email}
-    return "gmail" if domains and domains <= GMAIL_DOMAINS else "local"
+    return "gmail" if domains and all(is_foreign_email_domain(domain) for domain in domains) else "local"
+
+
+def is_domestic_email_domain(domain: str) -> bool:
+    return domain in DOMESTIC_EMAIL_DOMAINS or domain.endswith(".cn")
+
+
+def is_foreign_email_domain(domain: str) -> bool:
+    if domain in FOREIGN_EMAIL_DOMAINS:
+        return True
+    suffix = domain.rsplit(".", 1)[-1] if "." in domain else ""
+    return len(suffix) == 2 and suffix != "cn"
 
 
 def qq_worker_allowed(owner_email: str | None) -> bool:
@@ -105,11 +124,26 @@ def gmail_worker_allowed(owner_email: str | None) -> bool:
 def email_execution_target(email: str, owner_email: str | None) -> str:
     """Return the configured worker target for one address."""
     domain = email.rsplit("@", 1)[-1].lower() if "@" in email else ""
-    if domain in TENCENT_QQ_DOMAINS and qq_worker_allowed(owner_email):
+    if is_domestic_email_domain(domain) and qq_worker_allowed(owner_email):
         return "tencent_qq"
-    if domain in GMAIL_DOMAINS and gmail_worker_allowed(owner_email):
+    if is_foreign_email_domain(domain) and gmail_worker_allowed(owner_email):
         return "gmail"
     return "local"
+
+
+def partition_target_emails(targets: dict[str, list[str]]) -> list[tuple[str, list[str]]]:
+    """Keep remote completion requests below their maximum supported payload."""
+    partitions: list[tuple[str, list[str]]] = []
+    remote_targets = {"tencent_qq", "gmail"}
+    for target, target_emails in targets.items():
+        chunk_size = (
+            settings.remote_worker_max_emails_per_job
+            if target in remote_targets
+            else len(target_emails)
+        )
+        for start in range(0, len(target_emails), chunk_size):
+            partitions.append((target, target_emails[start : start + chunk_size]))
+    return partitions
 
 
 def submit_routed_job(
@@ -136,16 +170,29 @@ def submit_routed_job(
         ]
     }
 
+    partitions = partition_target_emails(targets)
     # Candidate discovery must preserve its input order and stop as soon as it
     # confirms a deliverable address, so it cannot be processed concurrently.
-    if not stop_on_deliverable and len(targets) > 1:
+    if not stop_on_deliverable and len(partitions) > 1:
         return verification_tasks.submit_partitioned(
             emails,
             worker_count,
-            targets,
+            partitions,
             owner_id=owner_id,
             job_id=job_id,
             immediate_results_by_target=immediate_results,
+        )
+
+    if stop_on_deliverable and len(partitions) > 1:
+        # This mode must stop globally after the first deliverable result, which
+        # cannot be preserved across concurrent remote child jobs.
+        return verification_tasks.submit(
+            emails,
+            worker_count,
+            owner_id=owner_id,
+            stop_on_deliverable=True,
+            job_id=job_id,
+            execution_target="local",
         )
 
     execution_target = next(iter(targets), "local") if len(targets) == 1 else "local"
@@ -191,13 +238,17 @@ def submit_stopped_job_continuation(job: Job) -> Job:
         if target is None:
             raise ValueError("任务分流记录不完整，无法继续验证")
         targets.setdefault(target, []).append(email)
-    if len(targets) == 1:
+    partitions = partition_target_emails(targets)
+    if len(partitions) == 1:
         target, emails = next(iter(targets.items()))
         return verification_tasks.submit(
             emails, job.worker_count, owner_id=job.owner_id, execution_target=target
         )
     return verification_tasks.submit_partitioned(
-        remaining, job.worker_count, targets, owner_id=job.owner_id
+        remaining,
+        job.worker_count,
+        partitions,
+        owner_id=job.owner_id,
     )
 
 
@@ -587,7 +638,7 @@ def create_job(
     if not emails:
         raise HTTPException(status_code=422, detail="邮箱包含空格、非 ASCII 或非法字符")
     job_limit = settings.max_emails_per_job
-    if len(emails) > job_limit:
+    if job_limit > 0 and len(emails) > job_limit:
         raise HTTPException(status_code=422, detail=f"单次最多 {job_limit} 个邮箱")
     job_id = uuid.uuid4().hex[:12]
     charge_reference = f"verification:{job_id}"
@@ -758,7 +809,7 @@ async def import_file(file: Annotated[UploadFile, File()]) -> ImportResponse:
     if len(data) > settings.max_import_bytes:
         raise HTTPException(status_code=413, detail="文件不能超过 5 MB")
     try:
-        emails = extract_emails(file.filename or "", data, settings.max_emails_per_job)
+        emails = extract_emails(file.filename or "", data, settings.max_emails_per_job or None)
     except (ValueError, json.JSONDecodeError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     if not emails:

@@ -34,7 +34,13 @@ from fastapi.testclient import TestClient
 from openpyxl import Workbook
 
 import app.api.auth as auth_api
-from app.api.routes import gmail_target, submit_routed_job, tencent_qq_target
+from app.api.routes import (
+    gmail_target,
+    submit_routed_job,
+    submit_stopped_job_continuation,
+    tencent_qq_target,
+)
+from app.api.schemas import CreateJobRequest
 from app.config import settings
 from app.core.legacy import load_legacy_module
 from app.core.result_retry import (
@@ -69,9 +75,13 @@ def completed_job(job_id: str, **kwargs) -> Job:
 
 assert tencent_qq_target(["person@qq.com"], "smoke@example.com") == "tencent_qq"
 assert tencent_qq_target(["person@qq.com"], "other@example.com") == "local"
+assert tencent_qq_target(["person@163.com"], "smoke@example.com") == "tencent_qq"
+assert tencent_qq_target(["person@company.cn"], "smoke@example.com") == "tencent_qq"
 assert tencent_qq_target(["person@example.com"], "smoke@example.com") == "local"
 assert gmail_target(["person@gmail.com"], "smoke@example.com") == "gmail"
 assert gmail_target(["person@gmail.com"], "other@example.com") == "local"
+assert gmail_target(["person@outlook.com"], "smoke@example.com") == "gmail"
+assert gmail_target(["person@company.de"], "smoke@example.com") == "gmail"
 assert gmail_target(["person@example.com"], "smoke@example.com") == "local"
 assert is_temporary_smtp_452({"smtp_result": "452 temporary mailbox failure"})
 assert is_temporary_smtp_452({"message": "452 暂时无法确认"})
@@ -224,13 +234,44 @@ assert job_store.get(legacy_deferred_job.id).deferred_retry_at is None
 object.__setattr__(settings, "tencent_qq_worker_allowed_emails", frozenset({"*"}))
 assert tencent_qq_target(["person@qq.com"], "other@example.com") == "tencent_qq"
 assert tencent_qq_target(["person@qq.com"], None) == "tencent_qq"
+assert tencent_qq_target(["person@163.com"], None) == "tencent_qq"
 assert tencent_qq_target(["person@example.com"], None) == "local"
+assert gmail_target(["person@outlook.com"], "smoke@example.com") == "gmail"
 object.__setattr__(
     settings, "tencent_qq_worker_allowed_emails", frozenset({"smoke@example.com"})
 )
 
 object.__setattr__(settings, "tencent_qq_worker_allowed_emails", frozenset({"*"}))
 object.__setattr__(settings, "gmail_worker_allowed_emails", frozenset({"*"}))
+large_domestic_emails = [f"domestic-{index}@163.com" for index in range(5001)]
+assert len(CreateJobRequest(emails=large_domestic_emails).emails) == 5001
+large_domestic_parent = submit_routed_job(
+    large_domestic_emails,
+    2,
+    owner_id="mixed-owner",
+    owner_email="mixed-owner@example.com",
+    job_id="largedomestic01",
+)
+large_domestic_children = job_store.children(large_domestic_parent.id)
+assert large_domestic_parent.execution_target == "aggregate"
+assert [child.execution_target for child in large_domestic_children] == ["tencent_qq", "tencent_qq"]
+assert [len(child.emails) for child in large_domestic_children] == [5000, 1]
+assert job_store.stop(large_domestic_parent.id).status == "stopped"
+large_domestic_continuation = submit_stopped_job_continuation(
+    job_store.get(large_domestic_parent.id)
+)
+assert [len(child.emails) for child in job_store.children(large_domestic_continuation.id)] == [5000, 1]
+assert job_store.stop(large_domestic_continuation.id).status == "stopped"
+large_stop_on_deliverable = submit_routed_job(
+    large_domestic_emails,
+    2,
+    owner_id="mixed-owner",
+    owner_email="mixed-owner@example.com",
+    stop_on_deliverable=True,
+    job_id="largestopdeliver01",
+)
+assert large_stop_on_deliverable.execution_target == "local"
+assert job_store.stop(large_stop_on_deliverable.id).status == "stopped"
 yahoo_mixed_parent = submit_routed_job(
     ["skip@yahoo.com", "first@qq.com", "second@gmail.com", "third@example.com"],
     2,

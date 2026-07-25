@@ -15,7 +15,10 @@ class CreateJobRequest(BaseModel):
     @field_validator("emails")
     @classmethod
     def check_job_size(cls, value: list[str]) -> list[str]:
-        if len(value) > settings.max_emails_per_job:
+        if (
+            settings.max_emails_per_job > 0
+            and len(value) > settings.max_emails_per_job
+        ):
             raise ValueError(f"单个任务最多 {settings.max_emails_per_job} 个邮箱")
         return value
 

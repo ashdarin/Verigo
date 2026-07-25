@@ -89,6 +89,8 @@ if ! cmp -s "$backup_dir/requirements.txt" "$app_dir/requirements.txt"; then
 fi
 
 for setting in \
+    'VERIGO_MAX_EMAILS=0' \
+    'VERIGO_REMOTE_WORKER_MAX_EMAILS=5000' \
     'VERIGO_MAX_GUEST_EMAILS=100' \
     'VERIGO_FREE_SINGLE_DAILY_LIMIT=20' \
     'VERIGO_EMAIL_VERIFICATION_TRIAL_CREDITS=10' \

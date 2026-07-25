@@ -13,7 +13,7 @@ from openpyxl import load_workbook
 EMAIL_PATTERN = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
 
 
-def emails_in_values(values: list[object], limit: int) -> list[str]:
+def emails_in_values(values: list[object], limit: int | None) -> list[str]:
     emails: list[str] = []
     seen: set[str] = set()
     for value in values:
@@ -22,7 +22,7 @@ def emails_in_values(values: list[object], limit: int) -> list[str]:
             if key not in seen:
                 seen.add(key)
                 emails.append(email)
-                if len(emails) >= limit:
+                if limit is not None and limit > 0 and len(emails) >= limit:
                     return emails
     return emails
 
@@ -36,7 +36,7 @@ def decode_text(data: bytes) -> str:
     raise ValueError("文件编码无法识别，请使用 UTF-8 或 GB18030")
 
 
-def extract_emails(filename: str, data: bytes, limit: int) -> list[str]:
+def extract_emails(filename: str, data: bytes, limit: int | None = None) -> list[str]:
     suffix = Path(filename).suffix.lower()
     values: list[object] = []
 

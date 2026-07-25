@@ -18,7 +18,12 @@ def env_bool(name: str, default: bool = False) -> bool:
 @dataclass(frozen=True)
 class Settings:
     app_name: str = os.getenv("VERIGO_APP_NAME", "Verigo")
-    max_emails_per_job: int = int(os.getenv("VERIGO_MAX_EMAILS", "5000"))
+    # Zero disables the user-facing total-size limit. Remote workers are still
+    # partitioned to keep each completion payload within its protocol limit.
+    max_emails_per_job: int = int(os.getenv("VERIGO_MAX_EMAILS", "0"))
+    remote_worker_max_emails_per_job: int = max(
+        1, int(os.getenv("VERIGO_REMOTE_WORKER_MAX_EMAILS", "5000"))
+    )
     max_guest_emails: int = int(os.getenv("VERIGO_MAX_GUEST_EMAILS", "100"))
     free_single_daily_limit: int = int(
         os.getenv("VERIGO_FREE_SINGLE_DAILY_LIMIT", "20")
