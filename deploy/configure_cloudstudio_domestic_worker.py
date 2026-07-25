@@ -36,10 +36,6 @@ def main() -> None:
     request.SpaceKey = secondary_cloudstudio_config.cloudstudio_space_key
     request.Lifecycle = lifecycle
     request.Envs = envs
-    repository = models.GitRepository()
-    repository.Url = "https://github.com/ashdarin/Verigo.git"
-    repository.Branch = "main"
-    request.Repository = repository
     response = TencentCloudStudioApi(secondary_cloudstudio_config)._client.ModifyWorkspace(
         request
     )
