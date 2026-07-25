@@ -22,6 +22,20 @@ def smtp_temporary_status(result: dict[str, Any]) -> str | None:
     return code if code and code.startswith("4") else None
 
 
+def is_retryable_smtp_result(result: dict[str, Any]) -> bool:
+    """Retry SMTP 4xx responses and transient transport failures, never 5xx."""
+    if smtp_temporary_status(result):
+        return True
+    if smtp_permanent_status(result):
+        return False
+    detail = " ".join(
+        str(result.get(field) or "") for field in ("smtp_result", "message")
+    ).lower()
+    return any(marker in detail for marker in (
+        "timeout", "timed out", "connection", "connect", "smtp", "超时", "连接",
+    ))
+
+
 def smtp_permanent_status(result: dict[str, Any]) -> str | None:
     """Return a permanent SMTP failure code that must not be retried."""
     code = smtp_status_code(result)

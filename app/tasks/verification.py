@@ -15,6 +15,7 @@ from app.core.legacy import create_verifier
 from app.core.provider_policy import YAHOO_UNSUPPORTED_MESSAGE, is_yahoo_email
 from app.core.result_retry import (
     is_smtp_greylisted,
+    is_retryable_smtp_result,
     smtp_permanent_status,
     smtp_temporary_status,
 )
@@ -95,7 +96,7 @@ def normalize_result(result: dict[str, Any]) -> dict[str, Any]:
         else:
             display_detail = f"{code} 邮件服务器暂时无法确认，正在重试"
     elif "mail from" in detail_lower or "helo" in detail_lower:
-        display_detail = f"{code} 邮箱服务器拒绝验证" if code else "邮箱服务器拒绝验证"
+        display_detail = f"{code} 发送验证受限，不代表该邮箱不存在" if code else "发送验证受限，不代表该邮箱不存在"
     elif code == "250":
         display_detail = "250 可投递"
     elif any(word in detail_lower for word in ("smtp", "连接", "超时", "connection", "timeout")):
@@ -360,7 +361,7 @@ def retry_temporary_smtp_results(job: Job, by_index: dict[int, dict[str, Any]]) 
         retry_items = [
             (index, job.emails[index])
             for index, result in by_index.items()
-            if smtp_temporary_status(result) and not is_smtp_greylisted(result)
+            if is_retryable_smtp_result(result) and not is_smtp_greylisted(result)
         ]
         if not retry_items or job_store.is_stopped(job.id):
             return
@@ -370,6 +371,16 @@ def retry_temporary_smtp_results(job: Job, by_index: dict[int, dict[str, Any]]) 
             "Retrying %s temporary SMTP results for job %s after %.1fs",
             len(retry_items), job.id, delay,
         )
+        retry_at = utc_now() + timedelta(seconds=delay)
+        for index, _ in retry_items:
+            by_index[index]["retry_at"] = retry_at.isoformat()
+            by_index[index]["retry_state"] = "scheduled"
+            by_index[index]["retry_attempt"] = attempt + 1
+            by_index[index]["retry_max_attempts"] = settings.temporary_smtp_immediate_retries
+        job.results = [by_index[index] for index in sorted(by_index)]
+        job.error = f"SMTP temporary response; retry {attempt + 1}/{settings.temporary_smtp_immediate_retries} is scheduled"
+        job_store.persist(job)
+        job_store.heartbeat(job)
         time.sleep(delay)
         verifier = create_verifier(1)
         retry_results = verifier.verify_batch_distributed(
@@ -414,7 +425,7 @@ def finalize_temporary_smtp_results(results: list[dict[str, Any]]) -> None:
 
 def schedule_remote_temporary_retry(job: Job) -> bool:
     """Give an older remote worker the same three retries at 60-second intervals."""
-    temporary = [result for result in job.results if smtp_temporary_status(result)]
+    temporary = [result for result in job.results if is_retryable_smtp_result(result)]
     if not temporary or all(
         int(result.get("temporary_smtp_retry_count", 0)) >= 3
         for result in temporary
@@ -437,6 +448,9 @@ def schedule_remote_temporary_retry(job: Job) -> bool:
     )
     for result in temporary:
         result["retry_at"] = job.deferred_retry_at.isoformat()
+        result["retry_state"] = "scheduled"
+        result["retry_attempt"] = job.temporary_retry_attempts
+        result["retry_max_attempts"] = settings.temporary_smtp_immediate_retries
     return True
 
 

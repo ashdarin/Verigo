@@ -438,7 +438,7 @@ function renderJobProgress(job, progressCopy) {
   };
   render();
   if (retryAt && retryAt.getTime() > Date.now()) {
-    state.retryCountdownTimer = window.setInterval(render, 1000);
+    state.retryCountdownTimer = window.setInterval(() => { render(); renderResults(); }, 1000);
   }
 }
 
@@ -540,7 +540,14 @@ function renderResults() {
       null,
       item.domain_type || "-",
       VerigoI18n.resultValue(item.verification_method || item.strategy || "-"),
-      VerigoI18n.resultValue(item.smtp_result || item.message || "-"),
+      (() => {
+        const detail = VerigoI18n.resultValue(item.smtp_result || item.message || "-");
+        const retryAt = item.retry_at ? new Date(item.retry_at) : null;
+        if (!retryAt || Number.isNaN(retryAt.getTime())) return detail;
+        const seconds = Math.max(0, Math.ceil((retryAt.getTime() - Date.now()) / 1000));
+        const attempt = `${item.retry_attempt || 1}/${item.retry_max_attempts || 3}`;
+        return `${detail} · 第 ${attempt} 次重试，${seconds} 秒后再次复核`;
+      })(),
     ];
     values.forEach((value, index) => {
       const cell = document.createElement("td");
