@@ -37,6 +37,7 @@ import app.api.auth as auth_api
 from app.api.routes import (
     email_execution_target,
     gmail_target,
+    serialize_job,
     submit_routed_job,
     submit_stopped_job_continuation,
     tencent_qq_target,
@@ -47,6 +48,7 @@ from app.core.legacy import load_legacy_module
 from app.core.result_retry import (
     is_smtp_greylisted,
     is_temporary_smtp_452,
+    smtp_permanent_status,
     smtp_temporary_status,
 )
 from app.core.security import hash_password, token_hash
@@ -91,7 +93,10 @@ assert not is_temporary_smtp_452({"smtp_result": "550 mailbox unavailable"})
 assert smtp_temporary_status({"smtp_result": "421 service not available"}) == "421"
 assert smtp_temporary_status({"smtp_result": "450 greylisted"}) == "450"
 assert smtp_temporary_status({"smtp_result": "451 local error"}) == "451"
+assert smtp_temporary_status({"smtp_result": "455 parameters unavailable"}) == "455"
 assert smtp_temporary_status({"smtp_result": "550 mailbox unavailable"}) is None
+assert smtp_permanent_status({"smtp_result": "550 mailbox unavailable"}) == "550"
+assert smtp_permanent_status({"smtp_result": "554 transaction failed"}) == "554"
 assert is_smtp_greylisted({"smtp_result": "450 4.2.0 Sender address rejected: Greylisted"})
 
 greylisted = normalize_result(
@@ -108,6 +113,34 @@ assert greylisted["valid"] is True
 assert greylisted["checks"]["smtp"] is None
 assert greylisted["temporary_smtp_code"] == "450"
 assert "灰名单" in greylisted["smtp_result"]
+
+for code in ("550", "553", "554"):
+    permanent = normalize_result({
+        "email": "permanent@example.com",
+        "valid": True,
+        "deliverable": None,
+        "checks": {"format": True, "domain": True, "mx": True, "smtp": None},
+        "smtp_result": f"RCPT TO returned {code} permanent rejection",
+    })
+    assert permanent["deliverable"] is False
+    assert permanent["valid"] is False
+    assert permanent["checks"]["smtp"] is False
+    assert permanent["smtp_result"] == f"{code} 不可投递"
+
+legacy_permanent_summary = serialize_job(Job(
+    id="legacypermanent01",
+    emails=["permanent@example.com"],
+    worker_count=1,
+    status="completed",
+    results=[{
+        "email": "permanent@example.com",
+        "deliverable": None,
+        "smtp_result": "554 transaction failed",
+    }],
+)).summary
+assert legacy_permanent_summary is not None
+assert legacy_permanent_summary.undeliverable == 1
+assert legacy_permanent_summary.unknown == 0
 
 
 class TemporarySmtpServer:
@@ -899,7 +932,9 @@ assert config["max_mx_hosts"] == 1
 assert legacy.smtp_gate_capacity("mx1.qq.com") == 1
 assert verifier._handle_qq_response(250, b"OK", config, 0)[0] is True
 assert verifier._handle_qq_response(550, b"Mailbox not found", config, 0)[0] is False
-assert verifier._handle_qq_response(550, b"Access denied by policy", config, config["max_attempts"] - 1)[0] is None
+assert verifier._handle_qq_response(550, b"Access denied by policy", config, config["max_attempts"] - 1)[0] is False
+assert verifier._handle_qq_response(553, b"Mailbox name not allowed", config, 0)[0] is False
+assert verifier._handle_qq_response(554, b"Transaction failed", config, 0)[0] is False
 
 missing_domain = legacy.EmailVerifier()
 missing_domain.check_domain_exists = lambda _domain: False

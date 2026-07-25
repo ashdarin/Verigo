@@ -603,8 +603,8 @@ class EmailVerifier:
                         continue
                     if code == 250:
                         return True, f"250 {config['provider']}邮箱存在"
-                    if code == 550:
-                        return False, f"550 {config['provider']}邮箱不存在"
+                    if 500 <= code < 600:
+                        return False, f"{code} {config['provider']}邮箱服务器永久拒绝"
                     last_failure = f"RCPT TO阶段返回 {code}"
                 except smtplib.SMTPServerDisconnected:
                     self.record_smtp_failure(mx_host)
@@ -631,51 +631,21 @@ class EmailVerifier:
 
     @staticmethod
     def _is_qq_policy_response(code, response):
-        if code in (421, 451, 452, 553, 554):
-            return True
-        if code != 550:
-            return False
-        response_text = response.decode('utf-8', 'replace') if isinstance(response, bytes) else str(response)
-        response_text = response_text.lower()
-        mailbox_missing = (
-            'user unknown', 'not found', 'does not exist', 'no such user',
-            'invalid recipient', 'recipient unknown', 'user not found',
-            'mailbox not found', 'address not found',
-        )
-        return not any(keyword in response_text for keyword in mailbox_missing)
+        return 400 <= code < 500
 
     def _handle_qq_response(self, code, response, config, attempt):
         """QQ邮箱响应处理：只依据 RCPT TO，不进入 DATA 阶段。"""
         response_text = response.decode('utf-8', 'replace') if isinstance(response, bytes) else str(response)
         if code == 250:
             return True, f"250 {config['provider']} RCPT已接受: {response_text[:160]}"
-        elif code == 550:
-            response_str = response_text.lower()
-            # 检查是否是真正的用户不存在
-            if any(keyword in response_str for keyword in [
-                'user unknown', 'not found', 'does not exist', 'no such user',
-                'invalid recipient', 'recipient unknown', 'user not found',
-                'mailbox not found', 'address not found'
-            ]):
-                return False, f"550 {config['provider']}邮箱不存在: {response_text[:160]}"
-            else:
-                # QQ的策略保护，继续尝试不同的HELO和发件人
-                if attempt < config['max_attempts'] - 1:
-                    return 'continue', f"550 {config['provider']}策略保护，等待后重试"
-                else:
-                    return None, f"550 {config['provider']}策略拒绝，暂时无法确认: {response_text[:160]}"
+        elif 500 <= code < 600:
+            return False, f"{code} {config['provider']}邮箱服务器永久拒绝: {response_text[:160]}"
         elif code in [451, 452, 421]:
             # 临时失败，继续重试
             if attempt < config['max_attempts'] - 1:
                 return 'continue', f"{code} {config['provider']}临时失败，重试"
             else:
                 return None, f"{code} {config['provider']}临时失败，暂时无法确认"
-        elif code in [553, 554]:
-            # 邮箱策略拒绝，但继续尝试
-            if attempt < config['max_attempts'] - 1:
-                return 'continue', f"{code} {config['provider']}策略拒绝，等待后重试"
-            else:
-                return None, f"{code} {config['provider']}策略拒绝，暂时无法确认: {response_text[:160]}"
         else:
             if attempt < config['max_attempts'] - 1:
                 return 'continue', f"{code} {config['provider']}未明确响应，重试"
@@ -891,8 +861,8 @@ class EmailVerifier:
                     self.record_smtp_response(mx_host, code)
                     if code == 250:
                         return True, "250 邮箱存在"
-                    if code == 550:
-                        return False, "550 邮箱不存在"
+                    if 500 <= code < 600:
+                        return False, f"{code} 邮箱服务器永久拒绝"
                     if isinstance(response, bytes):
                         response = response.decode("utf-8", errors="replace")
                     last_failure = f"RCPT TO阶段返回 {code}: {str(response)[:160]}"
@@ -915,8 +885,8 @@ class EmailVerifier:
                         except Exception:
                             pass
 
-        # A failed SMTP conversation is not proof that a recipient does not exist.
-        # Only an explicit RCPT 550 above is allowed to produce a negative verdict.
+        # Connection failures are inconclusive. Explicit RCPT 5xx replies are
+        # permanent failures and return before this point.
         return None, f"SMTP暂时无法确认: {last_failure or '无有效响应'}"
 
     def verify_email_comprehensive(self, email, process_id=0):

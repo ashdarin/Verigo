@@ -4,17 +4,28 @@ import re
 from typing import Any
 
 
-TEMPORARY_SMTP_CODES = frozenset({"421", "450", "451", "452"})
 GREYLIST_MARKERS = ("greylist", "greylisted", "postgrey", "灰名单")
 
 
-def smtp_temporary_status(result: dict[str, Any]) -> str | None:
-    """Return the temporary SMTP status code, when a result is retryable."""
+def smtp_status_code(result: dict[str, Any]) -> str | None:
+    """Extract the first SMTP completion status from a verification result."""
     detail = " ".join(
         str(result.get(field) or "") for field in ("smtp_result", "message")
     )
     match = re.search(r"\b([245]\d{2})\b", detail)
-    return match.group(1) if match and match.group(1) in TEMPORARY_SMTP_CODES else None
+    return match.group(1) if match else None
+
+
+def smtp_temporary_status(result: dict[str, Any]) -> str | None:
+    """Return the temporary SMTP status code, when a result is retryable."""
+    code = smtp_status_code(result)
+    return code if code and code.startswith("4") else None
+
+
+def smtp_permanent_status(result: dict[str, Any]) -> str | None:
+    """Return a permanent SMTP failure code that must not be retried."""
+    code = smtp_status_code(result)
+    return code if code and code.startswith("5") else None
 
 
 def is_smtp_greylisted(result: dict[str, Any]) -> bool:

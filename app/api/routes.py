@@ -328,6 +328,7 @@ def require_job_access(job: Job, user: User | None, guest_token: str | None) -> 
 def serialize_job(job: Job) -> JobResponse:
     completed, total, progress = job_progress(job)
     is_done = job.status in {"completed", "stopped"}
+    normalized_results = [normalize_result(result) for result in job.results]
     return JobResponse(
         id=job.id,
         status=job.status,
@@ -339,7 +340,7 @@ def serialize_job(job: Job) -> JobResponse:
         started_at=job.started_at.isoformat() if job.started_at else None,
         finished_at=job.finished_at.isoformat() if job.finished_at else None,
         error=job.error,
-        summary=summarize(job.results),
+        summary=summarize(normalized_results),
         download_url=f"/api/jobs/{job.id}/download" if is_done else None,
         download_name=verification_filename(job) if is_done else None,
         queue_position=job_store.queue_position(job.id),

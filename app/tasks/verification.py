@@ -13,7 +13,11 @@ from zoneinfo import ZoneInfo
 from app.config import settings
 from app.core.legacy import create_verifier
 from app.core.provider_policy import YAHOO_UNSUPPORTED_MESSAGE, is_yahoo_email
-from app.core.result_retry import is_smtp_greylisted, smtp_temporary_status
+from app.core.result_retry import (
+    is_smtp_greylisted,
+    smtp_permanent_status,
+    smtp_temporary_status,
+)
 from app.core.security import token_hash
 from app.core.worker_lifecycle import TENCENT_QQ_TARGET, worker_lifecycle
 from app.core.cloudshell_lifecycle import GMAIL_TARGET, cloudshell_lifecycle
@@ -54,12 +58,13 @@ def normalize_result(result: dict[str, Any]) -> dict[str, Any]:
         display_detail = "域名不存在"
     elif "mx" in detail_lower or "没有邮件服务器" in detail:
         display_detail = "没有邮箱服务器"
-    elif "mail from" in detail_lower or "helo" in detail_lower:
-        display_detail = f"{code} 邮箱服务器拒绝验证" if code else "邮箱服务器拒绝验证"
-    elif code == "250":
-        display_detail = "250 可投递"
-    elif code == "550":
-        display_detail = "550 不可投递"
+    elif smtp_permanent_status({"smtp_result": detail}):
+        result["deliverable"] = False
+        result["valid"] = False
+        checks = result.get("checks")
+        if isinstance(checks, dict):
+            checks["smtp"] = False
+        display_detail = f"{code} 不可投递"
     elif code and code.startswith("4"):
         result["smtp_raw_result"] = detail
         result["deliverable"] = None
@@ -72,8 +77,10 @@ def normalize_result(result: dict[str, Any]) -> dict[str, Any]:
             display_detail = f"{code} 邮件服务器临时灰名单，正在重试"
         else:
             display_detail = f"{code} 邮件服务器暂时无法确认，正在重试"
-    elif code and code.startswith("5"):
-        display_detail = f"{code} 邮箱服务器拒绝验证"
+    elif "mail from" in detail_lower or "helo" in detail_lower:
+        display_detail = f"{code} 邮箱服务器拒绝验证" if code else "邮箱服务器拒绝验证"
+    elif code == "250":
+        display_detail = "250 可投递"
     elif any(word in detail_lower for word in ("smtp", "连接", "超时", "connection", "timeout")):
         display_detail = "邮箱服务器暂时无法确认"
     else:
