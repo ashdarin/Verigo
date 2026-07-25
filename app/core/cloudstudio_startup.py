@@ -28,17 +28,28 @@ def worker_start_command() -> str:
     return f"echo {encoded} | base64 -d | bash"
 
 
-def workspace_configuration(settings: Any) -> tuple[models.LifeCycle, list[models.Env]]:
+def workspace_configuration(
+    settings: Any,
+    *,
+    worker_target: str = "tencent-qq",
+    worker_token: str | None = None,
+    worker_id: str = "cloudstudio-on-demand-qq",
+) -> tuple[models.LifeCycle, list[models.Env]]:
     lifecycle_command = models.LifeCycleCommand()
     lifecycle_command.Name = WORKER_START_COMMAND_NAME
     lifecycle_command.Command = worker_start_command()
     lifecycle = models.LifeCycle()
     lifecycle.Start = [lifecycle_command]
 
+    token = worker_token or settings.tencent_qq_worker_token
     values = {
+        "VERIGO_REMOTE_WORKER_TARGET": worker_target,
+        "VERIGO_REMOTE_WORKER_SERVER": "https://verigo.site",
+        "VERIGO_REMOTE_WORKER_TOKEN": token,
+        # Keep the legacy names for the existing worker module and lifecycle hook.
         "VERIGO_TENCENT_QQ_SERVER": "https://verigo.site",
-        "VERIGO_TENCENT_QQ_WORKER_TOKEN": settings.tencent_qq_worker_token,
-        "VERIGO_TENCENT_QQ_WORKER_ID": "cloudstudio-on-demand-qq",
+        "VERIGO_TENCENT_QQ_WORKER_TOKEN": token,
+        "VERIGO_TENCENT_QQ_WORKER_ID": worker_id,
         "VERIGO_TENCENT_QQ_POLL_SECONDS": "0.25",
         "VERIGO_TENCENT_QQ_RETRY_SECONDS": "5",
         "VERIGO_CLOUDSTUDIO_PROBE_TOKEN": settings.cloudstudio_probe_token,

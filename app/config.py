@@ -129,6 +129,27 @@ class Settings:
     google_cloudshell_quota_project: str = os.getenv("VERIGO_GOOGLE_CLOUDSHELL_QUOTA_PROJECT", "")
     google_cloudshell_adc_path: Path = Path(os.getenv("VERIGO_GOOGLE_CLOUDSHELL_ADC_PATH", ""))
     google_cloudshell_ssh_key_path: Path = Path(os.getenv("VERIGO_GOOGLE_CLOUDSHELL_SSH_KEY_PATH", ""))
+    google_cloudshell_secondary_enabled: bool = env_bool(
+        "VERIGO_GOOGLE_CLOUDSHELL_SECONDARY_ENABLED", False
+    )
+    google_cloudshell_secondary_user: str = os.getenv(
+        "VERIGO_GOOGLE_CLOUDSHELL_SECONDARY_USER", ""
+    )
+    google_cloudshell_secondary_quota_project: str = os.getenv(
+        "VERIGO_GOOGLE_CLOUDSHELL_SECONDARY_QUOTA_PROJECT", ""
+    )
+    google_cloudshell_secondary_adc_path: Path = Path(
+        os.getenv("VERIGO_GOOGLE_CLOUDSHELL_SECONDARY_ADC_PATH", "")
+    )
+    google_cloudshell_secondary_ssh_key_path: Path = Path(
+        os.getenv("VERIGO_GOOGLE_CLOUDSHELL_SECONDARY_SSH_KEY_PATH", "")
+    )
+    google_cloudshell_secondary_ssh_known_hosts_path: Path = Path(
+        os.getenv(
+            "VERIGO_GOOGLE_CLOUDSHELL_SECONDARY_SSH_KNOWN_HOSTS_PATH",
+            str(BASE_DIR / "data" / "cloudshell_account2_known_hosts"),
+        )
+    )
     cloudstudio_lifecycle_enabled: bool = env_bool(
         "VERIGO_CLOUDSTUDIO_LIFECYCLE_ENABLED", False
     )
@@ -142,6 +163,36 @@ class Settings:
     )
     cloudstudio_ssh_known_hosts_path: Path = Path(
         os.getenv("VERIGO_CLOUDSTUDIO_SSH_KNOWN_HOSTS_PATH", "")
+    )
+    cloudstudio_domestic_worker_enabled: bool = env_bool(
+        "VERIGO_CLOUDSTUDIO_DOMESTIC_WORKER_ENABLED", False
+    )
+    cloudstudio_domestic_worker_token: str = os.getenv(
+        "VERIGO_CLOUDSTUDIO_DOMESTIC_WORKER_TOKEN", ""
+    )
+    cloudstudio_secondary_lifecycle_enabled: bool = env_bool(
+        "VERIGO_CLOUDSTUDIO_SECONDARY_LIFECYCLE_ENABLED", False
+    )
+    cloudstudio_secondary_secret_id: str = os.getenv(
+        "VERIGO_CLOUDSTUDIO_SECONDARY_SECRET_ID", ""
+    )
+    cloudstudio_secondary_secret_key: str = os.getenv(
+        "VERIGO_CLOUDSTUDIO_SECONDARY_SECRET_KEY", ""
+    )
+    cloudstudio_secondary_region: str = os.getenv(
+        "VERIGO_CLOUDSTUDIO_SECONDARY_REGION", ""
+    )
+    cloudstudio_secondary_space_key: str = os.getenv(
+        "VERIGO_CLOUDSTUDIO_SECONDARY_SPACE_KEY", ""
+    )
+    cloudstudio_secondary_ssh_enabled: bool = env_bool(
+        "VERIGO_CLOUDSTUDIO_SECONDARY_SSH_ENABLED", False
+    )
+    cloudstudio_secondary_ssh_key_path: Path = Path(
+        os.getenv("VERIGO_CLOUDSTUDIO_SECONDARY_SSH_KEY_PATH", "")
+    )
+    cloudstudio_secondary_ssh_known_hosts_path: Path = Path(
+        os.getenv("VERIGO_CLOUDSTUDIO_SECONDARY_SSH_KNOWN_HOSTS_PATH", "")
     )
     cloudstudio_ssh_token_expiry_seconds: int = max(
         60, int(os.getenv("VERIGO_CLOUDSTUDIO_SSH_TOKEN_EXPIRY_SECONDS", "300"))

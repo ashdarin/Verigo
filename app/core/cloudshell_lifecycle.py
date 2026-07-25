@@ -17,7 +17,34 @@ GMAIL_TARGET = "gmail"
 
 
 class CloudShellLifecycle:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        enabled: bool | None = None,
+        user: str | None = None,
+        quota_project: str | None = None,
+        adc_path: Path | None = None,
+        ssh_key_path: Path | None = None,
+        ssh_known_hosts_path: Path | None = None,
+        worker_id: str = "cloudshell-gmail-1",
+    ) -> None:
+        self._enabled = settings.google_cloudshell_enabled if enabled is None else enabled
+        self._user = settings.google_cloudshell_user if user is None else user
+        self._quota_project = (
+            settings.google_cloudshell_quota_project
+            if quota_project is None
+            else quota_project
+        )
+        self._adc_path = settings.google_cloudshell_adc_path if adc_path is None else adc_path
+        self._ssh_key_path = (
+            settings.google_cloudshell_ssh_key_path if ssh_key_path is None else ssh_key_path
+        )
+        self._ssh_known_hosts_path = (
+            Path("/opt/verigo/data/cloudshell_known_hosts")
+            if ssh_known_hosts_path is None
+            else ssh_known_hosts_path
+        )
+        self._worker_id = worker_id
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
         self._wake_event = threading.Event()
@@ -27,12 +54,12 @@ class CloudShellLifecycle:
     def configured(self) -> bool:
         return bool(
             settings.gmail_worker_enabled
-            and settings.google_cloudshell_enabled
+            and self._enabled
             and settings.gmail_worker_token
-            and settings.google_cloudshell_user
-            and settings.google_cloudshell_quota_project
-            and settings.google_cloudshell_adc_path.is_file()
-            and settings.google_cloudshell_ssh_key_path.is_file()
+            and self._user
+            and self._quota_project
+            and self._adc_path.is_file()
+            and self._ssh_key_path.is_file()
         )
 
     def notify_job_queued(self) -> None:
@@ -49,6 +76,8 @@ class CloudShellLifecycle:
             target=self._run, name="cloudshell-gmail-lifecycle", daemon=True
         )
         self._thread.start()
+        if self is globals().get("cloudshell_lifecycle"):
+            cloudshell_secondary_lifecycle.start()
 
     def stop(self) -> None:
         self._stop_event.set()
@@ -56,6 +85,8 @@ class CloudShellLifecycle:
         if self._thread:
             self._thread.join(timeout=5)
         self._thread = None
+        if self is globals().get("cloudshell_lifecycle"):
+            cloudshell_secondary_lifecycle.stop()
 
     def _run(self) -> None:
         while not self._stop_event.is_set():
@@ -84,7 +115,7 @@ class CloudShellLifecycle:
         )
 
     def _token(self) -> str:
-        credentials = json.loads(settings.google_cloudshell_adc_path.read_text())
+        credentials = json.loads(self._adc_path.read_text())
         data = urllib.parse.urlencode({
             "client_id": credentials["client_id"],
             "client_secret": credentials["client_secret"],
@@ -107,11 +138,11 @@ class CloudShellLifecycle:
         return environment if isinstance(environment, dict) else None
 
     def _start_environment(self, token: str) -> dict[str, object]:
-        user = urllib.parse.quote(settings.google_cloudshell_user, safe="")
+        user = urllib.parse.quote(self._user, safe="")
         headers = {
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
-            "X-Goog-User-Project": settings.google_cloudshell_quota_project,
+            "X-Goog-User-Project": self._quota_project,
         }
         request = urllib.request.Request(
             f"https://cloudshell.googleapis.com/v1/users/{user}/environments/default:start",
@@ -144,9 +175,9 @@ class CloudShellLifecycle:
             token = self._token()
             environment = self._start_environment(token)
             host, port = environment["sshHost"], str(environment["sshPort"])
-            ssh_user = settings.google_cloudshell_user.split("@", 1)[0]
+            ssh_user = self._user.split("@", 1)[0]
             remote = f"{ssh_user}@{host}"
-            base = ["ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new", "-o", "UserKnownHostsFile=/opt/verigo/data/cloudshell_known_hosts", "-i", str(settings.google_cloudshell_ssh_key_path), "-p", port, remote]
+            base = ["ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new", "-o", f"UserKnownHostsFile={self._ssh_known_hosts_path}", "-i", str(self._ssh_key_path), "-p", port, remote]
             source_root = Path(__file__).resolve().parents[2]
             archive = subprocess.run(["tar", "-C", str(source_root), "-czf", "-", "app", "验证8.py"], check=True, capture_output=True).stdout
             subprocess.run(base + ["mkdir -p ~/verigo-worker && tar -xzf - -C ~/verigo-worker"], input=archive, check=True, timeout=90)
@@ -154,7 +185,7 @@ class CloudShellLifecycle:
                 "VERIGO_REMOTE_WORKER_TARGET=gmail",
                 "VERIGO_REMOTE_WORKER_SERVER=https://verigo.site",
                 f"VERIGO_REMOTE_WORKER_TOKEN={settings.gmail_worker_token}",
-                "VERIGO_TENCENT_QQ_WORKER_ID=cloudshell-gmail-1",
+                f"VERIGO_TENCENT_QQ_WORKER_ID={self._worker_id}",
             )) + "\n"
             subprocess.run(base + ["cat > ~/verigo-worker/.worker.env && chmod 600 ~/verigo-worker/.worker.env"], input=environment_file.encode(), check=True, timeout=30)
             subprocess.run(base + [self._worker_command()], check=True, timeout=120)
@@ -167,3 +198,28 @@ class CloudShellLifecycle:
 
 
 cloudshell_lifecycle = CloudShellLifecycle()
+cloudshell_secondary_lifecycle = CloudShellLifecycle(
+    enabled=settings.google_cloudshell_secondary_enabled,
+    user=settings.google_cloudshell_secondary_user,
+    quota_project=settings.google_cloudshell_secondary_quota_project,
+    adc_path=settings.google_cloudshell_secondary_adc_path,
+    ssh_key_path=settings.google_cloudshell_secondary_ssh_key_path,
+    ssh_known_hosts_path=settings.google_cloudshell_secondary_ssh_known_hosts_path,
+    worker_id="cloudshell-gmail-2",
+)
+cloudshell_lifecycles = (cloudshell_lifecycle, cloudshell_secondary_lifecycle)
+
+
+def notify_cloudshell_job_queued() -> None:
+    for lifecycle in cloudshell_lifecycles:
+        lifecycle.notify_job_queued()
+
+
+def start_cloudshell_lifecycles() -> None:
+    for lifecycle in cloudshell_lifecycles:
+        lifecycle.start()
+
+
+def stop_cloudshell_lifecycles() -> None:
+    for lifecycle in reversed(cloudshell_lifecycles):
+        lifecycle.stop()

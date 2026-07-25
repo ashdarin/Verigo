@@ -31,7 +31,11 @@ from app.config import settings
 from app.core.imports import extract_emails
 from app.core.discovery import candidate_emails
 from app.core.security import token_hash
-from app.core.worker_lifecycle import worker_lifecycle
+from app.core.worker_lifecycle import (
+    DOMESTIC_CLOUDSTUDIO_TARGET,
+    domestic_worker_lifecycle,
+    worker_lifecycle,
+)
 from app.core.cloudshell_lifecycle import cloudshell_lifecycle
 from app.core.provider_policy import (
     YAHOO_UNSUPPORTED_MESSAGE,
@@ -70,7 +74,11 @@ FOREIGN_EMAIL_DOMAINS = frozenset({
     "icloud.com", "me.com", "mac.com", "proton.me", "protonmail.com", "pm.me",
     "aol.com", "yandex.com", "yandex.ru", "zoho.com",
 })
-REMOTE_WORKERS = {"tencent-qq": "tencent_qq", "gmail": "gmail"}
+REMOTE_WORKERS = {
+    "tencent-qq": "tencent_qq",
+    "cloudstudio-domestic": DOMESTIC_CLOUDSTUDIO_TARGET,
+    "gmail": "gmail",
+}
 
 
 def remote_worker_count(execution_target: str, requested_count: int) -> int:
@@ -93,6 +101,8 @@ def require_job(job_id: str) -> Job:
 def tencent_qq_target(emails: list[str], owner_email: str | None) -> str:
     if not qq_worker_allowed(owner_email) or not emails:
         return "local"
+    if any(is_qq_email(email) for email in emails):
+        return "tencent_qq"
     domains = {email.rsplit("@", 1)[-1].lower() for email in emails if "@" in email}
     return "tencent_qq" if domains and all(is_domestic_email_domain(domain) for domain in domains) else "local"
 
@@ -131,11 +141,21 @@ def gmail_worker_allowed(owner_email: str | None) -> bool:
     )
 
 
+def domestic_worker_allowed(owner_email: str | None) -> bool:
+    allowed = settings.tencent_qq_worker_allowed_emails
+    return bool(
+        settings.cloudstudio_domestic_worker_enabled
+        and ("*" in allowed or (owner_email and owner_email.lower() in allowed))
+    )
+
+
 def email_execution_target(email: str, owner_email: str | None) -> str:
     """Return the configured worker target for one address."""
     if is_qq_email(email):
         return "tencent_qq"
     domain = email.rsplit("@", 1)[-1].lower() if "@" in email else ""
+    if is_domestic_email_domain(domain) and domestic_worker_allowed(owner_email):
+        return DOMESTIC_CLOUDSTUDIO_TARGET
     if is_domestic_email_domain(domain) and qq_worker_allowed(owner_email):
         return "tencent_qq"
     if is_foreign_email_domain(domain) and gmail_worker_allowed(owner_email):
@@ -148,7 +168,7 @@ def partition_target_emails(
 ) -> list[tuple[str, list[str], int]]:
     """Keep remote completion requests below their maximum supported payload."""
     partitions: list[tuple[str, list[str], int]] = []
-    remote_targets = {"tencent_qq", "gmail"}
+    remote_targets = {"tencent_qq", DOMESTIC_CLOUDSTUDIO_TARGET, "gmail"}
     for (target, child_worker_count), target_emails in targets.items():
         chunk_size = (
             settings.remote_worker_max_emails_per_job
@@ -184,7 +204,7 @@ def submit_routed_job(
             1
             if is_qq_email(email)
             else remote_worker_count(target, worker_count)
-            if target in {"tencent_qq", "gmail"}
+            if target in {"tencent_qq", DOMESTIC_CLOUDSTUDIO_TARGET, "gmail"}
             else worker_count
         )
         targets.setdefault((target, child_worker_count), []).append(email)
@@ -289,7 +309,13 @@ def require_remote_worker(worker_target: str, token: str | None) -> str:
     execution_target = REMOTE_WORKERS.get(worker_target)
     if execution_target is None:
         raise HTTPException(status_code=404, detail="未知远程验证节点")
-    configured_token = settings.tencent_qq_worker_token if execution_target == "tencent_qq" else settings.gmail_worker_token
+    configured_token = (
+        settings.tencent_qq_worker_token
+        if execution_target == "tencent_qq"
+        else settings.cloudstudio_domestic_worker_token
+        if execution_target == DOMESTIC_CLOUDSTUDIO_TARGET
+        else settings.gmail_worker_token
+    )
     if not configured_token:
         raise HTTPException(status_code=503, detail="远程验证节点尚未配置")
     if not token or not hmac.compare_digest(token, configured_token):
@@ -303,6 +329,8 @@ def require_remote_job(job_id: str, worker_id: str, execution_target: str) -> Jo
         raise HTTPException(status_code=409, detail="远程验证节点任务租约无效")
     if execution_target == "tencent_qq":
         worker_lifecycle.record_worker_seen(worker_id)
+    elif execution_target == DOMESTIC_CLOUDSTUDIO_TARGET:
+        domestic_worker_lifecycle.record_worker_seen(worker_id)
     else:
         cloudshell_lifecycle.record_worker_seen(worker_id)
     return job
@@ -409,6 +437,8 @@ async def claim_tencent_qq_job(
         raise HTTPException(status_code=422, detail="腾讯 QQ 验证节点标识无效")
     if execution_target == "tencent_qq":
         worker_lifecycle.record_worker_seen(worker_name)
+    elif execution_target == DOMESTIC_CLOUDSTUDIO_TARGET:
+        domestic_worker_lifecycle.record_worker_seen(worker_name)
     else:
         cloudshell_lifecycle.record_worker_seen(worker_name)
     deadline = time.monotonic() + wait_seconds

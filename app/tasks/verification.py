@@ -19,8 +19,13 @@ from app.core.result_retry import (
     smtp_temporary_status,
 )
 from app.core.security import token_hash
-from app.core.worker_lifecycle import TENCENT_QQ_TARGET, worker_lifecycle
-from app.core.cloudshell_lifecycle import GMAIL_TARGET, cloudshell_lifecycle
+from app.core.worker_lifecycle import (
+    DOMESTIC_CLOUDSTUDIO_TARGET,
+    TENCENT_QQ_TARGET,
+    domestic_worker_lifecycle,
+    worker_lifecycle,
+)
+from app.core.cloudshell_lifecycle import GMAIL_TARGET, notify_cloudshell_job_queued
 from app.db.jobs import Job, job_store, utc_now
 
 
@@ -188,8 +193,10 @@ class VerificationTasks:
             return job
         if execution_target == TENCENT_QQ_TARGET:
             worker_lifecycle.notify_job_queued()
+        elif execution_target == DOMESTIC_CLOUDSTUDIO_TARGET:
+            domestic_worker_lifecycle.notify_job_queued()
         elif execution_target == GMAIL_TARGET:
-            cloudshell_lifecycle.notify_job_queued()
+            notify_cloudshell_job_queued()
         return job
 
     def submit_partitioned(
@@ -253,8 +260,10 @@ class VerificationTasks:
                 continue
             if target == TENCENT_QQ_TARGET:
                 worker_lifecycle.notify_job_queued()
+            elif target == DOMESTIC_CLOUDSTUDIO_TARGET:
+                domestic_worker_lifecycle.notify_job_queued()
             elif target == GMAIL_TARGET:
-                cloudshell_lifecycle.notify_job_queued()
+                notify_cloudshell_job_queued()
         return job_store.refresh_parent(parent.id) or parent
 
 

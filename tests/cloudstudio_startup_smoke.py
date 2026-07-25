@@ -37,6 +37,9 @@ lifecycle, envs = workspace_configuration(settings)
 assert lifecycle.Start[0].Name == WORKER_START_COMMAND_NAME
 assert lifecycle.Start[0].Command == command
 assert {env.Name: env.Value for env in envs} == {
+    "VERIGO_REMOTE_WORKER_TARGET": "tencent-qq",
+    "VERIGO_REMOTE_WORKER_SERVER": "https://verigo.site",
+    "VERIGO_REMOTE_WORKER_TOKEN": "worker-token",
     "VERIGO_TENCENT_QQ_SERVER": "https://verigo.site",
     "VERIGO_TENCENT_QQ_WORKER_TOKEN": "worker-token",
     "VERIGO_TENCENT_QQ_WORKER_ID": "cloudstudio-on-demand-qq",
@@ -45,5 +48,15 @@ assert {env.Name: env.Value for env in envs} == {
     "VERIGO_CLOUDSTUDIO_PROBE_TOKEN": "probe-token",
     "VERIGO_CLOUDSTUDIO_SPACE_KEY": "workspace-key",
 }
+
+_, domestic_envs = workspace_configuration(
+    settings,
+    worker_target="cloudstudio-domestic",
+    worker_token="domestic-token",
+    worker_id="cloudstudio-domestic-2",
+)
+assert {env.Name: env.Value for env in domestic_envs}["VERIGO_REMOTE_WORKER_TARGET"] == "cloudstudio-domestic"
+assert {env.Name: env.Value for env in domestic_envs}["VERIGO_REMOTE_WORKER_TOKEN"] == "domestic-token"
+assert {env.Name: env.Value for env in domestic_envs}["VERIGO_TENCENT_QQ_WORKER_ID"] == "cloudstudio-domestic-2"
 
 print("cloudstudio startup smoke: ok")
