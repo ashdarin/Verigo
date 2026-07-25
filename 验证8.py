@@ -190,20 +190,19 @@ def verify_outlook_via_microsoft(email):
         break
 
     ea, eb = a["exists"], b["exists"]
-    raw = f"[接口A:{a['detail']} | 接口B:{b['detail']}]"
 
     if ea is True and eb is True:
-        return True, f"微软接口确认账号存在 {raw}"
+        return True, "Outlook 邮箱已确认可投递"
     if ea is False and eb is False:
-        return False, f"微软接口确认账号不存在 {raw}"
+        return False, "Outlook 邮箱不可投递"
     if {ea, eb} == {True, None}:
-        return True, f"微软接口确认账号存在(单接口) {raw}"
+        return True, "Outlook 邮箱已确认可投递"
     if {ea, eb} == {False, None}:
-        return False, f"微软接口确认账号不存在(单接口) {raw}"
+        return False, "Outlook 邮箱不可投递"
     # 分歧 或 双未知/限流 -> 不下结论
     if None not in (ea, eb):
-        return None, f"两接口结果分歧,无法判定 {raw}"
-    return None, f"接口未返回明确结果(可能被限流) {raw}"
+        return None, "Outlook 邮箱暂时无法确认"
+    return None, "Outlook 邮箱暂时无法确认"
 
 # 🆕 全局共享的域名类型缓存（跨进程共享）
 _global_domain_type_cache = {}
@@ -933,7 +932,7 @@ class EmailVerifier:
             if is_outlook_domain(domain):
                 result['strategy'] = 'outlook_http'
                 result['consumer_fix_applied'] = True
-                result['consumer_provider'] = 'Outlook(微软接口)'
+                result['consumer_provider'] = 'Outlook'
                 result['verification_method'] = 'microsoft_api'
                 result['domain_type'] = 'consumer'
                 # 微软接口不需要 SMTP/MX, 但为保持 CSV 各列一致, 标记基础检查通过
@@ -947,18 +946,18 @@ class EmailVerifier:
                     result['valid'] = True
                     result['deliverable'] = True
                     result['checks']['smtp'] = True
-                    result['message'] = '✅ Outlook邮箱验证通过，账号真实存在(微软接口)'
+                    result['message'] = '✅ Outlook 邮箱已确认可投递'
                 elif exists is False:
                     result['valid'] = False
                     result['deliverable'] = False
                     result['checks']['smtp'] = False
-                    result['message'] = '❌ Outlook邮箱不存在(微软接口)'
+                    result['message'] = '❌ Outlook 邮箱不可投递'
                 else:
                     # 限流/分歧 -> 状态未知, 绝不误判
                     result['valid'] = True
                     result['deliverable'] = None
                     result['checks']['smtp'] = None
-                    result['message'] = '⚠️ Outlook邮箱状态未知(接口限流或结果分歧)'
+                    result['message'] = '⚠️ Outlook 邮箱暂时无法确认'
                 return result
 
             strategy = self.get_domain_strategy(domain)

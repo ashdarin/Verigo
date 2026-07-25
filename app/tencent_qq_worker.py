@@ -137,9 +137,12 @@ def retry_temporary_smtp_results(
 def verify_job(job: dict[str, object]) -> None:
     job_id = str(job["id"])
     emails = [str(email) for email in job["emails"]]
-    worker_count = max(
-        1, min(int(job.get("worker_count", 1)), settings.remote_worker_max_workers)
+    remote_limit = (
+        settings.cloudshell_worker_max_workers
+        if WORKER_TARGET == "gmail"
+        else settings.cloudstudio_worker_max_workers
     )
+    worker_count = max(1, min(int(job.get("worker_count", 1)), remote_limit))
     if any(is_qq_email(email) for email in emails):
         worker_count = 1
     control: dict[str, object] = {"checked_at": 0.0, "stopped": False}

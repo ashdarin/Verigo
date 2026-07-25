@@ -37,6 +37,7 @@ import app.api.auth as auth_api
 from app.api.routes import (
     email_execution_target,
     gmail_target,
+    remote_worker_count,
     serialize_job,
     submit_routed_job,
     submit_stopped_job_continuation,
@@ -87,6 +88,8 @@ assert gmail_target(["person@gmail.com"], "other@example.com") == "local"
 assert gmail_target(["person@outlook.com"], "smoke@example.com") == "gmail"
 assert gmail_target(["person@company.de"], "smoke@example.com") == "gmail"
 assert gmail_target(["person@example.com"], "smoke@example.com") == "local"
+assert remote_worker_count("tencent_qq", 8) == 4
+assert remote_worker_count("gmail", 8) == 8
 assert is_temporary_smtp_452({"smtp_result": "452 temporary mailbox failure"})
 assert is_temporary_smtp_452({"message": "452 暂时无法确认"})
 assert not is_temporary_smtp_452({"smtp_result": "550 mailbox unavailable"})
@@ -141,6 +144,16 @@ legacy_permanent_summary = serialize_job(Job(
 assert legacy_permanent_summary is not None
 assert legacy_permanent_summary.undeliverable == 1
 assert legacy_permanent_summary.unknown == 0
+
+legacy_outlook = normalize_result({
+    "email": "person@outlook.com",
+    "deliverable": True,
+    "verification_method": "microsoft_api",
+    "smtp_result": "微软接口确认账号存在 [接口A:IfExistsResult=5 | 接口B:account=MSAccount]",
+})
+assert legacy_outlook["smtp_result"] == "Outlook 邮箱已确认可投递"
+assert legacy_outlook["message"] == "Outlook 邮箱已确认可投递"
+assert legacy_outlook["verification_method"] == "Outlook 账号验证"
 
 
 class TemporarySmtpServer:
@@ -582,6 +595,24 @@ with TestClient(app) as guest:
     assert parallel_claim.json()["job"]["id"] == remote_parallel_job.id
     assert parallel_claim.json()["job"]["worker_count"] == 4
     assert job_store.stop(remote_parallel_job.id).status == "stopped"
+    cloudshell_fast_job = submit_routed_job(
+        ["fast@company.de"],
+        8,
+        owner_id="cloudshell-fast-owner",
+        owner_email="smoke@example.com",
+        job_id="cloudshellfast01",
+    )
+    cloudshell_claim = guest.post(
+        "/api/workers/gmail/claim?wait_seconds=0",
+        headers={
+            "X-Verigo-Worker-Token": "smoke-gmail-worker-token",
+            "X-Verigo-Worker-Id": "smoke-cloudshell",
+        },
+    )
+    assert cloudshell_claim.status_code == 200, cloudshell_claim.text
+    assert cloudshell_claim.json()["job"]["id"] == cloudshell_fast_job.id
+    assert cloudshell_claim.json()["job"]["worker_count"] == 8
+    assert job_store.stop(cloudshell_fast_job.id).status == "stopped"
 
 
 with TestClient(app) as account:

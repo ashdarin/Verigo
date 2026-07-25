@@ -27,6 +27,20 @@ class Settings:
     remote_worker_max_workers: int = max(
         1, int(os.getenv("VERIGO_REMOTE_WORKER_MAX_WORKERS", "4"))
     )
+    # Keep Cloud Studio at its established limit while allowing Cloud Shell to
+    # use all eight processes in the Fastest mode.
+    cloudstudio_worker_max_workers: int = max(
+        1,
+        int(
+            os.getenv(
+                "VERIGO_CLOUDSTUDIO_MAX_WORKERS",
+                os.getenv("VERIGO_REMOTE_WORKER_MAX_WORKERS", "4"),
+            )
+        ),
+    )
+    cloudshell_worker_max_workers: int = max(
+        1, int(os.getenv("VERIGO_CLOUDSHELL_MAX_WORKERS", "8"))
+    )
     max_guest_emails: int = int(os.getenv("VERIGO_MAX_GUEST_EMAILS", "100"))
     free_single_daily_limit: int = int(
         os.getenv("VERIGO_FREE_SINGLE_DAILY_LIMIT", "20")

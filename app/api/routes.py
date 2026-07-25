@@ -73,6 +73,16 @@ FOREIGN_EMAIL_DOMAINS = frozenset({
 REMOTE_WORKERS = {"tencent-qq": "tencent_qq", "gmail": "gmail"}
 
 
+def remote_worker_count(execution_target: str, requested_count: int) -> int:
+    """Apply the target-specific concurrency cap before a remote job is queued."""
+    limit = (
+        settings.cloudshell_worker_max_workers
+        if execution_target == "gmail"
+        else settings.cloudstudio_worker_max_workers
+    )
+    return max(1, min(requested_count, limit))
+
+
 def require_job(job_id: str) -> Job:
     job = job_store.get(job_id)
     if job is None:
@@ -168,7 +178,15 @@ def submit_routed_job(
             else email_execution_target(email, owner_email)
         )
         # QQ verification stays on Cloud Studio and is intentionally serial.
-        child_worker_count = 1 if is_qq_email(email) else worker_count
+        # Cloud Studio otherwise retains its existing cap; Cloud Shell can use
+        # eight processes when the user chooses Fastest mode.
+        child_worker_count = (
+            1
+            if is_qq_email(email)
+            else remote_worker_count(target, worker_count)
+            if target in {"tencent_qq", "gmail"}
+            else worker_count
+        )
         targets.setdefault((target, child_worker_count), []).append(email)
 
     immediate_results = {
@@ -401,8 +419,8 @@ async def claim_tencent_qq_job(
                 "job": {
                     "id": job.id,
                     "emails": job.emails,
-                    "worker_count": min(
-                        job.worker_count, settings.remote_worker_max_workers
+                    "worker_count": remote_worker_count(
+                        execution_target, job.worker_count
                     ),
                     "stop_on_deliverable": job.stop_on_deliverable,
                 }

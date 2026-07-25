@@ -42,7 +42,7 @@ METHOD_LABELS = {
     "standard": "邮箱服务器验证",
     "qq_rcpt": "邮箱服务器验证",
     "qq_avatar": "QQ 头像辅助证据",
-    "microsoft_api": "微软账号验证",
+    "microsoft_api": "Outlook 账号验证",
     "catch-all_detected": "域名通用收件",
 }
 
@@ -58,6 +58,18 @@ def normalize_result(result: dict[str, Any]) -> dict[str, Any]:
         display_detail = "域名不存在"
     elif "mx" in detail_lower or "没有邮件服务器" in detail:
         display_detail = "没有邮箱服务器"
+    elif (
+        result.get("verification_method") == "microsoft_api"
+        or "微软接口" in detail
+        or "接口a:" in detail_lower
+        or "接口b:" in detail_lower
+    ):
+        if result.get("deliverable") is True:
+            display_detail = "Outlook 邮箱已确认可投递"
+        elif result.get("deliverable") is False:
+            display_detail = "Outlook 邮箱不可投递"
+        else:
+            display_detail = "Outlook 邮箱暂时无法确认"
     elif smtp_permanent_status({"smtp_result": detail}):
         result["deliverable"] = False
         result["valid"] = False
@@ -130,7 +142,8 @@ def write_csv(job: Job) -> None:
     with path.open("w", encoding="utf-8-sig", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=[label for _, label in CSV_FIELDS])
         writer.writeheader()
-        for result in job.results:
+        for raw_result in job.results:
+            result = normalize_result(raw_result)
             row = {label: result.get(key, "") for key, label in CSV_FIELDS}
             row["可投递"] = DELIVERABILITY_LABELS.get(result.get("deliverable"), "未知")
             writer.writerow(row)
