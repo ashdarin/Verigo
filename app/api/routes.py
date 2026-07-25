@@ -123,6 +123,8 @@ def gmail_worker_allowed(owner_email: str | None) -> bool:
 
 def email_execution_target(email: str, owner_email: str | None) -> str:
     """Return the configured worker target for one address."""
+    if is_qq_email(email):
+        return "tencent_qq"
     domain = email.rsplit("@", 1)[-1].lower() if "@" in email else ""
     if is_domestic_email_domain(domain) and qq_worker_allowed(owner_email):
         return "tencent_qq"
@@ -131,18 +133,22 @@ def email_execution_target(email: str, owner_email: str | None) -> str:
     return "local"
 
 
-def partition_target_emails(targets: dict[str, list[str]]) -> list[tuple[str, list[str]]]:
+def partition_target_emails(
+    targets: dict[tuple[str, int], list[str]],
+) -> list[tuple[str, list[str], int]]:
     """Keep remote completion requests below their maximum supported payload."""
-    partitions: list[tuple[str, list[str]]] = []
+    partitions: list[tuple[str, list[str], int]] = []
     remote_targets = {"tencent_qq", "gmail"}
-    for target, target_emails in targets.items():
+    for (target, child_worker_count), target_emails in targets.items():
         chunk_size = (
             settings.remote_worker_max_emails_per_job
             if target in remote_targets
             else len(target_emails)
         )
         for start in range(0, len(target_emails), chunk_size):
-            partitions.append((target, target_emails[start : start + chunk_size]))
+            partitions.append(
+                (target, target_emails[start : start + chunk_size], child_worker_count)
+            )
     return partitions
 
 
@@ -154,19 +160,23 @@ def submit_routed_job(
     stop_on_deliverable: bool = False,
     job_id: str | None = None,
 ) -> Job:
-    targets: dict[str, list[str]] = {}
+    targets: dict[tuple[str, int], list[str]] = {}
     for email in emails:
         target = (
             "unsupported"
             if is_yahoo_email(email)
             else email_execution_target(email, owner_email)
         )
-        targets.setdefault(target, []).append(email)
+        # QQ verification stays on Cloud Studio and is intentionally serial.
+        child_worker_count = 1 if is_qq_email(email) else worker_count
+        targets.setdefault((target, child_worker_count), []).append(email)
 
     immediate_results = {
         "unsupported": [
             yahoo_unsupported_result(email, index)
-            for index, email in enumerate(targets.get("unsupported", []))
+            for index, email in enumerate(
+                targets.get(("unsupported", worker_count), [])
+            )
         ]
     }
 
@@ -195,10 +205,12 @@ def submit_routed_job(
             execution_target="local",
         )
 
-    execution_target = next(iter(targets), "local") if len(targets) == 1 else "local"
+    execution_target, child_worker_count = (
+        next(iter(targets)) if len(targets) == 1 else ("local", worker_count)
+    )
     return verification_tasks.submit(
         emails,
-        worker_count,
+        child_worker_count,
         owner_id=owner_id,
         stop_on_deliverable=stop_on_deliverable,
         job_id=job_id,
@@ -227,9 +239,9 @@ def submit_stopped_job_continuation(job: Job) -> Job:
             execution_target=job.execution_target,
         )
 
-    targets: dict[str, list[str]] = {}
+    targets: dict[tuple[str, int], list[str]] = {}
     child_target_by_email = {
-        email.lower(): child.execution_target
+        email.lower(): (child.execution_target, child.worker_count)
         for child in job_store.children(job.id)
         for email in child.emails
     }
@@ -240,9 +252,12 @@ def submit_stopped_job_continuation(job: Job) -> Job:
         targets.setdefault(target, []).append(email)
     partitions = partition_target_emails(targets)
     if len(partitions) == 1:
-        target, emails = next(iter(targets.items()))
+        (target, child_worker_count), emails = next(iter(targets.items()))
         return verification_tasks.submit(
-            emails, job.worker_count, owner_id=job.owner_id, execution_target=target
+            emails,
+            child_worker_count,
+            owner_id=job.owner_id,
+            execution_target=target,
         )
     return verification_tasks.submit_partitioned(
         remaining,

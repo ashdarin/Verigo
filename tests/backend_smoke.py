@@ -35,6 +35,7 @@ from openpyxl import Workbook
 
 import app.api.auth as auth_api
 from app.api.routes import (
+    email_execution_target,
     gmail_target,
     submit_routed_job,
     submit_stopped_job_continuation,
@@ -75,6 +76,7 @@ def completed_job(job_id: str, **kwargs) -> Job:
 
 assert tencent_qq_target(["person@qq.com"], "smoke@example.com") == "tencent_qq"
 assert tencent_qq_target(["person@qq.com"], "other@example.com") == "local"
+assert email_execution_target("person@qq.com", "other@example.com") == "tencent_qq"
 assert tencent_qq_target(["person@163.com"], "smoke@example.com") == "tencent_qq"
 assert tencent_qq_target(["person@company.cn"], "smoke@example.com") == "tencent_qq"
 assert tencent_qq_target(["person@example.com"], "smoke@example.com") == "local"
@@ -343,7 +345,7 @@ job_store.stop(restart_job.id)
 
 object.__setattr__(settings, "tencent_qq_worker_allowed_emails", frozenset({"*"}))
 mixed_parent = submit_routed_job(
-    ["first@qq.com", "second@example.com", "third@foxmail.com"],
+    ["first@qq.com", "second@example.com", "third@foxmail.com", "fourth@163.com"],
     2,
     owner_id="mixed-owner",
     owner_email="mixed-owner@example.com",
@@ -352,10 +354,14 @@ mixed_parent = submit_routed_job(
 mixed_children = job_store.children(mixed_parent.id)
 assert mixed_parent.execution_target == "aggregate"
 assert {child.execution_target for child in mixed_children} == {"local", "tencent_qq"}
-assert [child for child in mixed_children if child.execution_target == "tencent_qq"][0].emails == [
-    "first@qq.com",
-    "third@foxmail.com",
+mixed_tencent_children = [
+    child for child in mixed_children if child.execution_target == "tencent_qq"
 ]
+assert [child.emails for child in mixed_tencent_children] == [
+    ["first@qq.com", "third@foxmail.com"],
+    ["fourth@163.com"],
+]
+assert [child.worker_count for child in mixed_tencent_children] == [1, 2]
 assert [child for child in mixed_children if child.execution_target == "local"][0].emails == [
     "second@example.com"
 ]
@@ -376,20 +382,29 @@ assert [result["email"] for result in mixed_parent.results] == [
     "first@qq.com",
     "second@example.com",
     "third@foxmail.com",
+    "fourth@163.com",
 ]
 assert mixed_parent.csv_path is not None and mixed_parent.csv_path.exists()
 assert mixed_parent.id in [job.id for job in job_store.list_recent("mixed-owner")]
 assert all(job.parent_id is None for job in job_store.list_recent("mixed-owner"))
 
 stopped_parent = submit_routed_job(
-    ["stop@qq.com", "stop@example.com"],
-    1,
+    ["stop@qq.com", "stop@163.com", "stop@example.com"],
+    3,
     owner_id="mixed-owner",
     owner_email="mixed-owner@example.com",
     job_id="mixedstop001",
 )
 assert job_store.stop(stopped_parent.id).status == "stopped"
 assert all(child.status == "stopped" for child in job_store.children(stopped_parent.id))
+stopped_continuation = submit_stopped_job_continuation(job_store.get(stopped_parent.id))
+stopped_continuation_children = job_store.children(stopped_continuation.id)
+assert [
+    (child.emails, child.worker_count)
+    for child in stopped_continuation_children
+    if child.execution_target == "tencent_qq"
+] == [(["stop@qq.com"], 1), (["stop@163.com"], 3)]
+assert job_store.stop(stopped_continuation.id).status == "stopped"
 object.__setattr__(
     settings, "tencent_qq_worker_allowed_emails", frozenset({"smoke@example.com"})
 )

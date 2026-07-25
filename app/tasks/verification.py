@@ -176,7 +176,7 @@ class VerificationTasks:
         self,
         emails: list[str],
         worker_count: int,
-        target_emails: list[tuple[str, list[str]]],
+        target_emails: list[tuple[str, list[str], int]],
         owner_id: str | None = None,
         job_id: str | None = None,
         immediate_results_by_target: dict[str, list[dict[str, Any]]] | None = None,
@@ -184,11 +184,11 @@ class VerificationTasks:
         """Create one visible task and target-specific internal child jobs."""
         all_emails = clean_emails(emails)
         partitions = [
-            (target, clean_emails(partition_emails))
-            for target, partition_emails in target_emails
+            (target, clean_emails(partition_emails), child_worker_count)
+            for target, partition_emails, child_worker_count in target_emails
             if partition_emails
         ]
-        partitioned_emails = [email for _, partition in partitions for email in partition]
+        partitioned_emails = [email for _, partition, _ in partitions for email in partition]
         if (
             len(partitions) < 2
             or len(partitioned_emails) != len(all_emails)
@@ -213,12 +213,12 @@ class VerificationTasks:
         )
         job_store.add(parent, max_active=settings.max_pending_jobs)
 
-        for target, child_emails in partitions:
+        for target, child_emails, child_worker_count in partitions:
             immediate_results = (immediate_results_by_target or {}).get(target)
             child = Job(
                 id=uuid.uuid4().hex[:12],
                 emails=child_emails,
-                worker_count=worker_count,
+                worker_count=child_worker_count,
                 stop_on_deliverable=False,
                 execution_target=target,
                 parent_id=parent.id,

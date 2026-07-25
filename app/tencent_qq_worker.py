@@ -10,6 +10,7 @@ from typing import Any
 
 from app.config import settings
 from app.core.legacy import create_verifier
+from app.core.provider_policy import is_qq_email
 from app.core.result_retry import is_smtp_greylisted, smtp_temporary_status
 
 
@@ -139,6 +140,8 @@ def verify_job(job: dict[str, object]) -> None:
     worker_count = max(
         1, min(int(job.get("worker_count", 1)), settings.remote_worker_max_workers)
     )
+    if any(is_qq_email(email) for email in emails):
+        worker_count = 1
     control: dict[str, object] = {"checked_at": 0.0, "stopped": False}
     results: list[dict[str, Any]] = []
 
