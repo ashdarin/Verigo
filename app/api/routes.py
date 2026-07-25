@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hmac
 import json
+import math
 import time
 import uuid
 from typing import Annotated
@@ -170,11 +171,17 @@ def partition_target_emails(
     partitions: list[tuple[str, list[str], int]] = []
     remote_targets = {"tencent_qq", DOMESTIC_CLOUDSTUDIO_TARGET, "gmail"}
     for (target, child_worker_count), target_emails in targets.items():
-        chunk_size = (
-            settings.remote_worker_max_emails_per_job
-            if target in remote_targets
-            else len(target_emails)
-        )
+        if target not in remote_targets:
+            chunk_size = len(target_emails)
+        elif target == "tencent_qq":
+            # QQ remains on its single serial worker regardless of task size.
+            chunk_size = settings.remote_worker_max_emails_per_job
+        else:
+            # A large single-target task must expose enough child jobs for every
+            # eligible remote node to claim work instead of leaving nodes idle.
+            node_count = 2 if target == "gmail" else 1
+            parallel_chunk_size = max(1, math.ceil(len(target_emails) / node_count))
+            chunk_size = min(settings.remote_worker_max_emails_per_job, parallel_chunk_size)
         for start in range(0, len(target_emails), chunk_size):
             partitions.append(
                 (target, target_emails[start : start + chunk_size], child_worker_count)
@@ -375,6 +382,14 @@ def serialize_job(job: Job) -> JobResponse:
     completed, total, progress = job_progress(job)
     is_done = job.status in {"completed", "stopped"}
     normalized_results = [normalize_result(result) for result in job.results]
+    retry_at = job.deferred_retry_at
+    if job.execution_target == "aggregate":
+        child_retries = [
+            child.deferred_retry_at for child in job_store.children(job.id)
+            if child.deferred_retry_at is not None
+        ]
+        if child_retries:
+            retry_at = min(child_retries)
     return JobResponse(
         id=job.id,
         status=job.status,
@@ -390,7 +405,7 @@ def serialize_job(job: Job) -> JobResponse:
         download_url=f"/api/jobs/{job.id}/download" if is_done else None,
         download_name=verification_filename(job) if is_done else None,
         queue_position=job_store.queue_position(job.id),
-        retry_at=job.deferred_retry_at.isoformat() if job.deferred_retry_at else None,
+        retry_at=retry_at.isoformat() if retry_at else None,
         stop_on_deliverable=job.stop_on_deliverable,
         qq_slow=any(is_qq_email(email) for email in job.emails),
         access_token=job.guest_token,

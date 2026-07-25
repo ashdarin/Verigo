@@ -435,6 +435,8 @@ def schedule_remote_temporary_retry(job: Job) -> bool:
         f"检测到 SMTP 临时响应，系统将在 60 秒内进行第 "
         f"{job.temporary_retry_attempts}/3 次重试"
     )
+    for result in temporary:
+        result["retry_at"] = job.deferred_retry_at.isoformat()
     return True
 
 
