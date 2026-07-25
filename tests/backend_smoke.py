@@ -312,6 +312,7 @@ assert job_store.stop(large_domestic_parent.id).status == "stopped"
 large_domestic_continuation = submit_stopped_job_continuation(
     job_store.get(large_domestic_parent.id)
 )
+assert large_domestic_continuation.id == large_domestic_parent.id
 assert [len(child.emails) for child in job_store.children(large_domestic_continuation.id)] == [5000, 1]
 assert job_store.stop(large_domestic_continuation.id).status == "stopped"
 large_stop_on_deliverable = submit_routed_job(
@@ -440,6 +441,32 @@ assert mixed_parent.csv_path is not None and mixed_parent.csv_path.exists()
 assert mixed_parent.id in [job.id for job in job_store.list_recent("mixed-owner")]
 assert all(job.parent_id is None for job in job_store.list_recent("mixed-owner"))
 
+# A worker can report a temporary SMTP response twice: first to schedule the
+# retry, then after it completes. The visible parent must retain the schedule.
+retry_parent = submit_routed_job(
+    ["retry@qq.com", "retry@example.com"],
+    2,
+    owner_id="mixed-owner",
+    owner_email="mixed-owner@example.com",
+    job_id="retryparent01",
+)
+retry_child = next(
+    child for child in job_store.children(retry_parent.id)
+    if child.execution_target == "tencent_qq"
+)
+retry_child.results = [{
+    "email": "retry@qq.com", "original_index": 0, "deliverable": None,
+    "smtp_result": "452 Mailbox temporarily unavailable", "retry_state": "scheduled",
+    "retry_attempt": 1, "retry_max_attempts": 3, "retry_at": "2030-01-01T00:00:00+00:00",
+}]
+job_store.persist(retry_child)
+sync_parent_job(retry_child)
+retry_parent = job_store.get(retry_parent.id)
+assert retry_parent is not None
+assert retry_parent.results[0]["retry_at"] == "2030-01-01T00:00:00+00:00"
+assert retry_parent.results[0]["retry_attempt"] == 1
+job_store.stop(retry_parent.id)
+
 stopped_parent = submit_routed_job(
     ["stop@qq.com", "stop@163.com", "stop@example.com"],
     3,
@@ -450,6 +477,7 @@ stopped_parent = submit_routed_job(
 assert job_store.stop(stopped_parent.id).status == "stopped"
 assert all(child.status == "stopped" for child in job_store.children(stopped_parent.id))
 stopped_continuation = submit_stopped_job_continuation(job_store.get(stopped_parent.id))
+assert stopped_continuation.id == stopped_parent.id
 stopped_continuation_children = job_store.children(stopped_continuation.id)
 assert [
     (child.emails, child.worker_count)
@@ -542,7 +570,7 @@ with TestClient(app) as guest:
         headers={"X-Job-Token": guest_single.json()["access_token"]},
     )
     assert resumed_guest_job.status_code == 202, resumed_guest_job.text
-    assert resumed_guest_job.json()["id"] != guest_single.json()["id"]
+    assert resumed_guest_job.json()["id"] == guest_single.json()["id"]
     assert resumed_guest_job.json()["status"] == "queued"
     job_store.stop(resumed_guest_job.json()["id"])
     yahoo_single = guest.post("/api/verify/single", json={"email": "person@yahoo.co.uk"})

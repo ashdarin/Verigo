@@ -697,6 +697,57 @@ class JobStore:
             connection.commit()
         return self._job_from_row(row)
 
+    def resume(self, job_id: str) -> tuple[Job | None, list[Job]]:
+        """Resume a stopped task in place and return work that was re-queued."""
+        self.initialize()
+        with self._lock, closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                f"SELECT {self._select_columns()} FROM jobs WHERE id=?", (job_id,)
+            ).fetchone()
+            if row is None:
+                connection.rollback()
+                return None, []
+            job = self._job_from_row(row)
+            if job.status != "stopped":
+                connection.commit()
+                return job, []
+
+            if job.execution_target == "aggregate":
+                child_rows = connection.execute(
+                    f"SELECT {self._select_columns()} FROM jobs "
+                    "WHERE parent_id=? AND status='stopped' ORDER BY created_at, id",
+                    (job_id,),
+                ).fetchall()
+                resumed_children = [self._job_from_row(child_row) for child_row in child_rows]
+                if not resumed_children:
+                    connection.commit()
+                    return job, []
+                connection.execute(
+                    """
+                    UPDATE jobs SET status='queued', finished_at=NULL, error=NULL,
+                        worker_id=NULL, heartbeat_at=NULL, deferred_retry_at=NULL
+                    WHERE parent_id=? AND status='stopped'
+                    """,
+                    (job_id,),
+                )
+                status = "running"
+            else:
+                resumed_children = [job]
+                status = "queued"
+
+            connection.execute(
+                """
+                UPDATE jobs SET status=?, finished_at=NULL, error=NULL,
+                    worker_id=NULL, heartbeat_at=NULL, deferred_retry_at=NULL
+                WHERE id=?
+                """,
+                (status, job_id),
+            )
+            connection.commit()
+        resumed = self.get(job_id)
+        return resumed, resumed_children
+
     def queue_position(self, job_id: str) -> int | None:
         self.initialize()
         with closing(self._connect()) as connection:

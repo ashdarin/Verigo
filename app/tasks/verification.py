@@ -525,10 +525,19 @@ def run_job(job: Job) -> None:
             job.status = "completed"
             return
 
-        by_index: dict[int, dict[str, Any]] = {}
+        # A stopped task can be resumed in place. Keep its already reported
+        # results and only schedule addresses that have not produced one.
+        known_emails = {email.lower() for email in job.emails}
+        by_index: dict[int, dict[str, Any]] = {
+            int(result.get("original_index", index)): normalize_result(dict(result))
+            for index, result in enumerate(job.results)
+            if str(result.get("email", "")).lower() in known_emails
+        }
         missing_emails: list[str] = []
         missing_indices: list[int] = []
         for index, email in enumerate(job.emails):
+            if index in by_index:
+                continue
             cached = cached_by_email.get(email.lower())
             if cached is None:
                 missing_indices.append(index)
@@ -605,8 +614,6 @@ def job_progress(job: Job) -> tuple[int, int, float]:
     total = len(job.emails)
     if job.status == "completed":
         return total, total, 100.0
-    if job.status == "queued":
-        return 0, total, 0.0
     completed = min(len(job.results), total)
     percent = round((completed / total * 100) if total else 0, 1)
     return completed, total, percent

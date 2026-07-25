@@ -189,13 +189,25 @@ def verify_job(job: dict[str, object]) -> None:
         if stopped(job_id, control):
             return
         result = dict(raw_result)
-        results.append(result)
-        report_result(job_id, result)
-        if (
+        needs_retry = (
             not any(is_qq_email(email) for email in emails)
             and smtp_temporary_status(result)
             and not is_smtp_greylisted(result)
-        ):
+        )
+        if needs_retry:
+            retry_at = time.time() + settings.temporary_smtp_retry_seconds
+            result.update({
+                "retry_state": "scheduled",
+                "retry_attempt": 1,
+                "retry_max_attempts": settings.temporary_smtp_immediate_retries,
+                "retry_at": __import__("datetime").datetime.fromtimestamp(
+                    retry_at, __import__("datetime").timezone.utc
+                ).isoformat(),
+            })
+        results.append(result)
+        # The first visible 4xx result must already include its retry schedule.
+        report_result(job_id, result)
+        if needs_retry:
             thread = threading.Thread(target=retry_one, args=(result,), daemon=True)
             retry_threads.append(thread)
             thread.start()

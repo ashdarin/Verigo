@@ -34,10 +34,15 @@ from app.core.discovery import candidate_emails
 from app.core.security import token_hash
 from app.core.worker_lifecycle import (
     DOMESTIC_CLOUDSTUDIO_TARGET,
+    TENCENT_QQ_TARGET,
     domestic_worker_lifecycle,
     worker_lifecycle,
 )
-from app.core.cloudshell_lifecycle import cloudshell_lifecycle
+from app.core.cloudshell_lifecycle import (
+    GMAIL_TARGET,
+    cloudshell_lifecycle,
+    notify_cloudshell_job_queued,
+)
 from app.core.provider_policy import (
     YAHOO_UNSUPPORTED_MESSAGE,
     is_qq_email,
@@ -265,51 +270,21 @@ def submit_routed_job(
 
 
 def submit_stopped_job_continuation(job: Job) -> Job:
-    """Queue only addresses with no usable result, without charging the owner again."""
-    completed = {
-        str(result.get("email", "")).lower()
-        for result in job.results
-        if result.get("email") and not result.get("skipped")
-    }
-    remaining = [email for email in job.emails if email.lower() not in completed]
-    if not remaining:
+    """Continue a stopped task without changing its user-visible task ID."""
+    resumed, queued_jobs = job_store.resume(job.id)
+    if resumed is None:
+        raise RuntimeError("任务不存在")
+    if not queued_jobs:
         raise ValueError("该任务没有可继续验证的邮箱")
 
-    if job.execution_target != "aggregate":
-        return verification_tasks.submit(
-            remaining,
-            job.worker_count,
-            owner_id=job.owner_id,
-            stop_on_deliverable=job.stop_on_deliverable,
-            execution_target=job.execution_target,
-        )
-
-    targets: dict[tuple[str, int], list[str]] = {}
-    child_target_by_email = {
-        email.lower(): (child.execution_target, child.worker_count)
-        for child in job_store.children(job.id)
-        for email in child.emails
-    }
-    for email in remaining:
-        target = child_target_by_email.get(email.lower())
-        if target is None:
-            raise ValueError("任务分流记录不完整，无法继续验证")
-        targets.setdefault(target, []).append(email)
-    partitions = partition_target_emails(targets)
-    if len(partitions) == 1:
-        (target, child_worker_count), emails = next(iter(targets.items()))
-        return verification_tasks.submit(
-            emails,
-            child_worker_count,
-            owner_id=job.owner_id,
-            execution_target=target,
-        )
-    return verification_tasks.submit_partitioned(
-        remaining,
-        job.worker_count,
-        partitions,
-        owner_id=job.owner_id,
-    )
+    for queued_job in queued_jobs:
+        if queued_job.execution_target == TENCENT_QQ_TARGET:
+            worker_lifecycle.notify_job_queued()
+        elif queued_job.execution_target == DOMESTIC_CLOUDSTUDIO_TARGET:
+            domestic_worker_lifecycle.notify_job_queued()
+        elif queued_job.execution_target == GMAIL_TARGET:
+            notify_cloudshell_job_queued()
+    return resumed
 
 
 def require_remote_worker(worker_target: str, token: str | None) -> str:
