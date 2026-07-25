@@ -198,6 +198,16 @@ class JobStore:
                     )
                     """
                 )
+                connection.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS worker_heartbeats (
+                        target TEXT NOT NULL,
+                        worker_id TEXT NOT NULL,
+                        last_seen_at TEXT NOT NULL,
+                        PRIMARY KEY (target, worker_id)
+                    )
+                    """
+                )
             self._initialized = True
 
     def release_legacy_deferred_retries(self) -> int:
@@ -524,7 +534,17 @@ class JobStore:
 
     def record_worker_seen(self, target: str, worker_id: str) -> None:
         self.initialize()
+        now = utc_now().isoformat()
         with closing(self._connect()) as connection:
+            connection.execute(
+                """
+                INSERT INTO worker_heartbeats(target, worker_id, last_seen_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(target, worker_id) DO UPDATE SET
+                    last_seen_at=excluded.last_seen_at
+                """,
+                (target, worker_id, now),
+            )
             connection.execute(
                 """
                 INSERT INTO worker_runtime(target, worker_id, last_seen_at)
@@ -537,8 +557,24 @@ class JobStore:
                     wake_attempts=0,
                     last_wake_error=NULL
                 """,
-                (target, worker_id, utc_now().isoformat()),
+                (target, worker_id, now),
             )
+
+    def worker_heartbeats(self, target: str) -> dict[str, datetime]:
+        """Return the last heartbeat for every registered worker on a target."""
+        self.initialize()
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                """
+                SELECT worker_id, last_seen_at FROM worker_heartbeats
+                WHERE target=? ORDER BY worker_id
+                """,
+                (target,),
+            ).fetchall()
+        return {
+            str(worker_id): datetime.fromisoformat(last_seen_at)
+            for worker_id, last_seen_at in rows
+        }
 
     def record_wake_attempt(
         self, target: str, deadline: datetime | None, error: str | None
