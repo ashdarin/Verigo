@@ -15,6 +15,13 @@ assert "pgrep" not in command
 assert ". .worker.env" in command
 assert "nohup .venv/bin/python" in command
 assert 'VERIGO_REMOTE_WORKER_TARGET=gmail' in command
+assert CloudShellLifecycle._cloudshell_public_key("ssh-rsa payload comment") == "ssh-rsa payload"
+try:
+    CloudShellLifecycle._cloudshell_public_key("ssh-ed25519 payload")
+except RuntimeError as exc:
+    assert str(exc) == "Cloud Shell public key must use RSA or ECDSA"
+else:
+    raise AssertionError("Cloud Shell must reject unsupported Ed25519 API keys")
 lifecycle = CloudShellLifecycle()
 lifecycle.start()
 assert lifecycle._thread is not None and lifecycle._thread.is_alive()

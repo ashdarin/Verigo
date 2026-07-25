@@ -5,6 +5,7 @@ import logging
 import subprocess
 import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -27,6 +28,7 @@ class CloudShellLifecycle:
         ssh_key_path: Path | None = None,
         ssh_known_hosts_path: Path | None = None,
         worker_id: str = "cloudshell-gmail-1",
+        register_ssh_public_key: bool = False,
     ) -> None:
         self._enabled = settings.google_cloudshell_enabled if enabled is None else enabled
         self._user = settings.google_cloudshell_user if user is None else user
@@ -45,6 +47,7 @@ class CloudShellLifecycle:
             else ssh_known_hosts_path
         )
         self._worker_id = worker_id
+        self._register_ssh_public_key = register_ssh_public_key
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
         self._wake_event = threading.Event()
@@ -170,10 +173,52 @@ class CloudShellLifecycle:
                 operation = json.load(response)
         raise RuntimeError("Cloud Shell environment start timed out")
 
+    @staticmethod
+    def _cloudshell_public_key(value: str) -> str:
+        """Cloud Shell's API accepts only the key type and Base64 payload."""
+        parts = value.split()
+        if len(parts) < 2 or parts[0] not in {
+            "ssh-rsa",
+            "ecdsa-sha2-nistp256",
+            "ecdsa-sha2-nistp384",
+            "ecdsa-sha2-nistp521",
+        }:
+            raise RuntimeError("Cloud Shell public key must use RSA or ECDSA")
+        return " ".join(parts[:2])
+
+    def _add_public_key(self, token: str) -> None:
+        if not self._register_ssh_public_key:
+            return
+        public_key = subprocess.run(
+            ["ssh-keygen", "-y", "-f", str(self._ssh_key_path)],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        data = json.dumps({"key": self._cloudshell_public_key(public_key)}).encode()
+        user = urllib.parse.quote(self._user, safe="")
+        request = urllib.request.Request(
+            f"https://cloudshell.googleapis.com/v1/users/{user}/environments/default:addPublicKey",
+            data=data,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+                "X-Goog-User-Project": self._quota_project,
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=30):
+                pass
+        except urllib.error.HTTPError as exc:
+            if exc.code != 409:
+                raise
+
     def _start(self) -> None:
         try:
             token = self._token()
             environment = self._start_environment(token)
+            self._add_public_key(token)
             host, port = environment["sshHost"], str(environment["sshPort"])
             ssh_user = self._user.split("@", 1)[0]
             remote = f"{ssh_user}@{host}"
@@ -206,6 +251,7 @@ cloudshell_secondary_lifecycle = CloudShellLifecycle(
     ssh_key_path=settings.google_cloudshell_secondary_ssh_key_path,
     ssh_known_hosts_path=settings.google_cloudshell_secondary_ssh_known_hosts_path,
     worker_id="cloudshell-gmail-2",
+    register_ssh_public_key=True,
 )
 cloudshell_lifecycles = (cloudshell_lifecycle, cloudshell_secondary_lifecycle)
 
