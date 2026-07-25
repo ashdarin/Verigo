@@ -505,12 +505,35 @@ with TestClient(app) as guest:
     )
     assert worker_claim.status_code == 200, worker_claim.text
     assert worker_claim.json()["job"]["id"] == guest_qq.json()["id"]
+    assert worker_claim.json()["job"]["worker_count"] == 1
     assert job_store.worker_runtime("tencent_qq").worker_id == "smoke-cloudstudio"
     stopped_qq_job = guest.post(
         f"/api/jobs/{guest_qq.json()['id']}/stop",
         headers={"X-Job-Token": guest_qq.json()["access_token"]},
     )
     assert stopped_qq_job.status_code == 200, stopped_qq_job.text
+    object.__setattr__(settings, "tencent_qq_worker_allowed_emails", frozenset({"*"}))
+    remote_parallel_job = submit_routed_job(
+        ["parallel@163.com"],
+        8,
+        owner_id="remote-parallel-owner",
+        owner_email="remote-parallel-owner@example.com",
+        job_id="remoteparallel01",
+    )
+    object.__setattr__(
+        settings, "tencent_qq_worker_allowed_emails", frozenset({"smoke@example.com"})
+    )
+    parallel_claim = guest.post(
+        "/api/workers/tencent-qq/claim?wait_seconds=0",
+        headers={
+            "X-Verigo-Worker-Token": "smoke-tencent-worker-token",
+            "X-Verigo-Worker-Id": "smoke-cloudstudio",
+        },
+    )
+    assert parallel_claim.status_code == 200, parallel_claim.text
+    assert parallel_claim.json()["job"]["id"] == remote_parallel_job.id
+    assert parallel_claim.json()["job"]["worker_count"] == 4
+    assert job_store.stop(remote_parallel_job.id).status == "stopped"
 
 
 with TestClient(app) as account:

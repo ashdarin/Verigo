@@ -385,7 +385,9 @@ async def claim_tencent_qq_job(
                 "job": {
                     "id": job.id,
                     "emails": job.emails,
-                    "worker_count": 1,
+                    "worker_count": min(
+                        job.worker_count, settings.remote_worker_max_workers
+                    ),
                     "stop_on_deliverable": job.stop_on_deliverable,
                 }
             }

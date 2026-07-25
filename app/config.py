@@ -24,6 +24,9 @@ class Settings:
     remote_worker_max_emails_per_job: int = max(
         1, int(os.getenv("VERIGO_REMOTE_WORKER_MAX_EMAILS", "5000"))
     )
+    remote_worker_max_workers: int = max(
+        1, int(os.getenv("VERIGO_REMOTE_WORKER_MAX_WORKERS", "4"))
+    )
     max_guest_emails: int = int(os.getenv("VERIGO_MAX_GUEST_EMAILS", "100"))
     free_single_daily_limit: int = int(
         os.getenv("VERIGO_FREE_SINGLE_DAILY_LIMIT", "20")

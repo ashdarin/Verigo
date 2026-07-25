@@ -136,7 +136,9 @@ def retry_temporary_smtp_results(
 def verify_job(job: dict[str, object]) -> None:
     job_id = str(job["id"])
     emails = [str(email) for email in job["emails"]]
-    worker_count = max(1, min(int(job.get("worker_count", 1)), 4))
+    worker_count = max(
+        1, min(int(job.get("worker_count", 1)), settings.remote_worker_max_workers)
+    )
     control: dict[str, object] = {"checked_at": 0.0, "stopped": False}
     results: list[dict[str, Any]] = []
 
