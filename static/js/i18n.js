@@ -112,6 +112,9 @@ const VerigoI18n = (() => {
     if (/^(\d+) 邮箱服务器拒绝验证$/.test(text)) return text.replace(/^(\d+) 邮箱服务器拒绝验证$/, "$1 Mail server rejected validation");
     if (/^(\d+) 邮件服务器临时灰名单，正在重试$/.test(text)) return text.replace(/^(\d+) 邮件服务器临时灰名单，正在重试$/, "$1 Mail server greylisted this request; retrying");
     if (/^(\d+) 邮件服务器暂时无法确认，正在重试$/.test(text)) return text.replace(/^(\d+) 邮件服务器暂时无法确认，正在重试$/, "$1 Mail server could not confirm yet; retrying");
+    if (/^(\d+) 收件箱容量已满，当前无法接收邮件$/.test(text)) return text.replace(/^(\d+) 收件箱容量已满，当前无法接收邮件$/, "$1 Mailbox is full and cannot receive email right now");
+    if (/^(\d+) 收件箱容量已满，需要清理容量后才能接收邮件$/.test(text)) return text.replace(/^(\d+) 收件箱容量已满，需要清理容量后才能接收邮件$/, "$1 Mailbox is full; space must be cleared before it can receive email");
+    if (/^(\d+) 服务器连续 3 次未能确认，当前不可投递$/.test(text)) return text.replace(/^(\d+) 服务器连续 3 次未能确认，当前不可投递$/, "$1 Mail server could not confirm after 3 attempts; currently undeliverable");
     if (/^(\d+) 个邮箱$/.test(text)) return text.replace(/^(\d+) 个邮箱$/, "$1 email addresses");
     if (/^开始验证 · (\d+) 额度$/.test(text)) return text.replace(/^开始验证 · (\d+) 额度$/, "Start verification · $1 credits");
     if (/^(.*)；QQ 邮箱采用低并发和自动退避策略，请耐心等待。$/.test(text)) return `${localizeText(text.replace(/^(.*)；QQ 邮箱采用低并发和自动退避策略，请耐心等待。$/, "$1"))}; QQ email uses low concurrency and automatic backoff. Please wait.`;

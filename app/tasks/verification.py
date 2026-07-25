@@ -14,6 +14,7 @@ from app.config import settings
 from app.core.legacy import create_verifier
 from app.core.provider_policy import YAHOO_UNSUPPORTED_MESSAGE, is_yahoo_email
 from app.core.result_retry import (
+    is_recipient_mailbox_full,
     is_smtp_greylisted,
     is_retryable_smtp_result,
     smtp_permanent_status,
@@ -76,6 +77,15 @@ def normalize_result(result: dict[str, Any]) -> dict[str, Any]:
             display_detail = "Outlook 邮箱不可投递"
         else:
             display_detail = "Outlook 邮箱暂时无法确认"
+    elif is_recipient_mailbox_full({"smtp_result": detail}):
+        result["smtp_raw_result"] = detail
+        result["deliverable"] = False
+        result["valid"] = False
+        result["delivery_block_reason"] = "mailbox_full"
+        checks = result.get("checks")
+        if isinstance(checks, dict):
+            checks["smtp"] = False
+        display_detail = f"{code} 收件箱容量已满，当前无法接收邮件" if code else "收件箱容量已满，当前无法接收邮件"
     elif smtp_permanent_status({"smtp_result": detail}):
         result["deliverable"] = False
         result["valid"] = False
@@ -405,6 +415,19 @@ def finalize_temporary_smtp_results(results: list[dict[str, Any]]) -> None:
         code = smtp_temporary_status(result)
         if not code:
             continue
+        if is_recipient_mailbox_full(result):
+            raw_detail = str(result.get("smtp_raw_result") or result.get("smtp_result") or "")
+            result["smtp_raw_result"] = raw_detail
+            result["deliverable"] = False
+            result["valid"] = False
+            result["delivery_block_reason"] = "mailbox_full"
+            checks = result.get("checks")
+            if isinstance(checks, dict):
+                checks["smtp"] = False
+            result.pop("retry_at", None)
+            result["smtp_result"] = f"{code} 收件箱容量已满，当前无法接收邮件"
+            result["message"] = f"{code} 收件箱容量已满，需要清理容量后才能接收邮件"
+            continue
         if is_smtp_greylisted(result):
             result["deliverable"] = None
             result["valid"] = True
@@ -419,8 +442,8 @@ def finalize_temporary_smtp_results(results: list[dict[str, Any]]) -> None:
         if isinstance(checks, dict):
             checks["smtp"] = False
         result["temporary_retries_exhausted"] = True
-        result["smtp_result"] = f"{code} 连续 3 次重试后仍无法投递"
-        result["message"] = f"{code} 邮件服务器连续 3 次临时失败，已判定无效"
+        result["smtp_result"] = f"{code} 服务器连续 3 次未能确认，当前不可投递"
+        result["message"] = f"{code} 邮件服务器连续 3 次未能确认，当前不可投递"
 
 
 def schedule_remote_temporary_retry(job: Job) -> bool:
@@ -481,7 +504,7 @@ def requeue_recent_single_temporary_jobs() -> int:
         normalized = [normalize_result(result) for result in job.results]
         pending = [
             result for result in normalized
-            if smtp_temporary_status(result)
+            if is_retryable_smtp_result(result)
             and not result.get("temporary_retries_exhausted")
             and not result.get("greylist_retry_exhausted")
         ]

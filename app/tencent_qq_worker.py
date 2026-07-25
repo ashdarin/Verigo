@@ -12,7 +12,11 @@ from typing import Any
 from app.config import settings
 from app.core.legacy import create_verifier
 from app.core.provider_policy import is_qq_email
-from app.core.result_retry import is_smtp_greylisted, smtp_temporary_status
+from app.core.result_retry import (
+    is_retryable_smtp_result,
+    is_smtp_greylisted,
+    smtp_temporary_status,
+)
 
 
 WORKER_TARGET = os.getenv("VERIGO_REMOTE_WORKER_TARGET", "tencent-qq")
@@ -100,7 +104,7 @@ def retry_temporary_smtp_results(
             for index, result in by_index.items()
             if (
                 0 <= index < len(emails)
-                and smtp_temporary_status(result)
+                and is_retryable_smtp_result(result)
                 and not is_smtp_greylisted(result)
             )
         ]
@@ -130,7 +134,7 @@ def retry_temporary_smtp_results(
                 by_index[original_index] = result
                 report_result(job_id, result)
     for result in by_index.values():
-        if smtp_temporary_status(result) and not is_smtp_greylisted(result):
+        if is_retryable_smtp_result(result) and not is_smtp_greylisted(result):
             result["temporary_smtp_retry_count"] = settings.temporary_smtp_immediate_retries
     return [by_index[index] for index in sorted(by_index)]
 
@@ -171,7 +175,7 @@ def verify_job(job: dict[str, object]) -> None:
                 continue
             current = dict(retried[0])
             current["original_index"] = index
-            if not smtp_temporary_status(current) or is_smtp_greylisted(current):
+            if not is_retryable_smtp_result(current) or is_smtp_greylisted(current):
                 current.pop("retry_at", None)
                 current["retry_state"] = "completed"
                 current["temporary_smtp_retry_count"] = attempt
@@ -191,7 +195,7 @@ def verify_job(job: dict[str, object]) -> None:
         result = dict(raw_result)
         needs_retry = (
             not any(is_qq_email(email) for email in emails)
-            and smtp_temporary_status(result)
+            and is_retryable_smtp_result(result)
             and not is_smtp_greylisted(result)
         )
         if needs_retry:

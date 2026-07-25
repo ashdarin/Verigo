@@ -47,6 +47,8 @@ from app.api.schemas import CreateJobRequest
 from app.config import settings
 from app.core.legacy import load_legacy_module
 from app.core.result_retry import (
+    is_recipient_mailbox_full,
+    is_retryable_smtp_result,
     is_smtp_greylisted,
     is_temporary_smtp_452,
     smtp_permanent_status,
@@ -97,6 +99,10 @@ object.__setattr__(settings, "cloudstudio_domestic_worker_enabled", False)
 assert is_temporary_smtp_452({"smtp_result": "452 temporary mailbox failure"})
 assert is_temporary_smtp_452({"message": "452 暂时无法确认"})
 assert not is_temporary_smtp_452({"smtp_result": "550 mailbox unavailable"})
+gmail_full = {"smtp_result": "452 4.2.2 The email account that you tried to reach is over quota"}
+assert is_recipient_mailbox_full(gmail_full)
+assert not is_retryable_smtp_result(gmail_full)
+assert not is_temporary_smtp_452(gmail_full)
 assert smtp_temporary_status({"smtp_result": "421 service not available"}) == "421"
 assert smtp_temporary_status({"smtp_result": "450 greylisted"}) == "450"
 assert smtp_temporary_status({"smtp_result": "451 local error"}) == "451"
@@ -222,6 +228,18 @@ assert ordinary_temporary["deliverable"] is False
 assert ordinary_temporary["valid"] is False
 assert ordinary_temporary["temporary_retries_exhausted"] is True
 assert "连续 3 次" in ordinary_temporary["smtp_result"]
+
+mailbox_full = normalize_result({
+    "email": "full@gmail.com", "deliverable": None,
+    "smtp_result": "452 4.2.2 The email account that you tried to reach is over quota",
+})
+assert mailbox_full["deliverable"] is False
+assert mailbox_full["valid"] is False
+assert mailbox_full["delivery_block_reason"] == "mailbox_full"
+assert "收件箱容量已满" in mailbox_full["smtp_result"]
+finalize_temporary_smtp_results([mailbox_full])
+assert mailbox_full["delivery_block_reason"] == "mailbox_full"
+assert mailbox_full.get("temporary_retries_exhausted") is not True
 
 greylist_retry_job = Job(
     id="smoketemp005", emails=["pengjie.ai@porsche.cn"], worker_count=1,
