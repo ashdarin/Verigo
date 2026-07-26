@@ -4,6 +4,7 @@ param(
     [string]$UserName = "root",
     [string]$HostKey = "SHA256:G/9h52M5XCB2NRrXSAikn5xChgDOFOJkaQiDiPuTy08",
     [string]$ReleaseRoot = "/tmp/verigo-release",
+    [switch]$Maintenance,
     [SecureString]$Password
 )
 
@@ -36,7 +37,8 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "Could not prepare the remote release directory." }
     & $pscp -batch -hostkey $HostKey -pw $plainPassword $archive "${remote}:$ReleaseRoot/release.tar.gz"
     if ($LASTEXITCODE -ne 0) { throw "Could not upload the release archive." }
-    & $plink -batch -hostkey $HostKey -pw $plainPassword $remote "tar -xzf $ReleaseRoot/release.tar.gz -C $ReleaseRoot; printf '%s\n' $version > $ReleaseRoot/.verigo-release; VERIGO_RELEASE_DIR=$ReleaseRoot bash $ReleaseRoot/deploy/release.sh"
+    $maintenanceEnv = if ($Maintenance) { "VERIGO_DEPLOY_MAINTENANCE=true " } else { "" }
+    & $plink -batch -hostkey $HostKey -pw $plainPassword $remote "tar -xzf $ReleaseRoot/release.tar.gz -C $ReleaseRoot; printf '%s\n' $version > $ReleaseRoot/.verigo-release; ${maintenanceEnv}VERIGO_RELEASE_DIR=$ReleaseRoot bash $ReleaseRoot/deploy/release.sh"
     if ($LASTEXITCODE -ne 0) { throw "Release failed; the server rollback was attempted." }
 } finally {
     if ($passwordBstr -ne [IntPtr]::Zero) {
