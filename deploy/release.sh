@@ -22,6 +22,8 @@ set_application_owner() {
 }
 
 rollback() {
+    status=$?
+    trap - ERR
     echo "Release failed; restoring previous application files" >&2
     rsync -a --delete "$backup_dir/app/" "$app_dir/app/"
     rsync -a --delete "$backup_dir/static/" "$app_dir/static/"
@@ -35,7 +37,18 @@ rollback() {
     fi
     set_application_owner
     systemctl restart verigo || true
+    exit "$status"
 }
+
+# A restart is not a drain. Refuse to deploy across active verification leases
+# unless an operator has explicitly placed the service in maintenance mode.
+if [[ "${VERIGO_DEPLOY_MAINTENANCE:-false}" != "true" && -f "$app_dir/data/verigo.db" ]]; then
+    active_jobs=$(sqlite3 "$app_dir/data/verigo.db" "SELECT COUNT(*) FROM jobs WHERE status IN ('queued', 'running');" 2>/dev/null || printf 'unknown')
+    if [[ "$active_jobs" != "0" ]]; then
+        echo "Refusing release: $active_jobs active verification jobs. Drain them or set VERIGO_DEPLOY_MAINTENANCE=true." >&2
+        exit 2
+    fi
+fi
 
 if ! command -v aws >/dev/null && grep -q '^VERIGO_BACKUP_S3_BUCKET=.' /etc/verigo/backup.env 2>/dev/null; then
     apt-get update

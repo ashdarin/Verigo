@@ -544,7 +544,7 @@ assert {child.execution_target for child in mixed_three_way_children} == {
 assert next(child for child in mixed_three_way_children if child.execution_target == "tencent_qq").emails == ["first@qq.com"]
 gmail_children = [child for child in mixed_three_way_children if child.execution_target == "gmail"]
 assert [email for child in gmail_children for email in child.emails] == ["second@gmail.com", "fourth@googlemail.com"]
-assert len(gmail_children) == 2
+assert len(gmail_children) == 1
 assert next(child for child in mixed_three_way_children if child.execution_target == "local").emails == ["third@example.com"]
 for child in mixed_three_way_children:
     child.status = "completed"

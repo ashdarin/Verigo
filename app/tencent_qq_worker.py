@@ -87,14 +87,19 @@ def stopped(job_id: str, state: dict[str, object]) -> bool:
         return True
     if now - float(state.get("checked_at", 0.0)) < 2:
         return False
-    status = request_json(f"/api/workers/{WORKER_TARGET}/jobs/{job_id}/heartbeat")
+    lease_id = str(state.get("lease_id") or "")
+    suffix = f"?lease_id={lease_id}" if lease_id else ""
+    status = request_json(f"/api/workers/{WORKER_TARGET}/jobs/{job_id}/heartbeat{suffix}")
     state["checked_at"] = now
     state["stopped"] = bool(status.get("stop_requested"))
     return bool(state["stopped"])
 
 
-def report_result(job_id: str, result: dict[str, Any]) -> None:
-    request_json(f"/api/workers/{WORKER_TARGET}/jobs/{job_id}/results", {"results": [result]})
+def report_result(job_id: str, result: dict[str, Any], lease_id: str | None = None) -> None:
+    payload: dict[str, object] = {"results": [result]}
+    if lease_id:
+        payload["lease_id"] = lease_id
+    request_json(f"/api/workers/{WORKER_TARGET}/jobs/{job_id}/results", payload)
 
 
 def skipped_result(email: str, index: int) -> dict[str, object]:
@@ -114,13 +119,14 @@ def skipped_result(email: str, index: int) -> dict[str, object]:
 def retry_temporary_smtp_results(
     job_id: str,
     emails: list[str],
+    original_indices: list[int],
     results: list[dict[str, Any]],
     control: dict[str, object],
 ) -> list[dict[str, Any]]:
     by_index = {int(result.get("original_index", index)): dict(result) for index, result in enumerate(results)}
     for attempt in range(settings.temporary_smtp_immediate_retries):
         retry_items = [
-            (index, emails[index])
+            (index, emails[original_indices.index(index)])
             for index, result in by_index.items()
             if (
                 0 <= index < len(emails)
@@ -152,7 +158,7 @@ def retry_temporary_smtp_results(
                 original_index = retry_items[relative_index][0]
                 result["original_index"] = original_index
                 by_index[original_index] = result
-                report_result(job_id, result)
+                report_result(job_id, result, str(control.get("lease_id") or "") or None)
     for result in by_index.values():
         if is_retryable_smtp_result(result) and not is_smtp_greylisted(result):
             result["temporary_smtp_retry_count"] = settings.temporary_smtp_immediate_retries
@@ -161,7 +167,14 @@ def retry_temporary_smtp_results(
 
 def verify_job(job: dict[str, object]) -> None:
     job_id = str(job["id"])
-    emails = [str(email) for email in job["emails"]]
+    items = job.get("items")
+    if isinstance(items, list):
+        emails = [str(item["email"]) for item in items if isinstance(item, dict)]
+        original_indices = [int(item["original_index"]) for item in items if isinstance(item, dict)]
+    else:
+        emails = [str(email) for email in job["emails"]]
+        original_indices = list(range(len(emails)))
+    lease_id = str(job.get("lease_id") or "") or None
     remote_limit = (
         settings.cloudshell_worker_max_workers
         if WORKER_TARGET == "gmail"
@@ -170,12 +183,15 @@ def verify_job(job: dict[str, object]) -> None:
     worker_count = max(1, min(int(job.get("worker_count", 1)), remote_limit))
     if any(is_qq_email(email) for email in emails):
         worker_count = 1
-    control: dict[str, object] = {"checked_at": 0.0, "stopped": False}
+    control: dict[str, object] = {"checked_at": 0.0, "stopped": False, "lease_id": lease_id}
     results: list[dict[str, Any]] = []
     def on_result(raw_result: dict[str, Any]) -> None:
         if stopped(job_id, control):
             return
         result = dict(raw_result)
+        relative_index = int(result.get("original_index", 0))
+        if 0 <= relative_index < len(original_indices):
+            result["original_index"] = original_indices[relative_index]
         needs_retry = (
             is_retryable_smtp_result(result)
             and not is_smtp_greylisted(result)
@@ -192,7 +208,7 @@ def verify_job(job: dict[str, object]) -> None:
             })
         results.append(result)
         # The first visible 4xx result must already include its retry schedule.
-        report_result(job_id, result)
+        report_result(job_id, result, lease_id)
 
     if bool(job.get("stop_on_deliverable")):
         verifier = create_verifier(1)
@@ -207,16 +223,16 @@ def verify_job(job: dict[str, object]) -> None:
             if not batch:
                 continue
             result = dict(batch[0])
-            result["original_index"] = index
+            result["original_index"] = original_indices[index]
             results.append(result)
-            report_result(job_id, result)
+            report_result(job_id, result, lease_id)
             if result.get("deliverable") is True:
                 for remaining_index, remaining_email in enumerate(
                     emails[index + 1 :], index + 1
                 ):
-                    skipped = skipped_result(remaining_email, remaining_index)
+                    skipped = skipped_result(remaining_email, original_indices[remaining_index])
                     results.append(skipped)
-                    report_result(job_id, skipped)
+                    report_result(job_id, skipped, lease_id)
                 break
     else:
         verifier = create_verifier(worker_count)
@@ -230,7 +246,10 @@ def verify_job(job: dict[str, object]) -> None:
             return
 
     if not stopped(job_id, control):
-        request_json(f"/api/workers/{WORKER_TARGET}/jobs/{job_id}/complete", {"results": results})
+        payload: dict[str, object] = {"results": results}
+        if lease_id:
+            payload["lease_id"] = lease_id
+        request_json(f"/api/workers/{WORKER_TARGET}/jobs/{job_id}/complete", payload)
 
 
 def main() -> None:

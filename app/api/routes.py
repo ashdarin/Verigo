@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import hmac
 import json
-import math
 import threading
 import time
 import uuid
@@ -135,8 +134,8 @@ def remote_worker_count(execution_target: str, requested_count: int) -> int:
     return max(1, min(requested_count, limit))
 
 
-def require_job(job_id: str) -> Job:
-    job = job_store.get(job_id)
+def require_job(job_id: str, *, include_results: bool = True) -> Job:
+    job = job_store.get(job_id, include_results=include_results)
     if job is None:
         raise HTTPException(status_code=404, detail="任务不存在或服务已重启")
     return job
@@ -220,11 +219,9 @@ def partition_target_emails(
             # QQ remains on its single serial worker regardless of task size.
             chunk_size = settings.remote_worker_max_emails_per_job
         else:
-            # A large single-target task must expose enough child jobs for every
-            # eligible remote node to claim work instead of leaving nodes idle.
-            node_count = 2 if target == "gmail" else 1
-            parallel_chunk_size = max(1, math.ceil(len(target_emails) / node_count))
-            chunk_size = min(settings.remote_worker_max_emails_per_job, parallel_chunk_size)
+            # Worker capacity is discovered at claim time. Do not encode a fixed
+            # number of Cloud Shell accounts into submission-time partitions.
+            chunk_size = settings.remote_worker_max_emails_per_job
         for start in range(0, len(target_emails), chunk_size):
             partitions.append(
                 (target, target_emails[start : start + chunk_size], child_worker_count)
@@ -343,9 +340,10 @@ def require_remote_worker(worker_target: str, token: str | None) -> str:
     return execution_target
 
 
-def require_remote_job(job_id: str, worker_id: str, execution_target: str) -> Job:
-    job = require_job(job_id)
-    if job.execution_target != execution_target or job.worker_id != worker_id:
+def require_remote_job(job_id: str, worker_id: str, execution_target: str, lease_id: str | None = None) -> Job:
+    job = require_job(job_id, include_results=False)
+    valid_lease = lease_id and job_store.lease_valid(job_id, worker_id, lease_id)
+    if job.execution_target != execution_target or (not valid_lease and job.worker_id != worker_id):
         raise HTTPException(status_code=409, detail="远程验证节点任务租约无效")
     if execution_target == "tencent_qq":
         worker_lifecycle.record_worker_seen(worker_id)
@@ -357,10 +355,7 @@ def require_remote_job(job_id: str, worker_id: str, execution_target: str) -> Jo
 
 
 def merge_worker_results(job: Job, results: list[dict[str, object]]) -> Job:
-    by_index = {
-        int(item.get("original_index", index)): dict(item)
-        for index, item in enumerate(job.results)
-    }
+    normalized: list[dict[str, object]] = []
     for raw_result in results:
         result = dict(raw_result)
         try:
@@ -372,8 +367,12 @@ def merge_worker_results(job: Job, results: list[dict[str, object]]) -> Job:
         if str(result.get("email", "")).lower() != job.emails[index].lower():
             raise HTTPException(status_code=422, detail="腾讯节点结果邮箱与任务不匹配")
         result["original_index"] = index
-        by_index[index] = normalize_result(result)
-    job.results = [by_index[index] for index in sorted(by_index)]
+        result = normalize_result(result)
+        result["progress_state"] = "completed"
+        normalized.append(result)
+    # Durable result rows are independent of the job metadata row. A repeated
+    # callback cannot overwrite a terminal result with a waiting state.
+    job_store.upsert_results(job.id, normalized)
     return job
 
 
@@ -482,13 +481,21 @@ async def claim_tencent_qq_job(
         cloudshell_lifecycle.record_worker_seen(worker_name)
     deadline = time.monotonic() + wait_seconds
     while True:
-        job = job_store.claim_next(worker_name, execution_target=execution_target)
+        job = job_store.claim_remote_lease(
+            worker_name, execution_target, capacity=1,
+            shard_size=min(100, settings.remote_worker_max_emails_per_job),
+        )
         if job is not None:
             sync_parent_job(job)
             return {
                 "job": {
                     "id": job.id,
-                    "emails": job.emails,
+                    "items": [
+                        {"email": job.emails[index], "original_index": index}
+                        for index in job.pending_indices
+                    ],
+                    "pending_indices": job.pending_indices,
+                    "lease_id": job.lease_id,
                     "worker_count": remote_worker_count(
                         execution_target, job.worker_count
                     ),
@@ -507,16 +514,21 @@ def heartbeat_tencent_qq_job(
     job_id: str,
     token: Annotated[str | None, Header(alias="X-Verigo-Worker-Token")] = None,
     worker_id: Annotated[str | None, Header(alias="X-Verigo-Worker-Id")] = None,
+    lease_id: str | None = Query(default=None, min_length=8, max_length=64),
 ) -> dict[str, object]:
     execution_target = require_remote_worker(worker_target, token)
-    job = require_job(job_id)
+    job = require_job(job_id, include_results=False)
     if job.execution_target != execution_target:
         raise HTTPException(status_code=409, detail="不是腾讯 QQ 验证节点任务")
     if job.status == "stopped":
         discard_buffered_remote_results(job.id)
         return {"status": "stopped", "stop_requested": True}
-    job = require_remote_job(job_id, (worker_id or "").strip(), execution_target)
-    job_store.heartbeat(job)
+    worker_name = (worker_id or "").strip()
+    job = require_remote_job(job_id, worker_name, execution_target, lease_id)
+    if lease_id:
+        job_store.heartbeat_lease(job.id, worker_name, lease_id)
+    else:
+        job_store.heartbeat(job)
     return {"status": job.status, "stop_requested": False}
 
 
@@ -529,19 +541,21 @@ def report_tencent_qq_results(
     worker_id: Annotated[str | None, Header(alias="X-Verigo-Worker-Id")] = None,
 ) -> dict[str, object]:
     execution_target = require_remote_worker(worker_target, token)
-    job = require_job(job_id)
+    job = require_job(job_id, include_results=False)
     if job.execution_target != execution_target:
         raise HTTPException(status_code=409, detail="不是腾讯 QQ 验证节点任务")
     if job.status == "stopped":
         return {"status": "stopped", "stop_requested": True}
     worker_name = (worker_id or "").strip()
-    job = require_remote_job(job_id, worker_name, execution_target)
+    job = require_remote_job(job_id, worker_name, execution_target, payload.lease_id)
     results_to_persist = buffer_remote_results(job.id, worker_name, payload.results)
     if results_to_persist:
         merge_worker_results(job, results_to_persist)
-        job_store.persist(job)
         sync_parent_job(job)
-    job_store.heartbeat(job)
+    if payload.lease_id:
+        job_store.heartbeat_lease(job.id, worker_name, payload.lease_id)
+    else:
+        job_store.heartbeat(job)
     return {
         "status": job.status,
         "stop_requested": False,
@@ -559,18 +573,24 @@ def complete_tencent_qq_job(
     worker_id: Annotated[str | None, Header(alias="X-Verigo-Worker-Id")] = None,
 ) -> JobResponse:
     execution_target = require_remote_worker(worker_target, token)
-    job = require_job(job_id)
+    job = require_job(job_id, include_results=False)
     if job.execution_target != execution_target:
         raise HTTPException(status_code=409, detail="不是腾讯 QQ 验证节点任务")
     if job.status == "stopped":
         discard_buffered_remote_results(job.id)
         return serialize_job(job)
     worker_name = (worker_id or "").strip()
-    job = require_remote_job(job_id, worker_name, execution_target)
+    job = require_remote_job(job_id, worker_name, execution_target, payload.lease_id)
     merge_worker_results(
         job,
         buffer_remote_results(job.id, worker_name, payload.results, force=True),
     )
+    if payload.lease_id:
+        job_store.complete_lease(job.id, worker_name, payload.lease_id)
+    if job_store.pending_count(job.id):
+        sync_parent_job(job)
+        return serialize_job(job_store.get(job.id) or job)
+    job = job_store.get(job.id) or job
     if job.retry_parent_id:
         job.finished_at = utc_now()
         job.error = None
