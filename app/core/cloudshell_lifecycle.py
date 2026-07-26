@@ -102,14 +102,23 @@ class CloudShellLifecycle:
         job_store.record_worker_seen(GMAIL_TARGET, worker_id)
 
     @staticmethod
-    def _worker_command() -> str:
-        """Replace a stale Gmail worker before starting the current protocol version."""
+    def _worker_command(release_version: str = "") -> str:
+        """Replace a stale Gmail worker once; keep a matching worker alive."""
+        version_check = (
+            f" && tr '\\0' '\\n' < \"/proc/$(cat \"$pid_file\")/environ\" "
+            f"| grep -qx 'VERIGO_REMOTE_WORKER_RELEASE={release_version}'"
+            if release_version else ""
+        )
         return (
             "cd ~/verigo-worker && python3 -m venv .venv && "
             ".venv/bin/pip -q install 'dnspython>=2.6,<3' && "
             "pid_file=.gmail-worker.pid; "
-            "if test -s \"$pid_file\" && kill -0 \"$(cat \"$pid_file\")\" 2>/dev/null; "
-            "then kill \"$(cat \"$pid_file\")\" 2>/dev/null || true; sleep 1; fi; "
+            "if test -s \"$pid_file\" && kill -0 \"$(cat \"$pid_file\")\" 2>/dev/null "
+            "&& tr '\\0' '\\n' < \"/proc/$(cat \"$pid_file\")/environ\" "
+            "| grep -qx 'VERIGO_REMOTE_WORKER_TARGET=gmail'"
+            f"{version_check}; then exit 0; fi; "
+            "if test -s \"$pid_file\"; then kill \"$(cat \"$pid_file\")\" 2>/dev/null || true; fi; "
+            "pkill -TERM -f '[c]url.*workers/gmail' 2>/dev/null || true; sleep 1; "
             "rm -f \"$pid_file\"; "
             "(set -a; . .worker.env; set +a; nohup .venv/bin/python -m "
             "app.tencent_qq_worker >/tmp/verigo-gmail-worker.log 2>&1 </dev/null & "
@@ -238,15 +247,17 @@ class CloudShellLifecycle:
             source_root = Path(__file__).resolve().parents[2]
             archive = subprocess.run(["tar", "-C", str(source_root), "-czf", "-", "app", "验证8.py"], check=True, capture_output=True).stdout
             subprocess.run(base + ["mkdir -p ~/verigo-worker && tar -xzf - -C ~/verigo-worker"], input=archive, check=True, timeout=90)
+            release_version = Path("/opt/verigo/RELEASE_VERSION").read_text().strip()
             environment_file = "\n".join((
                 "VERIGO_REMOTE_WORKER_TARGET=gmail",
                 "VERIGO_REMOTE_WORKER_SERVER=https://verigo.site",
                 f"VERIGO_REMOTE_WORKER_TOKEN={settings.gmail_worker_token}",
                 f"VERIGO_TENCENT_QQ_WORKER_ID={self._worker_id}",
                 f"VERIGO_CLOUDSHELL_MAX_WORKERS={settings.cloudshell_worker_max_workers}",
+                f"VERIGO_REMOTE_WORKER_RELEASE={release_version}",
             )) + "\n"
             subprocess.run(base + ["cat > ~/verigo-worker/.worker.env && chmod 600 ~/verigo-worker/.worker.env"], input=environment_file.encode(), check=True, timeout=30)
-            subprocess.run(base + [self._worker_command()], check=True, timeout=120)
+            subprocess.run(base + [self._worker_command(release_version)], check=True, timeout=120)
             logger.info("Cloud Shell Gmail worker bootstrap completed")
         except Exception as exc:
             logger.exception("Cloud Shell Gmail worker bootstrap failed: %s", exc)
