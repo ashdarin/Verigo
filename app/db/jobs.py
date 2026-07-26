@@ -262,6 +262,8 @@ class JobStore:
 
     def _backfill_result_rows(self, connection: sqlite3.Connection) -> None:
         """Migrate legacy JSON snapshots once, without overwriting newer result rows."""
+        if connection.execute("SELECT 1 FROM job_results LIMIT 1").fetchone() is not None:
+            return
         now = utc_now().isoformat()
         for job_id, emails_json, results_json in connection.execute(
             "SELECT id, emails_json, results_json FROM jobs"
