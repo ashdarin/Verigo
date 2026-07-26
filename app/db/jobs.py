@@ -670,18 +670,23 @@ class JobStore:
                 SELECT indices_json FROM job_leases WHERE job_id=? AND completed_at IS NULL
                     AND heartbeat_at >= ?
             """, (job.id, stale.isoformat())) for index in json.loads(raw)}
-            throttled = {key for (key,) in connection.execute(
-                "SELECT mx_key FROM mx_scheduler_leases WHERE expires_at >= ?", (now.isoformat(),)
-            )}
-            indices, mx_keys = [], set()
+            active_by_key: dict[str, int] = {}
+            for key, count in connection.execute("""
+                SELECT mx_key, COUNT(*) FROM mx_scheduler_leases WHERE expires_at >= ? GROUP BY mx_key
+            """, (now.isoformat(),)):
+                active_by_key[str(key)] = int(count)
+            indices, mx_keys = [], []
             for index, email in connection.execute("""
                 SELECT original_index, email FROM job_results WHERE job_id=?
                     AND progress_state IN ('pending', 'verifying') ORDER BY original_index
             """, (job.id,)):
-                mx_key = str(email).rsplit("@", 1)[-1].lower()
-                if index in leased or mx_key in throttled or mx_key in mx_keys:
+                mx_key = self._scheduler_mx_key(str(email))
+                if index in leased or active_by_key.get(mx_key, 0) >= self._scheduler_mx_capacity(mx_key):
                     continue
-                indices.append(int(index)); mx_keys.add(mx_key)
+                indices.append(int(index))
+                if mx_key not in mx_keys:
+                    mx_keys.append(mx_key)
+                active_by_key[mx_key] = active_by_key.get(mx_key, 0) + 1
                 if len(indices) >= max(1, shard_size):
                     break
             if not indices:
@@ -703,6 +708,23 @@ class JobStore:
         job.started_at = job.started_at or now
         job.pending_indices, job.lease_id = indices, lease_id
         return job
+
+    @staticmethod
+    def _scheduler_mx_key(email: str) -> str:
+        domain = email.rsplit("@", 1)[-1].lower()
+        if domain in {"gmail.com", "googlemail.com"}:
+            return "gmail"
+        if domain in {"outlook.com", "hotmail.com", "live.com", "msn.com"}:
+            return "microsoft"
+        return domain
+
+    @staticmethod
+    def _scheduler_mx_capacity(mx_key: str) -> int:
+        if mx_key == "gmail":
+            return settings.scheduler_gmail_concurrency
+        if mx_key == "microsoft":
+            return settings.scheduler_microsoft_concurrency
+        return settings.scheduler_default_domain_concurrency
 
     def lease_valid(self, job_id: str, worker_id: str, lease_id: str) -> bool:
         stale = (utc_now() - timedelta(seconds=settings.worker_lease_seconds)).isoformat()

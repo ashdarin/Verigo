@@ -39,8 +39,11 @@ class Settings:
         ),
     )
     cloudshell_worker_max_workers: int = max(
-        1, int(os.getenv("VERIGO_CLOUDSHELL_MAX_WORKERS", "8"))
+        1, int(os.getenv("VERIGO_CLOUDSHELL_MAX_WORKERS", "25"))
     )
+    scheduler_gmail_concurrency: int = max(1, int(os.getenv("VERIGO_SCHEDULER_GMAIL_CONCURRENCY", "25")))
+    scheduler_microsoft_concurrency: int = max(1, int(os.getenv("VERIGO_SCHEDULER_MICROSOFT_CONCURRENCY", "64")))
+    scheduler_default_domain_concurrency: int = max(1, int(os.getenv("VERIGO_SCHEDULER_DEFAULT_DOMAIN_CONCURRENCY", "4")))
     max_guest_emails: int = int(os.getenv("VERIGO_MAX_GUEST_EMAILS", "100"))
     free_single_daily_limit: int = int(
         os.getenv("VERIGO_FREE_SINGLE_DAILY_LIMIT", "20")
