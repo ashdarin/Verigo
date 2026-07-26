@@ -30,12 +30,20 @@ RETRY_SECONDS = max(1.0, float(os.getenv("VERIGO_TENCENT_QQ_RETRY_SECONDS", "5")
 
 
 class WorkerRequestError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, retryable: bool = False) -> None:
+        super().__init__(message)
+        self.retryable = retryable
+
+
+TRANSIENT_CURL_EXIT_CODES = frozenset({5, 6, 7, 18, 28, 52, 55, 56})
+WORKER_REQUEST_ATTEMPTS = 4
 
 
 def request_json(path: str, payload: dict[str, object] | None = None) -> dict[str, object]:
     command = [
         "curl", "--silent", "--show-error", "--fail", "--max-time", "30",
+        "--connect-timeout", "10", "--retry", "3", "--retry-delay", "1",
+        "--retry-connrefused",
         "-X", "POST", f"{SERVER_URL}{path}",
         "-H", "Content-Type: application/json",
         "-H", f"X-Verigo-Worker-Token: {TOKEN}",
@@ -45,20 +53,28 @@ def request_json(path: str, payload: dict[str, object] | None = None) -> dict[st
     if payload is not None:
         command.extend(["--data-binary", "@-"])
         request_body = json.dumps(payload, ensure_ascii=False)
-    try:
-        response = subprocess.run(
-            command,
-            input=request_body,
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=35,
-        )
-        if response.returncode:
-            raise WorkerRequestError(response.stderr.strip() or "curl request failed")
-        return json.loads(response.stdout)
-    except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError) as exc:
-        raise WorkerRequestError(str(exc)) from exc
+    for attempt in range(WORKER_REQUEST_ATTEMPTS):
+        try:
+            response = subprocess.run(
+                command,
+                input=request_body,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=35,
+            )
+            if not response.returncode:
+                return json.loads(response.stdout)
+            retryable = response.returncode in TRANSIENT_CURL_EXIT_CODES
+            message = response.stderr.strip() or "curl request failed"
+        except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError) as exc:
+            retryable = True
+            message = str(exc)
+        if retryable and attempt + 1 < WORKER_REQUEST_ATTEMPTS:
+            time.sleep(2 ** attempt)
+            continue
+        raise WorkerRequestError(message, retryable=retryable)
+    raise AssertionError("worker request retry loop exhausted unexpectedly")
 
 
 def stopped(job_id: str, state: dict[str, object]) -> bool:
@@ -228,6 +244,16 @@ def main() -> None:
                 verify_job(dict(job))
             except Exception as exc:
                 job_id = str(dict(job)["id"])
+                if isinstance(exc, WorkerRequestError) and exc.retryable:
+                    # Do not turn a temporary worker-to-API outage into a failed
+                    # verification. The lease will expire and the queue retries it.
+                    print(
+                        f"Remote worker connection interrupted for {job_id}: {exc}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    time.sleep(RETRY_SECONDS)
+                    continue
                 try:
                     request_json(
                         f"/api/workers/{WORKER_TARGET}/jobs/{job_id}/fail",
@@ -235,9 +261,9 @@ def main() -> None:
                     )
                 except WorkerRequestError:
                     pass
-                print(f"Tencent QQ job {job_id} failed: {exc}", file=sys.stderr, flush=True)
+                print(f"Remote worker job {job_id} failed: {exc}", file=sys.stderr, flush=True)
         except WorkerRequestError as exc:
-            print(f"Tencent QQ worker connection failed: {exc}", file=sys.stderr, flush=True)
+            print(f"Remote worker connection failed: {exc}", file=sys.stderr, flush=True)
             time.sleep(RETRY_SECONDS)
 
 
