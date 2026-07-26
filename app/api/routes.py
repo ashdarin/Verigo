@@ -89,7 +89,7 @@ REMOTE_WORKERS = {
     "gmail": "gmail",
 }
 REMOTE_RESULT_BATCH_SIZE = 25
-_remote_result_batches: dict[tuple[str, str], list[dict[str, object]]] = {}
+_remote_result_batches: dict[str, list[dict[str, object]]] = {}
 _remote_result_batches_lock = threading.Lock()
 
 
@@ -101,7 +101,9 @@ def buffer_remote_results(
     force: bool = False,
 ) -> list[dict[str, object]]:
     """Return a durable-sized batch without writing a full job JSON per result."""
-    key = (job_id, worker_id)
+    # The endpoint validates the active lease before buffering, so a job has
+    # exactly one valid result stream regardless of the worker process ID.
+    key = job_id
     with _remote_result_batches_lock:
         batch = _remote_result_batches.setdefault(key, [])
         batch.extend(dict(result) for result in results)
@@ -112,8 +114,7 @@ def buffer_remote_results(
 
 def discard_buffered_remote_results(job_id: str) -> None:
     with _remote_result_batches_lock:
-        for key in [key for key in _remote_result_batches if key[0] == job_id]:
-            del _remote_result_batches[key]
+        _remote_result_batches.pop(job_id, None)
 
 
 def remote_worker_label(execution_target: str) -> str:

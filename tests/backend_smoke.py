@@ -36,6 +36,8 @@ from openpyxl import Workbook
 import app.api.auth as auth_api
 from app.api.routes import (
     REMOTE_RESULT_BATCH_SIZE,
+    buffer_remote_results,
+    discard_buffered_remote_results,
     email_execution_target,
     gmail_target,
     remote_worker_count,
@@ -97,6 +99,19 @@ claimed_progress_job = job_store.claim_next("progress-worker", "progress-smoke")
 assert claimed_progress_job is not None
 assert all(item["progress_state"] == "verifying" for item in claimed_progress_job.results)
 assert job_progress(claimed_progress_job) == (0, 2, 0.0)
+
+buffered_job_id = "batched-stream-smoke"
+assert buffer_remote_results(
+    buffered_job_id,
+    "worker-process-one",
+    [{"email": f"buffer-{index}@example.com"} for index in range(REMOTE_RESULT_BATCH_SIZE - 1)],
+) == []
+assert len(buffer_remote_results(
+    buffered_job_id,
+    "worker-process-two",
+    [{"email": "buffer-last@example.com"}],
+)) == REMOTE_RESULT_BATCH_SIZE
+discard_buffered_remote_results(buffered_job_id)
 
 batched_remote_job = verification_tasks.submit(
     [f"batch-{index}@example.com" for index in range(REMOTE_RESULT_BATCH_SIZE)],
