@@ -140,7 +140,7 @@ assert store.runtime.last_wake_error == IDE_SESSION_ACTIVATED
 
 current_time += timedelta(seconds=15)
 coordinator.tick(current_time)
-assert api.activation_calls == 1
+assert api.activation_calls == 2
 
 store.runtime = replace(store.runtime, last_seen_at=current_time)
 coordinator.tick(current_time)

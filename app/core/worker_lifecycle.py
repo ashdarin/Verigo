@@ -371,19 +371,29 @@ class WorkerLifecycleCoordinator:
                     logger.warning("Could not check Cloud Studio startup status: %s", exc)
                     return
                 if status == "RUNNING":
+                    retry_at = (
+                        runtime.wake_requested_at + timedelta(
+                            seconds=self.config.cloudstudio_wake_retry_seconds
+                        )
+                        if runtime.wake_requested_at else None
+                    )
+                    if (
+                        runtime.last_wake_error
+                        and runtime.last_wake_error != SSH_BOOTSTRAP_COMPLETE
+                    ):
+                        # A workspace can be RUNNING while its Start hook has not
+                        # run yet. Keep activating the existing IDE session until
+                        # a worker heartbeat arrives; do not keep retrying a known
+                        # failing SSH key exchange in that interval.
+                        if retry_at and now < retry_at:
+                            return
+                        self._activate_workspace_session(
+                            runtime, now, force=True
+                        )
+                        return
                     bootstrapped = self._bootstrap_worker(runtime, now)
                     if not bootstrapped:
-                        self._activate_workspace_session(
-                            runtime,
-                            now,
-                            # RunWorkspace can report RUNNING before the IDE's remote
-                            # socket is ready. Retry the tokenized IDE activation until
-                            # the worker heartbeat confirms that the start hook ran.
-                            force=(
-                                runtime.last_wake_error is None
-                                or not self._ran_workspace
-                            ),
-                        )
+                        self._activate_workspace_session(runtime, now, force=True)
             return
 
         if runtime.wake_requested_at:
@@ -411,7 +421,7 @@ class WorkerLifecycleCoordinator:
                 self.target, deadline=deadline, error=None
             )
             self.store.set_queued_target_message(
-                self.target, "Tencent QQ verification node is starting, please wait"
+                self.target, f"{self._node_label()}正在启动，请稍候"
             )
             self._activate_workspace_session(
                 self.store.worker_runtime(self.target), now, force=True
