@@ -43,7 +43,7 @@ rollback() {
 # A restart is not a drain. Refuse to deploy across active verification leases
 # unless an operator has explicitly placed the service in maintenance mode.
 if [[ "${VERIGO_DEPLOY_MAINTENANCE:-false}" != "true" && -f "$app_dir/data/verigo.db" ]]; then
-    active_jobs=$(sqlite3 "$app_dir/data/verigo.db" "SELECT COUNT(*) FROM jobs WHERE status IN ('queued', 'running');" 2>/dev/null || printf 'unknown')
+    active_jobs=$("$app_dir/.venv/bin/python" -c "import sqlite3; print(sqlite3.connect('$app_dir/data/verigo.db').execute(\"SELECT COUNT(*) FROM jobs WHERE status IN ('queued', 'running')\").fetchone()[0])" 2>/dev/null || printf 'unknown')
     if [[ "$active_jobs" != "0" ]]; then
         echo "Refusing release: $active_jobs active verification jobs. Drain them or set VERIGO_DEPLOY_MAINTENANCE=true." >&2
         exit 2
