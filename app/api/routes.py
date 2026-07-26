@@ -448,6 +448,7 @@ async def claim_tencent_qq_job(
     while True:
         job = job_store.claim_next(worker_name, execution_target=execution_target)
         if job is not None:
+            sync_parent_job(job)
             return {
                 "job": {
                     "id": job.id,
@@ -549,7 +550,7 @@ def fail_tencent_qq_job(
     job.error = f"腾讯 QQ 验证节点失败: {payload.error}"
     job.status = "failed"
     job.finished_at = utc_now()
-    job_store.persist(job)
+    job_store.mark_unfinished_results_failed(job, job.error)
     if job.retry_parent_id:
         finish_background_retry_failure(job, payload.error)
     sync_parent_job(job)

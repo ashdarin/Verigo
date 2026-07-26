@@ -28,6 +28,7 @@ async def lifespan(_: FastAPI):
     job_store.initialize()
     job_store.release_legacy_deferred_retries()
     job_store.reconcile_aggregate_parents()
+    job_store.reconcile_failed_job_results()
     job_store.clear_completed_retry_notices()
     job_store.clear_dns_negative_cache()
     requeue_recent_single_temporary_jobs()

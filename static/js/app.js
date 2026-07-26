@@ -499,6 +499,9 @@ async function loadResults() {
 }
 
 function resultMeta(item) {
+  if (item.progress_state === "pending") return ["等待验证", "result-pending", "pending"];
+  if (item.progress_state === "verifying") return ["验证中", "result-running", "verifying"];
+  if (item.progress_state === "failed") return ["未完成", "result-failed", "failed"];
   if (item.skipped) return ["已停止", "result-skipped", "skipped"];
   if (item.deliverable === true) return ["可投递", "result-good", "deliverable"];
   if (item.deliverable === false) return ["不可投递", "result-bad", "undeliverable"];
@@ -559,7 +562,7 @@ function renderPagination() {
   const available = state.resultsAvailable;
   const start = available ? state.page * pageSize + 1 : 0;
   const end = Math.min((state.page + 1) * pageSize, available);
-  el("results-page-info").textContent = available ? `已显示 ${start}-${end}，共 ${available} 条已出结果` : "等待验证结果";
+  el("results-page-info").textContent = available ? `已显示 ${start}-${end}，共 ${available} 个邮箱` : "等待验证结果";
   el("previous-page").disabled = state.page === 0;
   el("next-page").disabled = (state.page + 1) * pageSize >= available;
 }

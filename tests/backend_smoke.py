@@ -68,6 +68,8 @@ from app.tasks.verification import (
     schedule_greylist_retry,
     sync_parent_job,
     schedule_remote_temporary_retry,
+    job_progress,
+    verification_tasks,
 )
 
 
@@ -80,6 +82,40 @@ def completed_job(job_id: str, **kwargs) -> Job:
         results=[{"email": "check@example.com", "deliverable": True}],
         **kwargs,
     )
+
+
+visible_progress_job = verification_tasks.submit(
+    ["waiting-one@example.com", "waiting-two@example.com"],
+    worker_count=1,
+    execution_target="progress-smoke",
+)
+assert len(visible_progress_job.results) == 2
+assert all(item["progress_state"] == "pending" for item in visible_progress_job.results)
+assert job_progress(visible_progress_job) == (0, 2, 0.0)
+claimed_progress_job = job_store.claim_next("progress-worker", "progress-smoke")
+assert claimed_progress_job is not None
+assert all(item["progress_state"] == "verifying" for item in claimed_progress_job.results)
+assert job_progress(claimed_progress_job) == (0, 2, 0.0)
+
+failed_progress_job = verification_tasks.submit(
+    ["failed-one@example.com", "failed-two@example.com"],
+    worker_count=1,
+    execution_target="failed-progress-smoke",
+)
+assert job_store.fail_queued_target("failed-progress-smoke", "worker failed to start") == 1
+failed_progress_job = job_store.get(failed_progress_job.id)
+assert failed_progress_job is not None
+assert all(item["progress_state"] == "failed" for item in failed_progress_job.results)
+
+legacy_failed_progress_job = Job(
+    id="legacy-failed-progress", emails=["legacy@example.com"], worker_count=1,
+    status="failed", error="worker failed to start",
+)
+job_store.add(legacy_failed_progress_job)
+assert job_store.reconcile_failed_job_results() >= 1
+legacy_failed_progress_job = job_store.get(legacy_failed_progress_job.id)
+assert legacy_failed_progress_job is not None
+assert legacy_failed_progress_job.results[0]["progress_state"] == "failed"
 
 
 assert tencent_qq_target(["person@qq.com"], "smoke@example.com") == "tencent_qq"

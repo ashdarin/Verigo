@@ -460,13 +460,23 @@ class JobStore:
             job.heartbeat_at = now
             job.deferred_retry_at = None
             job.error = None
+            for result in job.results:
+                if result.get("progress_state") != "pending":
+                    continue
+                result["progress_state"] = "verifying"
+                result["verification_method"] = "正在验证"
+                result["smtp_result"] = "正在验证"
+                result["message"] = "正在验证"
             connection.execute(
                 """
                 UPDATE jobs SET status = 'running', worker_id = ?, started_at = ?, heartbeat_at = ?,
-                    deferred_retry_at = NULL, error = NULL
+                    deferred_retry_at = NULL, error = NULL, results_json = ?
                 WHERE id = ?
                 """,
-                (worker_id, job.started_at.isoformat(), now.isoformat(), job.id),
+                (
+                    worker_id, job.started_at.isoformat(), now.isoformat(),
+                    json.dumps(job.results, ensure_ascii=False), job.id,
+                ),
             )
             connection.commit()
         return job
@@ -518,12 +528,39 @@ class JobStore:
         self.initialize()
         now = utc_now().isoformat()
         with closing(self._connect()) as connection:
-            parents = [
-                row[0] for row in connection.execute(
-                    "SELECT DISTINCT parent_id FROM jobs WHERE execution_target=? AND status='queued' AND parent_id IS NOT NULL",
-                    (target,),
-                ).fetchall()
-            ]
+            queued = connection.execute(
+                """SELECT id, parent_id, emails_json, results_json FROM jobs
+                WHERE execution_target=? AND status='queued'""",
+                (target,),
+            ).fetchall()
+            parents = [row[1] for row in queued if row[1] is not None]
+            for job_id, _parent_id, emails_json, results_json in queued:
+                emails = json.loads(emails_json)
+                results = json.loads(results_json)
+                by_email = {
+                    str(result.get("email", "")).lower(): result
+                    for result in results
+                    if result.get("email")
+                }
+                for index, email in enumerate(emails):
+                    result = by_email.get(str(email).lower())
+                    if result is None:
+                        result = {"email": email, "original_index": index}
+                        results.append(result)
+                    if result.get("progress_state") not in {None, "pending", "verifying"}:
+                        continue
+                    result.update({
+                        "progress_state": "failed",
+                        "verification_method": "验证未完成",
+                        "smtp_result": "验证节点未能启动，尚未完成验证",
+                        "message": message,
+                        "deliverable": None,
+                        "valid": None,
+                    })
+                connection.execute(
+                    "UPDATE jobs SET results_json=? WHERE id=?",
+                    (json.dumps(results, ensure_ascii=False), job_id),
+                )
             failed = connection.execute(
                 """
                 UPDATE jobs SET status='failed', error=?, finished_at=?,
@@ -535,6 +572,57 @@ class JobStore:
         for parent_id in parents:
             self.refresh_parent(str(parent_id))
         return failed
+
+    def mark_unfinished_results_failed(self, job: Job, message: str) -> Job:
+        """Expose every address affected when a worker fails before returning a result."""
+        by_email = {
+            str(result.get("email", "")).lower(): result
+            for result in job.results
+            if result.get("email")
+        }
+        for index, email in enumerate(job.emails):
+            result = by_email.get(email.lower())
+            if result is None:
+                result = {"email": email, "original_index": index}
+                job.results.append(result)
+            if result.get("progress_state") not in {None, "pending", "verifying"}:
+                continue
+            result.update({
+                "progress_state": "failed",
+                "verification_method": "验证未完成",
+                "smtp_result": "验证节点未能启动，尚未完成验证",
+                "message": message,
+                "deliverable": None,
+                "valid": None,
+            })
+        self.persist(job)
+        return job
+
+    def reconcile_failed_job_results(self) -> int:
+        """Backfill address-level failure states for tasks created before live progress."""
+        self.initialize()
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                f"""SELECT {self._select_columns()} FROM jobs
+                WHERE status='failed' AND execution_target != 'aggregate'"""
+            ).fetchall()
+        parents: set[str] = set()
+        repaired = 0
+        for row in rows:
+            job = self._job_from_row(row)
+            before = json.dumps(job.results, sort_keys=True, ensure_ascii=False)
+            self.mark_unfinished_results_failed(
+                job, job.error or "验证任务未完成，请稍后重新提交"
+            )
+            after = json.dumps(job.results, sort_keys=True, ensure_ascii=False)
+            if before == after:
+                continue
+            repaired += 1
+            if job.parent_id:
+                parents.add(job.parent_id)
+        for parent_id in parents:
+            self.refresh_parent(parent_id)
+        return repaired
 
     def reconcile_aggregate_parents(self) -> int:
         """Repair visible parent states after worker-side failures or restarts."""

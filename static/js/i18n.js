@@ -8,7 +8,7 @@ const VerigoI18n = (() => {
     "手动输入": "Paste list", "文件导入": "Import file", "邮箱列表": "Email list", "导入数据": "Import data",
     "选择文件": "Choose file", "验证速度": "Verification speed", "稳定": "Steady", "标准": "Standard", "快速": "Fast", "极速": "Fastest",
     "免费验证": "Free verification", "最近任务": "Recent jobs", "任务工作台": "Job workspace", "等待任务": "Waiting for a job",
-    "未开始": "Not started", "排队中": "Queued", "验证中": "Verifying", "已完成": "Completed", "失败": "Failed", "已停止": "Stopped",
+    "未开始": "Not started", "排队中": "Queued", "等待验证": "Waiting", "验证中": "Verifying", "未完成": "Not completed", "已完成": "Completed", "失败": "Failed", "已停止": "Stopped",
     "无限额度": "Unlimited", "开始验证": "Start verification", "工作邮箱查找": "Work email discovery",
     "稳定模式": "Steady mode", "标准模式": "Standard mode", "快速模式": "Fast mode", "极速模式": "Fastest mode",
     "已出结果": "Results ready", "可投递": "Deliverable", "不可投递": "Undeliverable", "待确认": "Pending",

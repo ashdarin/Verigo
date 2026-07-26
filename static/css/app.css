@@ -109,6 +109,10 @@ textarea:focus, input:focus, select:focus { border-color: var(--accent); box-sha
 .recent-job small { color: var(--muted); white-space: nowrap; }
 .recent-job-update { width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; background: var(--bad); }
 
+.result-pending { background: #edf1f5; color: #5b6775; }
+.result-running { background: #e4f3ff; color: #176eae; }
+.result-failed { background: #fff0ec; color: #b64d31; }
+
 .results-panel { min-width: 0; padding: 30px 34px; }
 .status { padding: 6px 10px; border-radius: 999px; font-size: 11px; font-weight: 750; }
 .job-state { display: flex; align-items: center; justify-content: flex-end; gap: 7px; }

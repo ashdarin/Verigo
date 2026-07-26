@@ -198,6 +198,7 @@ class VerificationTasks:
             stop_on_deliverable=stop_on_deliverable,
             execution_target=execution_target,
         )
+        job.results = [waiting_result(email, index) for index, email in enumerate(job.emails)]
         if immediate_results is not None:
             job.results = immediate_results
             job.status = "completed"
@@ -269,6 +270,9 @@ class VerificationTasks:
                 execution_target=target,
                 parent_id=parent.id,
             )
+            child.results = [
+                waiting_result(email, index) for index, email in enumerate(child.emails)
+            ]
             if immediate_results is not None:
                 child.results = immediate_results
                 child.status = "completed"
@@ -284,6 +288,22 @@ class VerificationTasks:
             elif target == GMAIL_TARGET:
                 notify_cloudshell_job_queued()
         return job_store.refresh_parent(parent.id) or parent
+
+
+def waiting_result(email: str, index: int) -> dict[str, Any]:
+    """Make every submitted address visible before a worker returns its verdict."""
+    return {
+        "email": email,
+        "timestamp": utc_now().strftime("%Y-%m-%d %H:%M:%S"),
+        "valid": None,
+        "deliverable": None,
+        "domain_type": "-",
+        "verification_method": "等待验证",
+        "smtp_result": "等待验证",
+        "message": "等待验证",
+        "progress_state": "pending",
+        "original_index": index,
+    }
 
 
 def yahoo_unsupported_result(email: str, index: int) -> dict[str, Any]:
@@ -735,6 +755,7 @@ def run_job(job: Job) -> None:
             int(result.get("original_index", index)): normalize_result(dict(result))
             for index, result in enumerate(job.results)
             if str(result.get("email", "")).lower() in known_emails
+            and result.get("progress_state") not in {"pending", "verifying"}
         }
         missing_emails: list[str] = []
         missing_indices: list[int] = []
@@ -812,6 +833,7 @@ def run_job(job: Job) -> None:
         job.error = "任务执行失败，请稍后重新提交"
         job.status = "failed"
         job.finished_at = utc_now()
+        job_store.mark_unfinished_results_failed(job, job.error)
         if job.retry_parent_id:
             job_store.persist(job)
             finish_background_retry_failure(job, str(exc))
@@ -826,7 +848,13 @@ def job_progress(job: Job) -> tuple[int, int, float]:
     total = len(job.emails)
     if job.status == "completed":
         return total, total, 100.0
-    completed = min(len(job.results), total)
+    completed = min(
+        sum(
+            result.get("progress_state") not in {"pending", "verifying"}
+            for result in job.results
+        ),
+        total,
+    )
     percent = round((completed / total * 100) if total else 0, 1)
     return completed, total, percent
 
