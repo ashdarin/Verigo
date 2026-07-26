@@ -1,0 +1,22 @@
+[Unit]
+Description=Verigo remote verification node supervisor
+After=network-online.target verigo.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=verigo
+Group=verigo
+WorkingDirectory=/opt/verigo
+EnvironmentFile=/etc/verigo/verigo.env
+ExecStart=/opt/verigo/.venv/bin/python -m app.supervisor
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/opt/verigo/data /opt/verigo/domain_type_cache.json
+
+[Install]
+WantedBy=multi-user.target

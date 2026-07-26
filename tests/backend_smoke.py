@@ -114,11 +114,13 @@ assert len(buffer_remote_results(
 discard_buffered_remote_results(buffered_job_id)
 
 batched_remote_job = verification_tasks.submit(
-    [f"batch-{index}@example.com" for index in range(REMOTE_RESULT_BATCH_SIZE)],
+    [f"batch-{index}@example{index}.com" for index in range(REMOTE_RESULT_BATCH_SIZE)],
     worker_count=1,
     execution_target="gmail",
 )
-batched_remote_job = job_store.claim_next("batched-worker", "gmail")
+batched_remote_job = job_store.claim_remote_lease(
+    "batched-worker", "gmail", shard_size=REMOTE_RESULT_BATCH_SIZE
+)
 assert batched_remote_job is not None
 with TestClient(app) as remote_client:
     headers = {
@@ -129,7 +131,7 @@ with TestClient(app) as remote_client:
         response = remote_client.post(
             f"/api/workers/gmail/jobs/{batched_remote_job.id}/results",
             headers=headers,
-            json={"results": [{
+            json={"lease_id": batched_remote_job.lease_id, "results": [{
                 "email": email,
                 "original_index": index,
                 "valid": True,

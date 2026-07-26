@@ -153,6 +153,7 @@ class JobStore:
                 connection.execute("CREATE INDEX IF NOT EXISTS idx_jobs_queue ON jobs(status, created_at)")
                 connection.execute("CREATE INDEX IF NOT EXISTS idx_jobs_parent ON jobs(parent_id, created_at)")
                 connection.execute("CREATE INDEX IF NOT EXISTS idx_jobs_retry_parent ON jobs(retry_parent_id, created_at)")
+                connection.execute("CREATE TABLE IF NOT EXISTS schema_migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)")
                 connection.execute("""
                     CREATE TABLE IF NOT EXISTS job_results (
                         job_id TEXT NOT NULL, original_index INTEGER NOT NULL, email TEXT NOT NULL,
@@ -161,6 +162,15 @@ class JobStore:
                     )
                 """)
                 connection.execute("CREATE INDEX IF NOT EXISTS idx_job_results_pending ON job_results(job_id, progress_state, original_index)")
+                connection.execute("""
+                    CREATE TABLE IF NOT EXISTS job_result_links (
+                        child_job_id TEXT NOT NULL, child_index INTEGER NOT NULL,
+                        parent_job_id TEXT NOT NULL, parent_index INTEGER NOT NULL,
+                        PRIMARY KEY(child_job_id, child_index),
+                        UNIQUE(parent_job_id, parent_index)
+                    )
+                """)
+                connection.execute("CREATE INDEX IF NOT EXISTS idx_job_result_links_parent ON job_result_links(parent_job_id, parent_index)")
                 connection.execute("""
                     CREATE TABLE IF NOT EXISTS job_leases (
                         id TEXT PRIMARY KEY, job_id TEXT NOT NULL, worker_id TEXT NOT NULL,
@@ -250,7 +260,6 @@ class JobStore:
                     )
                     """
                 )
-                self._backfill_result_rows(connection)
             self._initialized = True
 
     @staticmethod
@@ -283,6 +292,82 @@ class JobStore:
                     INSERT INTO job_results(job_id, original_index, email, progress_state, result_json, updated_at)
                     VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(job_id, original_index) DO NOTHING
                 """, rows)
+
+    def migrate_legacy_results(self) -> dict[str, int]:
+        """Explicitly migrate JSON snapshots; never run this in web startup."""
+        self.initialize()
+        migrated_rows = 0
+        linked_rows = 0
+        with self._lock, closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            now = utc_now().isoformat()
+            for job_id, emails_json, results_json in connection.execute(
+                "SELECT id, emails_json, results_json FROM jobs"
+            ):
+                try:
+                    emails = json.loads(emails_json)
+                    results = json.loads(results_json or "[]")
+                except json.JSONDecodeError:
+                    continue
+                indexed = {
+                    int(item.get("original_index", index)): item
+                    for index, item in enumerate(results) if isinstance(item, dict)
+                }
+                rows = []
+                for index, email in enumerate(emails):
+                    result = dict(indexed.get(index, {
+                        "email": email, "original_index": index, "progress_state": "pending",
+                    }))
+                    result["email"] = str(result.get("email") or email)
+                    result["original_index"] = index
+                    rows.append((job_id, index, result["email"], self._result_state(result),
+                                 json.dumps(result, ensure_ascii=False, default=str), now))
+                before = connection.total_changes
+                connection.executemany("""
+                    INSERT INTO job_results(job_id, original_index, email, progress_state, result_json, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(job_id, original_index) DO NOTHING
+                """, rows)
+                migrated_rows += connection.total_changes - before
+
+            parents = connection.execute(
+                "SELECT id, emails_json FROM jobs WHERE execution_target='aggregate'"
+            ).fetchall()
+            for parent_id, parent_emails_json in parents:
+                try:
+                    parent_emails = json.loads(parent_emails_json)
+                except json.JSONDecodeError:
+                    continue
+                positions: dict[str, list[int]] = {}
+                for index, email in enumerate(parent_emails):
+                    positions.setdefault(str(email).lower(), []).append(index)
+                consumed: dict[str, int] = {}
+                links = []
+                for child_id, child_emails_json in connection.execute(
+                    "SELECT id, emails_json FROM jobs WHERE parent_id=? ORDER BY created_at, id", (parent_id,)
+                ):
+                    try:
+                        child_emails = json.loads(child_emails_json)
+                    except json.JSONDecodeError:
+                        continue
+                    for child_index, email in enumerate(child_emails):
+                        key = str(email).lower()
+                        offset = consumed.get(key, 0)
+                        candidates = positions.get(key, [])
+                        if offset < len(candidates):
+                            links.append((child_id, child_index, parent_id, candidates[offset]))
+                            consumed[key] = offset + 1
+                before = connection.total_changes
+                connection.executemany("""
+                    INSERT INTO job_result_links(child_job_id, child_index, parent_job_id, parent_index)
+                    VALUES (?, ?, ?, ?) ON CONFLICT(child_job_id, child_index) DO NOTHING
+                """, links)
+                linked_rows += connection.total_changes - before
+            connection.execute(
+                "INSERT OR REPLACE INTO schema_migrations(name, applied_at) VALUES ('legacy_result_rows_v1', ?)",
+                (now,),
+            )
+            connection.commit()
+        return {"result_rows": migrated_rows, "result_links": linked_rows}
 
     def release_legacy_deferred_retries(self) -> int:
         """Release only tasks queued by the retired multi-minute retry policy."""
@@ -412,6 +497,23 @@ class JobStore:
                 VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(job_id, original_index) DO NOTHING
             """, rows)
 
+    def link_child_results(self, child_job_id: str, parent_job_id: str, parent_indices: list[int]) -> None:
+        """Attach child-local indexes to their immutable parent result slots."""
+        if not parent_indices:
+            return
+        self.initialize()
+        rows = [
+            (child_job_id, child_index, parent_job_id, parent_index)
+            for child_index, parent_index in enumerate(parent_indices)
+        ]
+        with self._lock, closing(self._connect()) as connection:
+            connection.executemany("""
+                INSERT INTO job_result_links(child_job_id, child_index, parent_job_id, parent_index)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(child_job_id, child_index) DO UPDATE SET
+                    parent_job_id=excluded.parent_job_id, parent_index=excluded.parent_index
+            """, rows)
+
     def results_for_job(self, job_id: str) -> list[dict[str, Any]]:
         self.initialize()
         with closing(self._connect()) as connection:
@@ -439,6 +541,7 @@ class JobStore:
             email = str(result.get("email") or "")
             rows.append((job_id, index, email, self._result_state(result), json.dumps(result, ensure_ascii=False, default=str), now))
         with self._lock, closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
             connection.executemany("""
                 INSERT INTO job_results(job_id, original_index, email, progress_state, result_json, updated_at)
                 VALUES (?, ?, ?, ?, ?, ?)
@@ -446,8 +549,34 @@ class JobStore:
                     email=excluded.email, progress_state=excluded.progress_state,
                     result_json=excluded.result_json, updated_at=excluded.updated_at
                 WHERE job_results.progress_state IN ('pending', 'verifying')
-                    OR excluded.progress_state NOT IN ('pending', 'verifying')
+                    OR job_results.progress_state = excluded.progress_state
             """, rows)
+            links = connection.execute("""
+                SELECT child_index, parent_job_id, parent_index FROM job_result_links
+                WHERE child_job_id=?
+            """, (job_id,)).fetchall()
+            if links:
+                source = {int(index): (email, state, payload) for _, index, email, state, payload, _ in rows}
+                parent_rows = []
+                for child_index, parent_id, parent_index in links:
+                    item = source.get(int(child_index))
+                    if item is None:
+                        continue
+                    email, state, payload = item
+                    result = json.loads(payload)
+                    result["original_index"] = int(parent_index)
+                    parent_rows.append((parent_id, int(parent_index), email, state,
+                                        json.dumps(result, ensure_ascii=False, default=str), now))
+                connection.executemany("""
+                    INSERT INTO job_results(job_id, original_index, email, progress_state, result_json, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(job_id, original_index) DO UPDATE SET
+                        email=excluded.email, progress_state=excluded.progress_state,
+                        result_json=excluded.result_json, updated_at=excluded.updated_at
+                    WHERE job_results.progress_state IN ('pending', 'verifying')
+                        OR job_results.progress_state = excluded.progress_state
+                """, parent_rows)
+            connection.commit()
 
     def _hydrate_results(self, job: Job) -> Job:
         job.results = self.results_for_job(job.id)
@@ -517,39 +646,29 @@ class JobStore:
 
     def refresh_parent(self, parent_id: str) -> Job | None:
         """Merge child results into the user-visible parent task."""
-        parent = self.get(parent_id)
+        parent = self.get(parent_id, include_results=False)
         if parent is None or parent.status == "stopped":
             return parent
-        children = self.children(parent_id)
+        with closing(self._connect()) as connection:
+            children = connection.execute(
+                "SELECT status, started_at, finished_at, error FROM jobs WHERE parent_id=? ORDER BY created_at, id",
+                (parent_id,),
+            ).fetchall()
         if not children:
             return parent
 
-        results_by_email = {
-            str(result.get("email", "")).lower(): dict(result)
-            for child in children
-            for result in child.results
-            if result.get("email")
-        }
-        parent.results = []
-        for index, email in enumerate(parent.emails):
-            result = results_by_email.get(email.lower())
-            if result is None:
-                continue
-            result["original_index"] = index
-            parent.results.append(result)
-
-        started = [child.started_at for child in children if child.started_at]
+        started = [datetime.fromisoformat(row[1]) for row in children if row[1]]
         parent.started_at = min(started) if started else None
         terminal = {"completed", "failed", "stopped"}
-        if all(child.status in terminal for child in children):
+        if all(row[0] in terminal for row in children):
             parent.finished_at = max(
-                (child.finished_at or utc_now() for child in children), default=utc_now()
+                (datetime.fromisoformat(row[2]) if row[2] else utc_now() for row in children), default=utc_now()
             )
-            failures = [child.error for child in children if child.status == "failed" and child.error]
+            failures = [row[3] for row in children if row[0] == "failed" and row[3]]
             if failures:
                 parent.status = "failed"
                 parent.error = "；".join(failures[:2])[:500]
-            elif any(child.status == "stopped" for child in children):
+            elif any(row[0] == "stopped" for row in children):
                 parent.status = "stopped"
                 parent.error = "已由用户停止验证"
             else:
@@ -558,10 +677,10 @@ class JobStore:
         else:
             parent.status = "running"
             parent.finished_at = None
-            notices = [child.error for child in children if child.status == "queued" and child.error]
+            notices = [row[3] for row in children if row[0] == "queued" and row[3]]
             parent.error = notices[0] if notices else None
         self.persist(parent)
-        return self.get(parent_id)
+        return self.get(parent_id, include_results=False)
 
     def claim_next(self, worker_id: str, execution_target: str = "local") -> Job | None:
         """Atomically claim the next task; expired worker leases are returned to the queue."""
@@ -588,7 +707,7 @@ class JobStore:
             if row is None:
                 connection.commit()
                 return None
-            job = self._job_from_row(row)
+            job = self._hydrate_results(self._job_from_row(row))
             job.status = "running"
             job.worker_id = worker_id
             job.started_at = job.started_at or now
@@ -609,12 +728,12 @@ class JobStore:
             connection.execute(
                 """
                 UPDATE jobs SET status = 'running', worker_id = ?, started_at = ?, heartbeat_at = ?,
-                    deferred_retry_at = NULL, error = NULL, results_json = ?
+                    deferred_retry_at = NULL, error = NULL
                 WHERE id = ?
                 """,
                 (
                     worker_id, job.started_at.isoformat(), now.isoformat(),
-                    json.dumps(job.results, ensure_ascii=False), job.id,
+                    job.id,
                 ),
             )
             connection.commit()
@@ -629,6 +748,24 @@ class JobStore:
         stale = now - timedelta(seconds=settings.worker_lease_seconds)
         with self._lock, closing(self._connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
+            expired = connection.execute("""
+                SELECT id, job_id, indices_json FROM job_leases
+                WHERE completed_at IS NULL AND heartbeat_at < ?
+            """, (stale.isoformat(),)).fetchall()
+            for expired_lease_id, expired_job_id, raw_indices in expired:
+                try:
+                    expired_indices = [int(index) for index in json.loads(raw_indices)]
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    expired_indices = []
+                if expired_indices:
+                    placeholders = ", ".join("?" for _ in expired_indices)
+                    connection.execute(
+                        f"UPDATE job_results SET progress_state='pending' WHERE job_id=? "
+                        f"AND original_index IN ({placeholders}) AND progress_state='verifying'",
+                        (expired_job_id, *expired_indices),
+                    )
+                connection.execute("UPDATE job_leases SET completed_at=? WHERE id=?", (now.isoformat(), expired_lease_id))
+                connection.execute("DELETE FROM mx_scheduler_leases WHERE lease_id=?", (expired_lease_id,))
             connection.execute("DELETE FROM mx_scheduler_leases WHERE expires_at < ?", (now.isoformat(),))
             connection.execute("""
                 INSERT INTO worker_nodes(target, worker_id, capacity, health, last_seen_at)
@@ -651,7 +788,7 @@ class JobStore:
                 WHERE j.status IN ('queued', 'running') AND j.execution_target=?
                     AND (j.deferred_retry_at IS NULL OR j.deferred_retry_at <= ?)
                     AND EXISTS (SELECT 1 FROM job_results r WHERE r.job_id=j.id
-                        AND r.progress_state IN ('pending', 'verifying'))
+                        AND r.progress_state='pending')
                 ORDER BY COALESCE(turn.last_claimed_at, '1970-01-01T00:00:00+00:00'), j.created_at LIMIT 1
             """, (execution_target, execution_target, now.isoformat())).fetchone()
             if row is None:
@@ -678,7 +815,7 @@ class JobStore:
             indices, mx_keys = [], []
             for index, email in connection.execute("""
                 SELECT original_index, email FROM job_results WHERE job_id=?
-                    AND progress_state IN ('pending', 'verifying') ORDER BY original_index
+                    AND progress_state='pending' ORDER BY original_index
             """, (job.id,)):
                 mx_key = self._scheduler_mx_key(str(email))
                 if index in leased or active_by_key.get(mx_key, 0) >= self._scheduler_mx_capacity(mx_key):
@@ -697,6 +834,12 @@ class JobStore:
                 INSERT INTO job_leases(id, job_id, worker_id, execution_target, indices_json, claimed_at, heartbeat_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
             """, (lease_id, job.id, worker_id, execution_target, json.dumps(indices), now.isoformat(), now.isoformat()))
+            placeholders = ", ".join("?" for _ in indices)
+            connection.execute(
+                f"UPDATE job_results SET progress_state='verifying' WHERE job_id=? "
+                f"AND original_index IN ({placeholders}) AND progress_state='pending'",
+                (job.id, *indices),
+            )
             expires = (now + timedelta(seconds=settings.worker_lease_seconds)).isoformat()
             connection.executemany("INSERT INTO mx_scheduler_leases(lease_id, mx_key, expires_at) VALUES (?, ?, ?)", [(lease_id, key, expires) for key in mx_keys])
             connection.execute("""
@@ -734,6 +877,25 @@ class JobStore:
                     AND completed_at IS NULL AND heartbeat_at >= ?
             """, (lease_id, job_id, worker_id, stale)).fetchone() is not None
 
+    def lease_accepts_results(
+        self, job_id: str, worker_id: str, lease_id: str, indices: list[int]
+    ) -> bool:
+        """A lease may only report the exact index set granted to it."""
+        if not self.lease_valid(job_id, worker_id, lease_id):
+            return False
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                "SELECT indices_json FROM job_leases WHERE id=? AND job_id=? AND worker_id=?",
+                (lease_id, job_id, worker_id),
+            ).fetchone()
+        if row is None:
+            return False
+        try:
+            granted = {int(index) for index in json.loads(row[0])}
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return False
+        return all(index in granted for index in indices)
+
     def heartbeat_lease(self, job_id: str, worker_id: str, lease_id: str) -> bool:
         now = utc_now()
         with closing(self._connect()) as connection:
@@ -754,6 +916,21 @@ class JobStore:
             """, (utc_now().isoformat(), lease_id, job_id, worker_id)).rowcount
             connection.execute("DELETE FROM mx_scheduler_leases WHERE lease_id=?", (lease_id,))
         return bool(changed)
+
+    def requeue_orphaned_results(self) -> int:
+        """Release only rows whose worker lease is no longer active."""
+        self.initialize()
+        stale = (utc_now() - timedelta(seconds=settings.worker_lease_seconds)).isoformat()
+        with self._lock, closing(self._connect()) as connection:
+            return connection.execute("""
+                UPDATE job_results SET progress_state='pending'
+                WHERE progress_state='verifying'
+                  AND NOT EXISTS (
+                      SELECT 1 FROM job_leases lease
+                      WHERE lease.job_id=job_results.job_id
+                        AND lease.completed_at IS NULL AND lease.heartbeat_at >= ?
+                  )
+            """, (stale,)).rowcount
 
     def pending_count(self, job_id: str) -> int:
         with closing(self._connect()) as connection:

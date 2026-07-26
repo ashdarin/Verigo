@@ -97,12 +97,13 @@ def buffer_remote_results(
     worker_id: str,
     results: list[dict[str, object]],
     *,
+    lease_id: str = "",
     force: bool = False,
 ) -> list[dict[str, object]]:
     """Return a durable-sized batch without writing a full job JSON per result."""
-    # The endpoint validates the active lease before buffering, so a job has
-    # exactly one valid result stream regardless of the worker process ID.
-    key = job_id
+    # A stale worker must never flush another worker's in-memory batch after a
+    # lease has expired and the work was reclaimed.
+    key = f"{job_id}:{worker_id}:{lease_id}" if lease_id else job_id
     with _remote_result_batches_lock:
         batch = _remote_result_batches.setdefault(key, [])
         batch.extend(dict(result) for result in results)
@@ -113,7 +114,8 @@ def buffer_remote_results(
 
 def discard_buffered_remote_results(job_id: str) -> None:
     with _remote_result_batches_lock:
-        _remote_result_batches.pop(job_id, None)
+        for key in [key for key in _remote_result_batches if key == job_id or key.startswith(f"{job_id}:")]:
+            _remote_result_batches.pop(key, None)
 
 
 def remote_worker_label(execution_target: str) -> str:
@@ -342,8 +344,8 @@ def require_remote_worker(worker_target: str, token: str | None) -> str:
 
 def require_remote_job(job_id: str, worker_id: str, execution_target: str, lease_id: str | None = None) -> Job:
     job = require_job(job_id, include_results=False)
-    valid_lease = lease_id and job_store.lease_valid(job_id, worker_id, lease_id)
-    if job.execution_target != execution_target or (not valid_lease and job.worker_id != worker_id):
+    valid_lease = bool(lease_id and job_store.lease_valid(job_id, worker_id, lease_id))
+    if job.execution_target != execution_target or not valid_lease:
         raise HTTPException(status_code=409, detail="远程验证节点任务租约无效")
     if execution_target == "tencent_qq":
         worker_lifecycle.record_worker_seen(worker_id)
@@ -354,7 +356,7 @@ def require_remote_job(job_id: str, worker_id: str, execution_target: str, lease
     return job
 
 
-def merge_worker_results(job: Job, results: list[dict[str, object]]) -> Job:
+def merge_worker_results(job: Job, worker_id: str, lease_id: str, results: list[dict[str, object]]) -> Job:
     normalized: list[dict[str, object]] = []
     for raw_result in results:
         result = dict(raw_result)
@@ -370,6 +372,10 @@ def merge_worker_results(job: Job, results: list[dict[str, object]]) -> Job:
         result = normalize_result(result)
         result["progress_state"] = "completed"
         normalized.append(result)
+    if not job_store.lease_accepts_results(
+        job.id, worker_id, lease_id, [int(result["original_index"]) for result in normalized]
+    ):
+        raise HTTPException(status_code=409, detail="Remote worker attempted to report results outside its lease")
     # Durable result rows are independent of the job metadata row. A repeated
     # callback cannot overwrite a terminal result with a waiting state.
     job_store.upsert_results(job.id, normalized)
@@ -525,10 +531,8 @@ def heartbeat_tencent_qq_job(
         return {"status": "stopped", "stop_requested": True}
     worker_name = (worker_id or "").strip()
     job = require_remote_job(job_id, worker_name, execution_target, lease_id)
-    if lease_id:
-        job_store.heartbeat_lease(job.id, worker_name, lease_id)
-    else:
-        job_store.heartbeat(job)
+    if not lease_id or not job_store.heartbeat_lease(job.id, worker_name, lease_id):
+        raise HTTPException(status_code=409, detail="Remote worker lease is no longer active")
     return {"status": job.status, "stop_requested": False}
 
 
@@ -548,14 +552,14 @@ def report_tencent_qq_results(
         return {"status": "stopped", "stop_requested": True}
     worker_name = (worker_id or "").strip()
     job = require_remote_job(job_id, worker_name, execution_target, payload.lease_id)
-    results_to_persist = buffer_remote_results(job.id, worker_name, payload.results)
+    results_to_persist = buffer_remote_results(
+        job.id, worker_name, payload.results, lease_id=payload.lease_id or ""
+    )
     if results_to_persist:
-        merge_worker_results(job, results_to_persist)
+        merge_worker_results(job, worker_name, payload.lease_id or "", results_to_persist)
         sync_parent_job(job)
-    if payload.lease_id:
-        job_store.heartbeat_lease(job.id, worker_name, payload.lease_id)
-    else:
-        job_store.heartbeat(job)
+    if not payload.lease_id or not job_store.heartbeat_lease(job.id, worker_name, payload.lease_id):
+        raise HTTPException(status_code=409, detail="Remote worker lease is no longer active")
     return {
         "status": job.status,
         "stop_requested": False,
@@ -582,11 +586,13 @@ def complete_tencent_qq_job(
     worker_name = (worker_id or "").strip()
     job = require_remote_job(job_id, worker_name, execution_target, payload.lease_id)
     merge_worker_results(
-        job,
-        buffer_remote_results(job.id, worker_name, payload.results, force=True),
+        job, worker_name, payload.lease_id or "",
+        buffer_remote_results(
+            job.id, worker_name, payload.results, lease_id=payload.lease_id or "", force=True
+        ),
     )
-    if payload.lease_id:
-        job_store.complete_lease(job.id, worker_name, payload.lease_id)
+    if not payload.lease_id or not job_store.complete_lease(job.id, worker_name, payload.lease_id):
+        raise HTTPException(status_code=409, detail="Remote worker lease is no longer active")
     if job_store.pending_count(job.id):
         sync_parent_job(job)
         return serialize_job(job_store.get(job.id) or job)
@@ -616,7 +622,8 @@ def fail_tencent_qq_job(
         raise HTTPException(status_code=409, detail="不是腾讯 QQ 验证节点任务")
     if job.status == "stopped":
         return serialize_job(job)
-    job = require_remote_job(job_id, (worker_id or "").strip(), execution_target)
+    worker_name = (worker_id or "").strip()
+    job = require_remote_job(job_id, worker_name, execution_target, payload.lease_id)
     job.error = f"{remote_worker_label(execution_target)}失败: {payload.error}"
     job.status = "failed"
     job.finished_at = utc_now()

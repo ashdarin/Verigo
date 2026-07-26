@@ -260,6 +260,11 @@ class VerificationTasks:
         )
         job_store.add(parent, max_active=settings.max_pending_jobs)
 
+        parent_positions: dict[str, list[int]] = {}
+        for index, email in enumerate(parent.emails):
+            parent_positions.setdefault(email.lower(), []).append(index)
+        parent_offsets: dict[str, int] = {}
+
         for target, child_emails, child_worker_count in partitions:
             immediate_results = (immediate_results_by_target or {}).get(target)
             child = Job(
@@ -273,12 +278,34 @@ class VerificationTasks:
             child.results = [
                 waiting_result(email, index) for index, email in enumerate(child.emails)
             ]
+            parent_indices: list[int] = []
+            for email in child.emails:
+                key = email.lower()
+                offset = parent_offsets.get(key, 0)
+                candidates = parent_positions.get(key, [])
+                if offset >= len(candidates):
+                    raise ValueError("Partition contains an email not present in its parent job")
+                parent_indices.append(candidates[offset])
+                parent_offsets[key] = offset + 1
             if immediate_results is not None:
-                child.results = immediate_results
+                by_email = {
+                    str(result.get("email", "")).lower(): dict(result)
+                    for result in immediate_results
+                }
+                child.results = []
+                for index, email in enumerate(child.emails):
+                    result = dict(by_email.get(email.lower(), waiting_result(email, index)))
+                    result["email"] = email
+                    result["original_index"] = index
+                    child.results.append(result)
                 child.status = "completed"
                 child.started_at = utc_now()
                 child.finished_at = child.started_at
             job_store.add(child)
+            job_store.link_child_results(child.id, parent.id, parent_indices)
+            if immediate_results is not None:
+                # The initial write happened before the link existed.
+                job_store.upsert_results(child.id, child.results)
             if immediate_results is not None:
                 continue
             if target == TENCENT_QQ_TARGET:
@@ -287,7 +314,8 @@ class VerificationTasks:
                 domestic_worker_lifecycle.notify_job_queued()
             elif target == GMAIL_TARGET:
                 notify_cloudshell_job_queued()
-        return job_store.refresh_parent(parent.id) or parent
+        job_store.refresh_parent(parent.id)
+        return job_store.get(parent.id) or parent
 
 
 def waiting_result(email: str, index: int) -> dict[str, Any]:
@@ -342,6 +370,7 @@ def sync_parent_job(job: Job) -> Job | None:
         return None
     parent = job_store.refresh_parent(job.parent_id)
     if parent is not None and parent.status == "completed":
+        parent = job_store.get(parent.id) or parent
         job_store.cache_results(parent.results)
         job_store.record_catch_all(parent)
         write_csv(parent)

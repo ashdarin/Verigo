@@ -134,3 +134,4 @@ class WorkerResultsRequest(BaseModel):
 
 class WorkerFailureRequest(BaseModel):
     error: str = Field(min_length=1, max_length=500)
+    lease_id: str = Field(min_length=8, max_length=64)

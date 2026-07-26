@@ -280,7 +280,8 @@ def main() -> None:
                 try:
                     request_json(
                         f"/api/workers/{WORKER_TARGET}/jobs/{job_id}/fail",
-                        {"error": f"{type(exc).__name__}: {exc}"[:500]},
+                        {"error": f"{type(exc).__name__}: {exc}"[:500],
+                         "lease_id": str(dict(job).get("lease_id") or "")},
                     )
                 except WorkerRequestError:
                     pass

@@ -11,9 +11,6 @@ from app.api.auth import auth_router
 from app.api.routes import router
 from app.config import BASE_DIR, settings
 from app.core.legacy import load_persistent_cache, save_persistent_cache
-from app.tasks.verification import requeue_recent_single_temporary_jobs
-from app.core.worker_lifecycle import worker_lifecycle
-from app.core.cloudshell_lifecycle import cloudshell_lifecycle
 from app.db.jobs import job_store
 from app.db.auth import auth_store
 from app.db.metrics import metrics_store
@@ -25,23 +22,15 @@ STATIC_DIR = BASE_DIR / "static"
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     settings.results_dir.mkdir(parents=True, exist_ok=True)
+    # Keep the public process ready to serve requests. Migrations, repairs, and
+    # remote-node supervision run as explicit maintenance services.
     job_store.initialize()
-    job_store.release_legacy_deferred_retries()
-    job_store.reconcile_aggregate_parents()
-    job_store.reconcile_failed_job_results()
-    job_store.clear_completed_retry_notices()
-    job_store.clear_dns_negative_cache()
-    requeue_recent_single_temporary_jobs()
     auth_store.initialize()
     metrics_store.initialize()
     load_persistent_cache()
-    worker_lifecycle.start()
-    cloudshell_lifecycle.start()
     try:
         yield
     finally:
-        cloudshell_lifecycle.stop()
-        worker_lifecycle.stop()
         save_persistent_cache()
 
 

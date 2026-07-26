@@ -54,7 +54,9 @@ if ! command -v aws >/dev/null && grep -q '^VERIGO_BACKUP_S3_BUCKET=.' /etc/veri
     apt-get update
     DEBIAN_FRONTEND=noninteractive apt-get install -y awscli
 fi
-systemctl start verigo-backup.service
+# Backups are independent of a code release.  Do not block availability on a
+# remote backup provider or package installation.
+systemctl start --no-block verigo-backup.service
 mkdir -p "$backup_dir"
 rsync -a --delete "$app_dir/app/" "$backup_dir/app/"
 rsync -a --delete "$app_dir/static/" "$backup_dir/static/"
@@ -85,6 +87,7 @@ install -m 644 "$app_dir/deploy/verigo-monitor.timer" /etc/systemd/system/verigo
 install -m 700 "$app_dir/deploy/verigo-retention.sh" /usr/local/sbin/verigo-retention
 install -m 644 "$app_dir/deploy/verigo-retention.service" /etc/systemd/system/verigo-retention.service
 install -m 644 "$app_dir/deploy/verigo-retention.timer" /etc/systemd/system/verigo-retention.timer
+install -m 644 "$app_dir/deploy/verigo-supervisor.service" /etc/systemd/system/verigo-supervisor.service
 if [[ ! -f /etc/verigo/backup.env ]]; then
     install -m 600 "$app_dir/deploy/verigo-backup.env.example" /etc/verigo/backup.env
 fi
@@ -134,11 +137,18 @@ fi
 
 set_application_owner
 chmod 600 /etc/verigo/verigo.env
-systemctl try-restart 'verigo-worker@*.service' || true
+# Migrate legacy snapshots before the restart. This is explicit and
+# idempotent, unlike the old startup reconciliation pass.
+set -a
+. /etc/verigo/verigo.env
+set +a
+PYTHONPATH="$app_dir" runuser -u verigo --preserve-environment -- \
+    "$app_dir/.venv/bin/python" -m app.maintenance migrate-results
 systemctl restart verigo
 
 for _ in {1..20}; do
     if curl -fsS http://127.0.0.1:8000/api/health >/dev/null; then
+        systemctl enable --now verigo-supervisor.service
         trap - ERR
         printf 'Verigo release %s health check passed\n' "$release_version"
         exit 0
