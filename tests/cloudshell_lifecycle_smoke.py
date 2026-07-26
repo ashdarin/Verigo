@@ -11,6 +11,7 @@ from app.core.cloudshell_lifecycle import CloudShellLifecycle
 command = CloudShellLifecycle._worker_command()
 assert ".gmail-worker.pid" in command
 assert "kill -0" in command
+assert "then kill" in command
 assert "pgrep" not in command
 assert ". .worker.env" in command
 assert "nohup .venv/bin/python" in command

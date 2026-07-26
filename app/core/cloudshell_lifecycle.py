@@ -103,14 +103,13 @@ class CloudShellLifecycle:
 
     @staticmethod
     def _worker_command() -> str:
-        """Start exactly one Gmail worker without conflating it with a QQ worker."""
+        """Replace a stale Gmail worker before starting the current protocol version."""
         return (
             "cd ~/verigo-worker && python3 -m venv .venv && "
             ".venv/bin/pip -q install 'dnspython>=2.6,<3' && "
             "pid_file=.gmail-worker.pid; "
-            "if test -s \"$pid_file\" && kill -0 \"$(cat \"$pid_file\")\" "
-            "2>/dev/null && tr '\\0' '\\n' < \"/proc/$(cat \"$pid_file\")/environ\" "
-            "| grep -qx 'VERIGO_REMOTE_WORKER_TARGET=gmail'; then exit 0; fi; "
+            "if test -s \"$pid_file\" && kill -0 \"$(cat \"$pid_file\")\" 2>/dev/null; "
+            "then kill \"$(cat \"$pid_file\")\" 2>/dev/null || true; sleep 1; fi; "
             "rm -f \"$pid_file\"; "
             "(set -a; . .worker.env; set +a; nohup .venv/bin/python -m "
             "app.tencent_qq_worker >/tmp/verigo-gmail-worker.log 2>&1 </dev/null & "
