@@ -328,6 +328,18 @@ def require_remote_worker(worker_target: str, token: str | None) -> str:
     execution_target = REMOTE_WORKERS.get(worker_target)
     if execution_target is None:
         raise HTTPException(status_code=404, detail="未知远程验证节点")
+    enabled = (
+        settings.tencent_qq_worker_enabled
+        if execution_target == "tencent_qq"
+        else settings.cloudstudio_domestic_worker_enabled
+        if execution_target == DOMESTIC_CLOUDSTUDIO_TARGET
+        else settings.gmail_worker_enabled
+    )
+    # A disabled target is a hard admission boundary. Existing remote processes
+    # may still be alive after a maintenance pause, but they cannot claim,
+    # heartbeat, or submit results until the operator explicitly re-enables it.
+    if not enabled:
+        raise HTTPException(status_code=503, detail="Remote verification node is disabled")
     configured_token = (
         settings.tencent_qq_worker_token
         if execution_target == "tencent_qq"
