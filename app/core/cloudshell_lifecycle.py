@@ -243,6 +243,7 @@ class CloudShellLifecycle:
                 "VERIGO_REMOTE_WORKER_SERVER=https://verigo.site",
                 f"VERIGO_REMOTE_WORKER_TOKEN={settings.gmail_worker_token}",
                 f"VERIGO_TENCENT_QQ_WORKER_ID={self._worker_id}",
+                f"VERIGO_CLOUDSHELL_MAX_WORKERS={settings.cloudshell_worker_max_workers}",
             )) + "\n"
             subprocess.run(base + ["cat > ~/verigo-worker/.worker.env && chmod 600 ~/verigo-worker/.worker.env"], input=environment_file.encode(), check=True, timeout=30)
             subprocess.run(base + [self._worker_command()], check=True, timeout=120)
