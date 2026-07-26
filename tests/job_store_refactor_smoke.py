@@ -64,6 +64,12 @@ second = store.claim_remote_lease("worker-b", "refactor-test", shard_size=2)
 assert second is not None and second.lease_id != first.lease_id
 assert not store.lease_valid(remote.id, "worker-a", first.lease_id)
 assert second.pending_indices == [0, 1]
+assert store.abandon_lease(remote.id, "worker-b", second.lease_id)
+
+third = store.claim_remote_lease("worker-c", "refactor-test", shard_size=1)
+assert third is not None and third.lease_id
+assert store.abandon_lease(remote.id, "worker-c", third.lease_id)
+assert store.get(remote.id).results[0]["progress_state"] == "pending"
 
 # Capacity is consumed by actual email slots, per outbound worker identity;
 # one 100-item lease cannot bypass a provider's configured limit.

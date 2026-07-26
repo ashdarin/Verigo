@@ -235,7 +235,7 @@ def _verify_job(job: dict[str, object], control: dict[str, object]) -> None:
                 break
     else:
         verifier = create_verifier(worker_count)
-        results = verifier.verify_batch_distributed(
+        raw_results = verifier.verify_batch_distributed(
             emails,
             num_processes=worker_count,
             result_callback=on_result,
@@ -243,6 +243,16 @@ def _verify_job(job: dict[str, object], control: dict[str, object]) -> None:
         )
         if stopped(job_id, control):
             return
+        # The verifier returns indexes relative to the leased shard. Result
+        # callbacks already map them, and the completion payload must do the
+        # same before the API validates the lease's global indexes.
+        results = []
+        for raw_result in raw_results:
+            result = dict(raw_result)
+            relative_index = int(result.get("original_index", 0))
+            if 0 <= relative_index < len(original_indices):
+                result["original_index"] = original_indices[relative_index]
+            results.append(result)
 
     if not stopped(job_id, control):
         payload: dict[str, object] = {"results": results}

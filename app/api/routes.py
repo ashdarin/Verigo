@@ -636,14 +636,15 @@ def fail_tencent_qq_job(
         return serialize_job(job)
     worker_name = (worker_id or "").strip()
     job = require_remote_job(job_id, worker_name, execution_target, payload.lease_id)
-    job.error = f"{remote_worker_label(execution_target)}失败: {payload.error}"
-    job.status = "failed"
-    job.finished_at = utc_now()
-    job_store.mark_unfinished_results_failed(job, job.error)
-    if job.retry_parent_id:
-        finish_background_retry_failure(job, payload.error)
+    if not job_store.abandon_lease(job.id, worker_name, payload.lease_id):
+        raise HTTPException(status_code=409, detail="Remote worker lease is no longer active")
+    job.error = f"{remote_worker_label(execution_target)} will retry: {payload.error}"
+    job.status = "queued"
+    job.worker_id = None
+    job.heartbeat_at = None
+    job_store.persist(job)
     sync_parent_job(job)
-    return serialize_job(job)
+    return serialize_job(job_store.get(job.id) or job)
 
 
 @router.post("/analytics/engage", status_code=204)

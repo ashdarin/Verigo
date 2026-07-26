@@ -924,6 +924,36 @@ class JobStore:
             connection.execute("DELETE FROM mx_scheduler_leases WHERE lease_id=?", (lease_id,))
         return bool(changed)
 
+    def abandon_lease(self, job_id: str, worker_id: str, lease_id: str) -> bool:
+        """Return only a failed worker's unfinished shard to the queue."""
+        self.initialize()
+        with self._lock, closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute("""
+                SELECT indices_json FROM job_leases
+                WHERE id=? AND job_id=? AND worker_id=? AND completed_at IS NULL
+            """, (lease_id, job_id, worker_id)).fetchone()
+            if row is None:
+                connection.rollback()
+                return False
+            indices = [int(index) for index in json.loads(row[0])]
+            if indices:
+                placeholders = ", ".join("?" for _ in indices)
+                connection.execute(
+                    f"UPDATE job_results SET progress_state='pending' WHERE job_id=? "
+                    f"AND original_index IN ({placeholders}) AND progress_state='verifying'",
+                    (job_id, *indices),
+                )
+            now = utc_now().isoformat()
+            connection.execute("UPDATE job_leases SET completed_at=? WHERE id=?", (now, lease_id))
+            connection.execute("DELETE FROM mx_scheduler_leases WHERE lease_id=?", (lease_id,))
+            connection.execute(
+                "UPDATE jobs SET status='queued', worker_id=NULL, heartbeat_at=NULL WHERE id=? AND status='running'",
+                (job_id,),
+            )
+            connection.commit()
+        return True
+
     def requeue_orphaned_results(self) -> int:
         """Release only rows whose worker lease is no longer active."""
         self.initialize()
