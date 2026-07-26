@@ -165,7 +165,7 @@ def retry_temporary_smtp_results(
     return [by_index[index] for index in sorted(by_index)]
 
 
-def verify_job(job: dict[str, object]) -> None:
+def _verify_job(job: dict[str, object], control: dict[str, object]) -> None:
     job_id = str(job["id"])
     items = job.get("items")
     if isinstance(items, list):
@@ -183,7 +183,6 @@ def verify_job(job: dict[str, object]) -> None:
     worker_count = max(1, min(int(job.get("worker_count", 1)), remote_limit))
     if any(is_qq_email(email) for email in emails):
         worker_count = 1
-    control: dict[str, object] = {"checked_at": 0.0, "stopped": False, "lease_id": lease_id}
     results: list[dict[str, Any]] = []
     def on_result(raw_result: dict[str, Any]) -> None:
         if stopped(job_id, control):
@@ -250,6 +249,34 @@ def verify_job(job: dict[str, object]) -> None:
         if lease_id:
             payload["lease_id"] = lease_id
         request_json(f"/api/workers/{WORKER_TARGET}/jobs/{job_id}/complete", payload)
+
+
+def verify_job(job: dict[str, object]) -> None:
+    """Keep a lease alive independently of SMTP result callbacks."""
+    job_id = str(job["id"])
+    lease_id = str(job.get("lease_id") or "")
+    control: dict[str, object] = {"checked_at": 0.0, "stopped": False, "lease_id": lease_id}
+    done = threading.Event()
+
+    def heartbeat() -> None:
+        while not done.wait(20):
+            try:
+                status = request_json(
+                    f"/api/workers/{WORKER_TARGET}/jobs/{job_id}/heartbeat?lease_id={lease_id}"
+                )
+                control["checked_at"] = time.monotonic()
+                control["stopped"] = bool(status.get("stop_requested"))
+            except WorkerRequestError as exc:
+                if not exc.retryable:
+                    print(f"Remote lease heartbeat failed for {job_id}: {exc}", file=sys.stderr, flush=True)
+
+    thread = threading.Thread(target=heartbeat, name=f"lease-heartbeat-{job_id}", daemon=True)
+    thread.start()
+    try:
+        _verify_job(job, control)
+    finally:
+        done.set()
+        thread.join(timeout=2)
 
 
 def main() -> None:

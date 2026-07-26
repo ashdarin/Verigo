@@ -148,7 +148,8 @@ systemctl restart verigo
 
 for _ in {1..20}; do
     if curl -fsS http://127.0.0.1:8000/api/health >/dev/null; then
-        systemctl enable --now verigo-supervisor.service
+        systemctl enable verigo-supervisor.service
+        systemctl restart verigo-supervisor.service
         trap - ERR
         printf 'Verigo release %s health check passed\n' "$release_version"
         exit 0

@@ -37,6 +37,11 @@ with patch.object(
             raise AssertionError("persistent connection failures must raise")
         assert run.call_count == worker.WORKER_REQUEST_ATTEMPTS
 
+job = {"id": "lease-heartbeat-smoke", "lease_id": "lease-token", "items": []}
+with patch.object(worker, "_verify_job") as verify:
+    worker.verify_job(job)
+    verify.assert_called_once()
+
 with patch.object(
     worker.subprocess,
     "run",
