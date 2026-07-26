@@ -89,6 +89,14 @@ REMOTE_WORKERS = {
 }
 
 
+def remote_worker_label(execution_target: str) -> str:
+    return {
+        "tencent_qq": "腾讯 QQ 验证节点",
+        DOMESTIC_CLOUDSTUDIO_TARGET: "国内邮箱 Cloud Studio 验证节点",
+        GMAIL_TARGET: "Google Cloud Shell 验证节点",
+    }.get(execution_target, "远程验证节点")
+
+
 def remote_worker_count(execution_target: str, requested_count: int) -> int:
     """Apply the target-specific concurrency cap before a remote job is queued."""
     limit = (
@@ -547,7 +555,7 @@ def fail_tencent_qq_job(
     if job.status == "stopped":
         return serialize_job(job)
     job = require_remote_job(job_id, (worker_id or "").strip(), execution_target)
-    job.error = f"腾讯 QQ 验证节点失败: {payload.error}"
+    job.error = f"{remote_worker_label(execution_target)}失败: {payload.error}"
     job.status = "failed"
     job.finished_at = utc_now()
     job_store.mark_unfinished_results_failed(job, job.error)

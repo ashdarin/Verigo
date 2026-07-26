@@ -248,11 +248,18 @@ class WorkerLifecycleCoordinator:
             <= timedelta(seconds=self.config.cloudstudio_worker_online_seconds)
         )
 
+    def _node_label(self) -> str:
+        return (
+            "国内邮箱 Cloud Studio 验证节点"
+            if self.target == DOMESTIC_CLOUDSTUDIO_TARGET
+            else "腾讯 QQ 验证节点"
+        )
+
     def _fail_waiting_jobs(self, message: str, stop_workspace: bool = False) -> None:
         failed = self.store.fail_queued_target(self.target, message)
         self.store.clear_wake_state(self.target)
         if failed:
-            logger.error("Failed %s queued QQ jobs: %s", failed, message)
+            logger.error("Failed %s queued %s jobs: %s", failed, self.target, message)
         if not stop_workspace:
             return
         try:
@@ -341,7 +348,7 @@ class WorkerLifecycleCoordinator:
         if runtime.wake_deadline_at:
             if now >= runtime.wake_deadline_at:
                 self._fail_waiting_jobs(
-                    "腾讯 QQ 验证节点启动超时，请稍后重新提交",
+                    f"{self._node_label()}启动超时，请稍后重新提交",
                     stop_workspace=True,
                 )
             elif runtime.last_wake_error == RESTART_WAITING_FOR_STOP:
@@ -387,7 +394,7 @@ class WorkerLifecycleCoordinator:
                 return
 
         if runtime.wake_attempts >= self.config.cloudstudio_wake_max_attempts:
-            self._fail_waiting_jobs("腾讯 QQ 验证节点启动失败，请稍后重新提交")
+            self._fail_waiting_jobs(f"{self._node_label()}启动失败，请稍后重新提交")
             return
 
         try:
@@ -419,11 +426,11 @@ class WorkerLifecycleCoordinator:
             )
             logger.error("Cloud Studio RunWorkspace failed: %s", exc)
             if updated.wake_attempts >= self.config.cloudstudio_wake_max_attempts:
-                self._fail_waiting_jobs("腾讯 QQ 验证节点启动失败，请稍后重新提交")
+                self._fail_waiting_jobs(f"{self._node_label()}启动失败，请稍后重新提交")
             else:
                 self.store.set_queued_target_message(
                     self.target,
-                    f"腾讯 QQ 验证节点启动失败，正在重试（{updated.wake_attempts}/"
+                    f"{self._node_label()}启动失败，正在重试（{updated.wake_attempts}/"
                     f"{self.config.cloudstudio_wake_max_attempts}）",
                 )
             return
@@ -434,7 +441,7 @@ class WorkerLifecycleCoordinator:
         self._ran_workspace = True
         self.store.record_wake_attempt(self.target, deadline=deadline, error=None)
         self.store.set_queued_target_message(
-            self.target, "腾讯 QQ 验证节点正在启动，请稍候"
+            self.target, f"{self._node_label()}正在启动，请稍候"
         )
         logger.info("Cloud Studio RunWorkspace accepted: request_id=%s", request_id)
         self._activate_workspace_session(
