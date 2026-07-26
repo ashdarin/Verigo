@@ -54,6 +54,7 @@ class JobResponse(BaseModel):
     retry_at: str | None = None
     stop_on_deliverable: bool = False
     qq_slow: bool = False
+    review_updated: bool = False
     access_token: str | None = None
 
 

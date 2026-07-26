@@ -59,6 +59,9 @@ from app.db.auth import auth_store
 from app.db.jobs import Job, job_store, utc_now
 from app.main import app
 from app.tasks.verification import (
+    finish_background_retry,
+    finish_background_retry_failure,
+    finish_initial_job,
     normalize_result,
     finalize_temporary_smtp_results,
     requeue_recent_single_temporary_jobs,
@@ -273,7 +276,63 @@ stale_single_temporary = Job(
 )
 job_store.add(stale_single_temporary)
 assert requeue_recent_single_temporary_jobs() == 1
-assert job_store.get(stale_single_temporary.id).status == "queued"
+assert job_store.get(stale_single_temporary.id).status == "completed"
+stale_retry_children = job_store.retry_children(stale_single_temporary.id)
+assert len(stale_retry_children) == 1
+assert stale_retry_children[0].status == "queued"
+assert stale_retry_children[0].deferred_retry_at is not None
+assert requeue_recent_single_temporary_jobs() == 0
+assert len(job_store.retry_children(stale_single_temporary.id)) == 1
+
+background_parent = Job(
+    id="smokebackground01", emails=["later@example.com"], worker_count=1,
+    status="running", results=[normalize_result({
+        "email": "later@example.com", "deliverable": None,
+        "smtp_result": "452 temporary SMTP failure",
+    })],
+)
+job_store.add(background_parent)
+finish_initial_job(background_parent)
+background_parent = job_store.get(background_parent.id)
+assert background_parent is not None and background_parent.status == "completed"
+assert background_parent.results[0]["retry_at"]
+assert serialize_job(background_parent).retry_at is not None
+background_retry = job_store.retry_children(background_parent.id)[0]
+background_retry.status = "completed"
+background_retry.results = [normalize_result({
+    "email": "later@example.com", "deliverable": False,
+    "smtp_result": "550 mailbox unavailable",
+})]
+job_store.persist(background_retry)
+finish_background_retry(background_retry)
+background_parent = job_store.get(background_parent.id)
+assert background_parent is not None
+assert background_parent.results[0]["deliverable"] is False
+assert background_parent.results[0]["retry_updated"] is True
+assert background_parent.results[0]["retry_state"] == "completed"
+assert "retry_at" not in background_parent.results[0]
+
+failed_retry_parent = Job(
+    id="smokebackground02", emails=["retry-failure@example.com"], worker_count=1,
+    status="completed", results=[normalize_result({
+        "email": "retry-failure@example.com", "deliverable": None,
+        "smtp_result": "452 temporary SMTP failure",
+        "retry_state": "scheduled", "retry_at": utc_now().isoformat(),
+    })],
+)
+job_store.add(failed_retry_parent)
+failed_retry = Job(
+    id="smokebackground03", emails=["retry-failure@example.com"], worker_count=1,
+    status="failed", retry_parent_id=failed_retry_parent.id,
+    temporary_retry_attempts=settings.temporary_smtp_immediate_retries,
+)
+job_store.add(failed_retry)
+finish_background_retry_failure(failed_retry, "worker unavailable")
+failed_retry_parent = job_store.get(failed_retry_parent.id)
+assert failed_retry_parent is not None
+assert failed_retry_parent.results[0]["deliverable"] is None
+assert failed_retry_parent.results[0]["retry_state"] == "failed"
+assert "retry_at" not in failed_retry_parent.results[0]
 
 completed_retry_notice = Job(
     id="smoketemp004", emails=["confirmed@example.com"], worker_count=1,

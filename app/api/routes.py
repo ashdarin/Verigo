@@ -6,6 +6,7 @@ import json
 import math
 import time
 import uuid
+from datetime import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Body, Depends, File, Header, HTTPException, Query, Request, UploadFile
@@ -58,8 +59,9 @@ from app.tasks.verification import (
     job_progress,
     normalize_result,
     finalize_temporary_smtp_results,
-    schedule_greylist_retry,
-    schedule_remote_temporary_retry,
+    finish_background_retry,
+    finish_background_retry_failure,
+    finish_initial_job,
     summarize,
     sync_parent_job,
     verification_filename,
@@ -358,6 +360,16 @@ def serialize_job(job: Job) -> JobResponse:
     is_done = job.status in {"completed", "stopped"}
     normalized_results = [normalize_result(result) for result in job.results]
     retry_at = job.deferred_retry_at
+    result_retries = []
+    for result in job.results:
+        if result.get("retry_state") != "scheduled" or not result.get("retry_at"):
+            continue
+        try:
+            result_retries.append(datetime.fromisoformat(str(result["retry_at"])))
+        except ValueError:
+            continue
+    if result_retries:
+        retry_at = min([retry_at, *result_retries] if retry_at else result_retries)
     if job.execution_target == "aggregate":
         child_retries = [
             child.deferred_retry_at for child in job_store.children(job.id)
@@ -383,6 +395,7 @@ def serialize_job(job: Job) -> JobResponse:
         retry_at=retry_at.isoformat() if retry_at else None,
         stop_on_deliverable=job.stop_on_deliverable,
         qq_slow=any(is_qq_email(email) for email in job.emails),
+        review_updated=any(result.get("retry_updated") for result in job.results),
         access_token=job.guest_token,
     )
 
@@ -507,23 +520,14 @@ def complete_tencent_qq_job(
         return serialize_job(job)
     job = require_remote_job(job_id, (worker_id or "").strip(), execution_target)
     merge_worker_results(job, payload.results)
-    if schedule_greylist_retry(job):
+    if job.retry_parent_id:
+        job.finished_at = utc_now()
+        job.error = None
+        job.status = "completed"
         job_store.persist(job)
-        sync_parent_job(job)
-        return serialize_job(job)
-    if schedule_remote_temporary_retry(job):
-        job_store.persist(job)
-        sync_parent_job(job)
-        return serialize_job(job)
-    finalize_temporary_smtp_results(job.results)
-    job_store.cache_results(job.results)
-    job_store.record_catch_all(job)
-    job.finished_at = utc_now()
-    write_csv(job)
-    job.error = None
-    job.status = "completed"
-    job_store.persist(job)
-    sync_parent_job(job)
+        finish_background_retry(job)
+    else:
+        finish_initial_job(job)
     return serialize_job(job)
 
 
@@ -546,6 +550,8 @@ def fail_tencent_qq_job(
     job.status = "failed"
     job.finished_at = utc_now()
     job_store.persist(job)
+    if job.retry_parent_id:
+        finish_background_retry_failure(job, payload.error)
     sync_parent_job(job)
     return serialize_job(job)
 
@@ -775,6 +781,18 @@ def get_job(
     guest_token: Annotated[str | None, Header(alias="X-Job-Token")] = None,
 ) -> JobResponse:
     return serialize_job(require_job_access(require_job(job_id), user, guest_token))
+
+
+@router.post("/jobs/{job_id}/reviewed", status_code=204)
+def mark_job_reviewed(
+    job_id: str,
+    user: Annotated[User | None, Depends(optional_user)],
+    guest_token: Annotated[str | None, Header(alias="X-Job-Token")] = None,
+) -> None:
+    job = require_job_access(require_job(job_id), user, guest_token)
+    for result in job.results:
+        result.pop("retry_updated", None)
+    job_store.persist(job)
 
 
 @router.post("/jobs/{job_id}/stop", response_model=JobResponse)

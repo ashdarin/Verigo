@@ -38,6 +38,7 @@ class Job:
     stop_on_deliverable: bool = False
     execution_target: str = "local"
     parent_id: str | None = None
+    retry_parent_id: str | None = None
     deferred_retry_at: datetime | None = None
     temporary_retry_attempts: int = 0
 
@@ -63,7 +64,7 @@ class JobStore:
         "id", "emails_json", "worker_count", "status", "created_at",
         "started_at", "finished_at", "error", "results_json", "csv_path",
         "owner_id", "guest_token_hash", "worker_id", "heartbeat_at", "stop_on_deliverable",
-        "execution_target", "parent_id",
+        "execution_target", "parent_id", "retry_parent_id",
         "deferred_retry_at", "temporary_retry_attempts",
     )
 
@@ -102,6 +103,7 @@ class JobStore:
             stop_on_deliverable=bool(row["stop_on_deliverable"]),
             execution_target=str(row["execution_target"] or "local"),
             parent_id=row["parent_id"],
+            retry_parent_id=row["retry_parent_id"],
             deferred_retry_at=(
                 datetime.fromisoformat(row["deferred_retry_at"])
                 if row["deferred_retry_at"] else None
@@ -135,17 +137,19 @@ class JobStore:
                         stop_on_deliverable INTEGER NOT NULL DEFAULT 0,
                         execution_target TEXT NOT NULL DEFAULT 'local',
                         parent_id TEXT,
+                        retry_parent_id TEXT,
                         deferred_retry_at TEXT,
                         temporary_retry_attempts INTEGER NOT NULL DEFAULT 0
                     )
                     """
                 )
                 existing = {row[1] for row in connection.execute("PRAGMA table_info(jobs)")}
-                for name, kind in (("owner_id", "TEXT"), ("guest_token_hash", "TEXT"), ("worker_id", "TEXT"), ("heartbeat_at", "TEXT"), ("stop_on_deliverable", "INTEGER NOT NULL DEFAULT 0"), ("execution_target", "TEXT NOT NULL DEFAULT 'local'"), ("parent_id", "TEXT"), ("deferred_retry_at", "TEXT"), ("temporary_retry_attempts", "INTEGER NOT NULL DEFAULT 0")):
+                for name, kind in (("owner_id", "TEXT"), ("guest_token_hash", "TEXT"), ("worker_id", "TEXT"), ("heartbeat_at", "TEXT"), ("stop_on_deliverable", "INTEGER NOT NULL DEFAULT 0"), ("execution_target", "TEXT NOT NULL DEFAULT 'local'"), ("parent_id", "TEXT"), ("retry_parent_id", "TEXT"), ("deferred_retry_at", "TEXT"), ("temporary_retry_attempts", "INTEGER NOT NULL DEFAULT 0")):
                     if name not in existing:
                         connection.execute(f"ALTER TABLE jobs ADD COLUMN {name} {kind}")
                 connection.execute("CREATE INDEX IF NOT EXISTS idx_jobs_queue ON jobs(status, created_at)")
                 connection.execute("CREATE INDEX IF NOT EXISTS idx_jobs_parent ON jobs(parent_id, created_at)")
+                connection.execute("CREATE INDEX IF NOT EXISTS idx_jobs_retry_parent ON jobs(retry_parent_id, created_at)")
                 connection.execute(
                     """
                     CREATE TABLE IF NOT EXISTS verification_cache (
@@ -287,6 +291,7 @@ class JobStore:
             int(job.stop_on_deliverable),
             job.execution_target,
             job.parent_id,
+            job.retry_parent_id,
             job.deferred_retry_at.isoformat() if job.deferred_retry_at else None,
             job.temporary_retry_attempts,
         )
@@ -296,9 +301,9 @@ class JobStore:
                 INSERT INTO jobs (
                     id, emails_json, worker_count, status, created_at, started_at, finished_at,
                     error, results_json, csv_path, owner_id, guest_token_hash, worker_id, heartbeat_at,
-                    stop_on_deliverable, execution_target, parent_id, deferred_retry_at,
+                    stop_on_deliverable, execution_target, parent_id, retry_parent_id, deferred_retry_at,
                     temporary_retry_attempts
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     emails_json=excluded.emails_json, worker_count=excluded.worker_count,
                     status=excluded.status, started_at=excluded.started_at,
@@ -308,6 +313,7 @@ class JobStore:
                     worker_id=excluded.worker_id, heartbeat_at=excluded.heartbeat_at,
                     stop_on_deliverable=excluded.stop_on_deliverable,
                     execution_target=excluded.execution_target, parent_id=excluded.parent_id,
+                    retry_parent_id=excluded.retry_parent_id,
                     deferred_retry_at=excluded.deferred_retry_at,
                     temporary_retry_attempts=excluded.temporary_retry_attempts
                 WHERE jobs.status != 'stopped' OR excluded.status = 'stopped'
@@ -327,7 +333,7 @@ class JobStore:
         self.initialize()
         with closing(self._connect()) as connection:
             rows = connection.execute(
-                f"SELECT {self._select_columns()} FROM jobs WHERE owner_id = ? AND parent_id IS NULL ORDER BY created_at DESC LIMIT ?",
+                f"SELECT {self._select_columns()} FROM jobs WHERE owner_id = ? AND parent_id IS NULL AND retry_parent_id IS NULL ORDER BY created_at DESC LIMIT ?",
                 (owner_id, limit),
             ).fetchall()
         return [self._job_from_row(row) for row in rows]
@@ -339,7 +345,7 @@ class JobStore:
             rows = connection.execute(
                 f"""SELECT {self._select_columns()} FROM jobs
                 WHERE status='completed' AND parent_id IS NULL AND execution_target != 'aggregate'
-                    AND created_at >= ? AND emails_json NOT LIKE '%,%'
+                    AND retry_parent_id IS NULL AND created_at >= ? AND emails_json NOT LIKE '%,%'
                 ORDER BY created_at""",
                 (since.isoformat(),),
             ).fetchall()
@@ -353,6 +359,26 @@ class JobStore:
                 (parent_id,),
             ).fetchall()
         return [self._job_from_row(row) for row in rows]
+
+    def retry_children(self, parent_id: str) -> list[Job]:
+        self.initialize()
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                f"SELECT {self._select_columns()} FROM jobs WHERE retry_parent_id=? ORDER BY created_at, id",
+                (parent_id,),
+            ).fetchall()
+        return [self._job_from_row(row) for row in rows]
+
+    def has_active_retry_child(self, parent_id: str) -> bool:
+        """Whether a deferred recheck is already queued or running for this task."""
+        self.initialize()
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                """SELECT 1 FROM jobs
+                WHERE retry_parent_id=? AND status IN ('queued', 'running') LIMIT 1""",
+                (parent_id,),
+            ).fetchone()
+        return row is not None
 
     def refresh_parent(self, parent_id: str) -> Job | None:
         """Merge child results into the user-visible parent task."""
@@ -492,7 +518,13 @@ class JobStore:
         self.initialize()
         now = utc_now().isoformat()
         with closing(self._connect()) as connection:
-            return connection.execute(
+            parents = [
+                row[0] for row in connection.execute(
+                    "SELECT DISTINCT parent_id FROM jobs WHERE execution_target=? AND status='queued' AND parent_id IS NOT NULL",
+                    (target,),
+                ).fetchall()
+            ]
+            failed = connection.execute(
                 """
                 UPDATE jobs SET status='failed', error=?, finished_at=?,
                     worker_id=NULL, heartbeat_at=NULL
@@ -500,6 +532,22 @@ class JobStore:
                 """,
                 (message, now, target),
             ).rowcount
+        for parent_id in parents:
+            self.refresh_parent(str(parent_id))
+        return failed
+
+    def reconcile_aggregate_parents(self) -> int:
+        """Repair visible parent states after worker-side failures or restarts."""
+        self.initialize()
+        with closing(self._connect()) as connection:
+            parent_ids = [
+                str(row[0]) for row in connection.execute(
+                    "SELECT id FROM jobs WHERE execution_target='aggregate' AND status IN ('queued', 'running')"
+                ).fetchall()
+            ]
+        for parent_id in parent_ids:
+            self.refresh_parent(parent_id)
+        return len(parent_ids)
 
     @staticmethod
     def _runtime_from_row(target: str, row: tuple[Any, ...] | None) -> WorkerRuntime:

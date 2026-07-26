@@ -20,7 +20,6 @@ const state = {
   notifications: [],
   notificationTimer: null,
   adminAccountOffset: 0,
-  completedTemporaryPolls: 0,
   retryCountdownTimer: null,
 };
 
@@ -471,28 +470,17 @@ async function pollJob() {
     await loadResults();
     if (job.status === "completed" || job.status === "stopped") {
       if (state.user) await loadRecentJobs();
-      if (job.status === "completed" && hasUnresolvedTemporarySmtpResult() && state.completedTemporaryPolls < 45) {
-        state.completedTemporaryPolls += 1;
+      if (job.status === "completed" && job.retry_at) {
         schedulePoll(2000);
       } else {
-        state.completedTemporaryPolls = 0;
+        clearInterval(state.retryCountdownTimer);
       }
     } else if (job.status !== "failed") {
-      state.completedTemporaryPolls = 0;
       schedulePoll();
     }
   } catch (error) {
     errorBox.textContent = error.message;
   }
-}
-
-function hasUnresolvedTemporarySmtpResult() {
-  return state.results.some((item) => {
-    const detail = `${item.smtp_result || ""} ${item.message || ""}`;
-    return !item.temporary_retries_exhausted
-      && /\b(?:421|450|451|452)\b/.test(detail)
-      && /(临时|暂时|重试|灰名单)/.test(detail);
-  });
 }
 
 async function loadResults() {
@@ -883,7 +871,14 @@ async function loadRecentJobs() {
       name.textContent = formatJobName(job.finished_at || job.started_at || job.created_at);
       const meta = document.createElement("small");
       meta.textContent = `${VerigoI18n.text(statusLabels[job.status] || job.status)} · ${job.total}`;
-      button.append(name, meta);
+      button.append(name);
+      if (job.review_updated) {
+        const dot = document.createElement("i");
+        dot.className = "recent-job-update";
+        dot.setAttribute("aria-label", VerigoI18n.text("复核结果已更新"));
+        button.append(dot);
+      }
+      button.append(meta);
       button.addEventListener("click", async () => {
         clearTimeout(state.pollTimer);
         state.guestToken = null;
@@ -894,6 +889,10 @@ async function loadRecentJobs() {
         showJob(job);
         renderResults();
         await loadResults();
+        if (job.review_updated) {
+          await api(`/api/jobs/${job.id}/reviewed`, { method: "POST" });
+          await loadRecentJobs();
+        }
         if (job.status !== "completed" && job.status !== "failed") schedulePoll(300);
       });
       container.append(button);
@@ -989,6 +988,7 @@ async function loadNotifications() {
     el("notification-count").textContent = payload.unread_count > 99 ? "99+" : String(payload.unread_count);
     el("notification-count").classList.toggle("hidden", !payload.unread_count);
     renderNotifications();
+    await loadRecentJobs();
   } catch (_) {
     state.notifications = [];
   }

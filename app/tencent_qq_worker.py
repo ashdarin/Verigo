@@ -152,50 +152,12 @@ def verify_job(job: dict[str, object]) -> None:
         worker_count = 1
     control: dict[str, object] = {"checked_at": 0.0, "stopped": False}
     results: list[dict[str, Any]] = []
-    retry_threads: list[threading.Thread] = []
-    retry_results: dict[int, dict[str, Any]] = {}
-    retry_lock = threading.Lock()
-
-    def retry_one(initial: dict[str, Any]) -> None:
-        index = int(initial["original_index"])
-        current = initial
-        for attempt in range(1, settings.temporary_smtp_immediate_retries + 1):
-            retry_at = time.time() + settings.temporary_smtp_retry_seconds
-            current.update({
-                "retry_state": "scheduled", "retry_attempt": attempt,
-                "retry_max_attempts": settings.temporary_smtp_immediate_retries,
-                "retry_at": __import__("datetime").datetime.fromtimestamp(retry_at, __import__("datetime").timezone.utc).isoformat(),
-            })
-            report_result(job_id, current)
-            time.sleep(settings.temporary_smtp_retry_seconds)
-            if stopped(job_id, control):
-                return
-            retried = create_verifier(1).verify_batch_distributed([emails[index]], num_processes=1)
-            if not retried:
-                continue
-            current = dict(retried[0])
-            current["original_index"] = index
-            if not is_retryable_smtp_result(current) or is_smtp_greylisted(current):
-                current.pop("retry_at", None)
-                current["retry_state"] = "completed"
-                current["temporary_smtp_retry_count"] = attempt
-                report_result(job_id, current)
-                break
-        else:
-            current["temporary_smtp_retry_count"] = settings.temporary_smtp_immediate_retries
-            current["retry_state"] = "exhausted"
-            current.pop("retry_at", None)
-            report_result(job_id, current)
-        with retry_lock:
-            retry_results[index] = current
-
     def on_result(raw_result: dict[str, Any]) -> None:
         if stopped(job_id, control):
             return
         result = dict(raw_result)
         needs_retry = (
-            not any(is_qq_email(email) for email in emails)
-            and is_retryable_smtp_result(result)
+            is_retryable_smtp_result(result)
             and not is_smtp_greylisted(result)
         )
         if needs_retry:
@@ -211,10 +173,6 @@ def verify_job(job: dict[str, object]) -> None:
         results.append(result)
         # The first visible 4xx result must already include its retry schedule.
         report_result(job_id, result)
-        if needs_retry:
-            thread = threading.Thread(target=retry_one, args=(result,), daemon=True)
-            retry_threads.append(thread)
-            thread.start()
 
     if bool(job.get("stop_on_deliverable")):
         verifier = create_verifier(1)
@@ -251,14 +209,6 @@ def verify_job(job: dict[str, object]) -> None:
         if stopped(job_id, control):
             return
 
-    if retry_threads:
-        for thread in retry_threads:
-            thread.join()
-        by_index = {int(result.get("original_index", index)): result for index, result in enumerate(results)}
-        by_index.update(retry_results)
-        results = [by_index[index] for index in sorted(by_index)]
-    if not stopped(job_id, control) and any(is_qq_email(email) for email in emails):
-        results = retry_temporary_smtp_results(job_id, emails, results, control)
     if not stopped(job_id, control):
         request_json(f"/api/workers/{WORKER_TARGET}/jobs/{job_id}/complete", {"results": results})
 

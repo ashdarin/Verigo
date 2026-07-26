@@ -29,6 +29,7 @@ from app.core.worker_lifecycle import (
 )
 from app.core.cloudshell_lifecycle import GMAIL_TARGET, notify_cloudshell_job_queued
 from app.db.jobs import Job, job_store, utc_now
+from app.db.auth import auth_store
 
 
 logger = logging.getLogger(__name__)
@@ -86,6 +87,13 @@ def normalize_result(result: dict[str, Any]) -> dict[str, Any]:
         if isinstance(checks, dict):
             checks["smtp"] = False
         display_detail = f"{code} 收件箱容量已满，当前无法接收邮件" if code else "收件箱容量已满，当前无法接收邮件"
+    elif result.get("temporary_retries_exhausted"):
+        result["deliverable"] = False
+        result["valid"] = False
+        checks = result.get("checks")
+        if isinstance(checks, dict):
+            checks["smtp"] = False
+        display_detail = detail
     elif smtp_permanent_status({"smtp_result": detail}):
         result["deliverable"] = False
         result["valid"] = False
@@ -321,6 +329,177 @@ def sync_parent_job(job: Job) -> Job | None:
     return parent
 
 
+def _notify_retry_target(job: Job) -> None:
+    if job.execution_target == TENCENT_QQ_TARGET:
+        worker_lifecycle.notify_job_queued()
+    elif job.execution_target == DOMESTIC_CLOUDSTUDIO_TARGET:
+        domestic_worker_lifecycle.notify_job_queued()
+    elif job.execution_target == GMAIL_TARGET:
+        notify_cloudshell_job_queued()
+
+
+def enqueue_background_retry(
+    parent: Job,
+    source: Job,
+    emails: list[str],
+    attempt: int,
+) -> None:
+    """Queue a delayed recheck without changing the completed user task state."""
+    if not emails:
+        return
+    if job_store.has_active_retry_child(parent.id):
+        return
+    retry_at = utc_now() + timedelta(seconds=settings.temporary_smtp_retry_seconds)
+    email_keys = {email.lower() for email in emails}
+    for result in parent.results:
+        if str(result.get("email", "")).lower() not in email_keys:
+            continue
+        result["retry_state"] = "scheduled"
+        result["retry_attempt"] = attempt
+        result["retry_max_attempts"] = settings.temporary_smtp_immediate_retries
+        result["retry_at"] = retry_at.isoformat()
+    job_store.persist(parent)
+    retry_job = Job(
+        id=uuid.uuid4().hex[:12],
+        emails=emails,
+        worker_count=source.worker_count,
+        owner_id=parent.owner_id,
+        execution_target=source.execution_target,
+        retry_parent_id=parent.id,
+        deferred_retry_at=retry_at,
+        temporary_retry_attempts=attempt,
+    )
+    job_store.add(retry_job)
+    _notify_retry_target(retry_job)
+
+
+def _clear_retry_metadata(result: dict[str, Any], state: str = "completed") -> None:
+    """A finished recheck must not remain visible as an unresolved 4xx result."""
+    result.pop("retry_at", None)
+    result["retry_state"] = state
+    result.pop("retry_attempt", None)
+    result.pop("retry_max_attempts", None)
+
+
+def finish_initial_job(job: Job) -> Job:
+    """Complete the user task immediately and hand transient results to idle workers."""
+    job.finished_at = utc_now()
+    write_csv(job)
+    job.error = None
+    job.status = "completed"
+    job_store.persist(job)
+    visible = sync_parent_job(job) if job.parent_id else job
+    visible = visible or job
+    retry_emails = [
+        str(result["email"])
+        for result in visible.results
+        if result.get("email")
+        and is_retryable_smtp_result(result)
+        and not result.get("greylist_retry_exhausted")
+    ]
+    enqueue_background_retry(visible, job, retry_emails, 1)
+    if visible.status == "completed":
+        job_store.cache_results(visible.results)
+        job_store.record_catch_all(visible)
+        write_csv(visible)
+        job_store.persist(visible)
+    return visible
+
+
+def finish_background_retry(job: Job) -> Job | None:
+    """Merge one deferred retry pass into its original, already-completed task."""
+    if not job.retry_parent_id:
+        return None
+    parent = job_store.get(job.retry_parent_id)
+    if parent is None:
+        return None
+    existing = {
+        str(result.get("email", "")).lower(): dict(result)
+        for result in parent.results if result.get("email")
+    }
+    next_retry: list[str] = []
+    changed = 0
+    for raw_result in job.results:
+        result = normalize_result(raw_result)
+        email = str(result.get("email", ""))
+        previous = existing.get(email.lower(), {})
+        if is_retryable_smtp_result(result):
+            if job.temporary_retry_attempts >= settings.temporary_smtp_immediate_retries:
+                finalize_temporary_smtp_results([result])
+                _clear_retry_metadata(result)
+            else:
+                next_retry.append(email)
+        else:
+            _clear_retry_metadata(result)
+        terminal = email not in next_retry
+        if terminal and (
+            result.get("deliverable") != previous.get("deliverable")
+            or previous.get("retry_state") == "scheduled"
+        ):
+            changed += 1
+            result["retry_updated"] = True
+        existing[email.lower()] = result
+    parent.results = [
+        existing[email.lower()] for email in parent.emails if email.lower() in existing
+    ]
+    job_store.cache_results(parent.results)
+    job_store.record_catch_all(parent)
+    write_csv(parent)
+    job_store.persist(parent)
+    if next_retry:
+        enqueue_background_retry(parent, job, next_retry, job.temporary_retry_attempts + 1)
+    if changed and parent.owner_id:
+        auth_store.create_notification(
+            parent.owner_id,
+            "verification_review",
+            "任务复核结果已更新",
+            f"{changed} 个邮箱的复核结果已更新",
+        )
+    return parent
+
+
+def finish_background_retry_failure(job: Job, error: str) -> Job | None:
+    """Keep an initial task complete when a deferred worker pass itself fails."""
+    if not job.retry_parent_id:
+        return None
+    parent = job_store.get(job.retry_parent_id)
+    if parent is None:
+        return None
+
+    affected = {email.lower() for email in job.emails}
+    if job.temporary_retry_attempts < settings.temporary_smtp_immediate_retries:
+        enqueue_background_retry(
+            parent, job, job.emails, job.temporary_retry_attempts + 1
+        )
+        return parent
+
+    changed = 0
+    for result in parent.results:
+        if str(result.get("email", "")).lower() not in affected:
+            continue
+        if not is_retryable_smtp_result(result):
+            continue
+        _clear_retry_metadata(result, "failed")
+        result["deliverable"] = None
+        result["valid"] = True
+        result["smtp_result"] = "邮件服务器暂时无法复核，最终状态仍待确认"
+        result["message"] = "邮件服务器暂时无法复核，最终状态仍待确认"
+        result["retry_updated"] = True
+        changed += 1
+    job_store.cache_results(parent.results)
+    write_csv(parent)
+    job_store.persist(parent)
+    if changed and parent.owner_id:
+        auth_store.create_notification(
+            parent.owner_id,
+            "verification_review",
+            "任务复核未完成",
+            f"{changed} 个邮箱暂时无法完成复核，最终状态仍待确认。",
+        )
+    logger.warning("Deferred retry %s failed: %s", job.id, error)
+    return parent
+
+
 def verify_until_deliverable(
     job: Job, cached_by_email: dict[str, dict[str, Any]]
 ) -> dict[int, dict[str, Any]]:
@@ -501,6 +680,8 @@ def requeue_recent_single_temporary_jobs() -> int:
     """Repair completed single checks left in a temporary state by an older worker."""
     repaired = 0
     for job in job_store.recent_completed_single_jobs(utc_now() - timedelta(hours=24)):
+        if job_store.has_active_retry_child(job.id):
+            continue
         normalized = [normalize_result(result) for result in job.results]
         pending = [
             result for result in normalized
@@ -511,14 +692,13 @@ def requeue_recent_single_temporary_jobs() -> int:
         if not pending:
             continue
         job.results = normalized
-        job.status = "queued"
-        job.finished_at = None
-        job.error = "检测到未完成的 SMTP 临时结果，已恢复自动重试"
-        job.worker_id = None
-        job.heartbeat_at = utc_now()
-        job.deferred_retry_at = None
-        job.temporary_retry_attempts = 0
         job_store.persist(job)
+        enqueue_background_retry(
+            job,
+            job,
+            [str(result["email"]) for result in pending if result.get("email")],
+            1,
+        )
         repaired += 1
     if repaired:
         logger.info("Requeued %s completed single temporary SMTP jobs", repaired)
@@ -587,6 +767,16 @@ def run_job(job: Job) -> None:
                 relative_index = int(result.get("original_index", 0))
                 result["original_index"] = missing_indices[relative_index]
                 by_index[result["original_index"]] = normalize_result(result)
+                if is_retryable_smtp_result(by_index[result["original_index"]]):
+                    retry_at = utc_now() + timedelta(
+                        seconds=settings.temporary_smtp_retry_seconds
+                    )
+                    by_index[result["original_index"]].update({
+                        "retry_state": "scheduled",
+                        "retry_attempt": 1,
+                        "retry_max_attempts": settings.temporary_smtp_immediate_retries,
+                        "retry_at": retry_at.isoformat(),
+                    })
                 now = time.monotonic()
                 if len(by_index) % 5 == 0 or now - last_persist >= 1.0:
                     job.results = [by_index[index] for index in sorted(by_index)]
@@ -609,23 +799,22 @@ def run_job(job: Job) -> None:
                 by_index[result["original_index"]] = normalize_result(result)
 
         job.results = [by_index[index] for index in sorted(by_index)]
-        if schedule_greylist_retry(job):
-            return
-        retry_temporary_smtp_results(job, by_index)
-
-        job.results = [by_index[index] for index in sorted(by_index)]
-        finalize_temporary_smtp_results(job.results)
-        job_store.cache_results(job.results)
-        job_store.record_catch_all(job)
-        job.finished_at = utc_now()
-        write_csv(job)
-        job.error = None
-        job.status = "completed"
+        if job.retry_parent_id:
+            job.finished_at = utc_now()
+            job.error = None
+            job.status = "completed"
+            job_store.persist(job)
+            finish_background_retry(job)
+        else:
+            finish_initial_job(job)
     except Exception as exc:
         logger.exception("Verification job %s failed", job.id)
         job.error = "任务执行失败，请稍后重新提交"
         job.status = "failed"
         job.finished_at = utc_now()
+        if job.retry_parent_id:
+            job_store.persist(job)
+            finish_background_retry_failure(job, str(exc))
     finally:
         job.verifier = None
         job.heartbeat_at = utc_now()
