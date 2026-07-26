@@ -188,10 +188,14 @@ class JobStore:
                 """)
                 connection.execute("""
                     CREATE TABLE IF NOT EXISTS mx_scheduler_leases (
-                        lease_id TEXT NOT NULL, mx_key TEXT NOT NULL, expires_at TEXT NOT NULL,
+                        lease_id TEXT NOT NULL, mx_key TEXT NOT NULL, slots INTEGER NOT NULL DEFAULT 1,
+                        expires_at TEXT NOT NULL,
                         PRIMARY KEY (lease_id, mx_key)
                     )
                 """)
+                mx_lease_columns = {row[1] for row in connection.execute("PRAGMA table_info(mx_scheduler_leases)")}
+                if "slots" not in mx_lease_columns:
+                    connection.execute("ALTER TABLE mx_scheduler_leases ADD COLUMN slots INTEGER NOT NULL DEFAULT 1")
                 connection.execute("""
                     CREATE TABLE IF NOT EXISTS scheduler_owner_turns (
                         target TEXT NOT NULL, owner_key TEXT NOT NULL, last_claimed_at TEXT NOT NULL,
@@ -808,21 +812,20 @@ class JobStore:
                     AND heartbeat_at >= ?
             """, (job.id, stale.isoformat())) for index in json.loads(raw)}
             active_by_key: dict[str, int] = {}
-            for key, count in connection.execute("""
-                SELECT mx_key, COUNT(*) FROM mx_scheduler_leases WHERE expires_at >= ? GROUP BY mx_key
+            for key, slots in connection.execute("""
+                SELECT mx_key, SUM(slots) FROM mx_scheduler_leases WHERE expires_at >= ? GROUP BY mx_key
             """, (now.isoformat(),)):
-                active_by_key[str(key)] = int(count)
-            indices, mx_keys = [], []
+                active_by_key[str(key)] = int(slots)
+            indices, mx_slots = [], {}
             for index, email in connection.execute("""
                 SELECT original_index, email FROM job_results WHERE job_id=?
                     AND progress_state='pending' ORDER BY original_index
             """, (job.id,)):
-                mx_key = self._scheduler_mx_key(str(email))
+                mx_key = self._scheduler_mx_key(str(email), worker_id)
                 if index in leased or active_by_key.get(mx_key, 0) >= self._scheduler_mx_capacity(mx_key):
                     continue
                 indices.append(int(index))
-                if mx_key not in mx_keys:
-                    mx_keys.append(mx_key)
+                mx_slots[mx_key] = mx_slots.get(mx_key, 0) + 1
                 active_by_key[mx_key] = active_by_key.get(mx_key, 0) + 1
                 if len(indices) >= max(1, shard_size):
                     break
@@ -841,7 +844,10 @@ class JobStore:
                 (job.id, *indices),
             )
             expires = (now + timedelta(seconds=settings.worker_lease_seconds)).isoformat()
-            connection.executemany("INSERT INTO mx_scheduler_leases(lease_id, mx_key, expires_at) VALUES (?, ?, ?)", [(lease_id, key, expires) for key in mx_keys])
+            connection.executemany(
+                "INSERT INTO mx_scheduler_leases(lease_id, mx_key, slots, expires_at) VALUES (?, ?, ?, ?)",
+                [(lease_id, key, slots, expires) for key, slots in mx_slots.items()],
+            )
             connection.execute("""
                 UPDATE jobs SET status='running', worker_id=?, started_at=COALESCE(started_at, ?),
                     heartbeat_at=?, deferred_retry_at=NULL, error=NULL WHERE id=?
@@ -853,19 +859,20 @@ class JobStore:
         return job
 
     @staticmethod
-    def _scheduler_mx_key(email: str) -> str:
+    def _scheduler_mx_key(email: str, worker_id: str) -> str:
         domain = email.rsplit("@", 1)[-1].lower()
         if domain in {"gmail.com", "googlemail.com"}:
-            return "gmail"
+            return f"gmail:{worker_id}"
         if domain in {"outlook.com", "hotmail.com", "live.com", "msn.com"}:
-            return "microsoft"
-        return domain
+            return f"microsoft:{worker_id}"
+        return f"domain:{domain}:{worker_id}"
 
     @staticmethod
     def _scheduler_mx_capacity(mx_key: str) -> int:
-        if mx_key == "gmail":
+        provider = mx_key.split(":", 1)[0]
+        if provider == "gmail":
             return settings.scheduler_gmail_concurrency
-        if mx_key == "microsoft":
+        if provider == "microsoft":
             return settings.scheduler_microsoft_concurrency
         return settings.scheduler_default_domain_concurrency
 

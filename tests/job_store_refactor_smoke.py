@@ -65,4 +65,10 @@ assert second is not None and second.lease_id != first.lease_id
 assert not store.lease_valid(remote.id, "worker-a", first.lease_id)
 assert second.pending_indices == [0, 1]
 
+# Capacity is consumed by actual email slots, per outbound worker identity;
+# one 100-item lease cannot bypass a provider's configured limit.
+assert store._scheduler_mx_key("person@gmail.com", "node-a") != store._scheduler_mx_key(
+    "person@gmail.com", "node-b"
+)
+
 print("job store refactor smoke: ok")
