@@ -237,7 +237,10 @@ class CloudShellLifecycle:
             logger.info("Cloud Shell Gmail worker bootstrap completed")
         except Exception as exc:
             logger.exception("Cloud Shell Gmail worker bootstrap failed: %s", exc)
-            job_store.fail_queued_target(GMAIL_TARGET, "Gmail 验证节点启动失败，请稍后重新提交")
+            job_store.set_queued_target_message(
+                GMAIL_TARGET,
+                "Gmail 验证节点启动失败，正在重试",
+            )
         finally:
             self._lock.release()
 

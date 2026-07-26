@@ -156,6 +156,24 @@ legacy_failed_progress_job = job_store.get(legacy_failed_progress_job.id)
 assert legacy_failed_progress_job is not None
 assert legacy_failed_progress_job.results[0]["progress_state"] == "failed"
 
+completed_result_job = Job(
+    id="completed-result-preserved",
+    emails=["completed@example.com", "pending@example.com"],
+    worker_count=1,
+    status="failed",
+    results=[
+        {"email": "completed@example.com", "valid": True, "deliverable": True},
+        {"email": "pending@example.com", "progress_state": "pending"},
+    ],
+)
+job_store.add(completed_result_job)
+job_store.mark_unfinished_results_failed(completed_result_job, "worker failed")
+preserved = job_store.get(completed_result_job.id)
+assert preserved is not None
+assert preserved.results[0]["valid"] is True
+assert preserved.results[0]["deliverable"] is True
+assert preserved.results[1]["progress_state"] == "failed"
+
 
 assert tencent_qq_target(["person@qq.com"], "smoke@example.com") == "tencent_qq"
 assert tencent_qq_target(["person@qq.com"], "other@example.com") == "local"

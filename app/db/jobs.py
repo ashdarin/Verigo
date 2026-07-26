@@ -585,7 +585,7 @@ class JobStore:
             if result is None:
                 result = {"email": email, "original_index": index}
                 job.results.append(result)
-            if result.get("progress_state") not in {None, "pending", "verifying"}:
+            elif result.get("progress_state") not in {"pending", "verifying"}:
                 continue
             result.update({
                 "progress_state": "failed",

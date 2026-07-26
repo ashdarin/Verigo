@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -65,8 +66,11 @@ def request_json(path: str, payload: dict[str, object] | None = None) -> dict[st
             )
             if not response.returncode:
                 return json.loads(response.stdout)
-            retryable = response.returncode in TRANSIENT_CURL_EXIT_CODES
             message = response.stderr.strip() or "curl request failed"
+            retryable = response.returncode in TRANSIENT_CURL_EXIT_CODES or bool(
+                response.returncode == 22
+                and re.search(r"returned error: (408|429|500|502|503|504)\b", message)
+            )
         except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError) as exc:
             retryable = True
             message = str(exc)

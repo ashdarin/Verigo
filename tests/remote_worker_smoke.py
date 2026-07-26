@@ -37,4 +37,21 @@ with patch.object(
             raise AssertionError("persistent connection failures must raise")
         assert run.call_count == worker.WORKER_REQUEST_ATTEMPTS
 
+with patch.object(
+    worker.subprocess,
+    "run",
+    return_value=SimpleNamespace(
+        returncode=22,
+        stderr="curl: (22) The requested URL returned error: 502",
+        stdout="",
+    ),
+):
+    with patch.object(worker.time, "sleep"):
+        try:
+            worker.request_json("/api/workers/gmail/jobs/smoke/results")
+        except worker.WorkerRequestError as error:
+            assert error.retryable is True
+        else:
+            raise AssertionError("HTTP 502 must be treated as a transient worker outage")
+
 print("remote worker smoke: ok")
