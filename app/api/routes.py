@@ -4,6 +4,7 @@ import asyncio
 import hmac
 import json
 import math
+import threading
 import time
 import uuid
 from datetime import datetime
@@ -87,6 +88,32 @@ REMOTE_WORKERS = {
     "cloudstudio-domestic": DOMESTIC_CLOUDSTUDIO_TARGET,
     "gmail": "gmail",
 }
+REMOTE_RESULT_BATCH_SIZE = 25
+_remote_result_batches: dict[tuple[str, str], list[dict[str, object]]] = {}
+_remote_result_batches_lock = threading.Lock()
+
+
+def buffer_remote_results(
+    job_id: str,
+    worker_id: str,
+    results: list[dict[str, object]],
+    *,
+    force: bool = False,
+) -> list[dict[str, object]]:
+    """Return a durable-sized batch without writing a full job JSON per result."""
+    key = (job_id, worker_id)
+    with _remote_result_batches_lock:
+        batch = _remote_result_batches.setdefault(key, [])
+        batch.extend(dict(result) for result in results)
+        if not force and len(batch) < REMOTE_RESULT_BATCH_SIZE:
+            return []
+        return _remote_result_batches.pop(key)
+
+
+def discard_buffered_remote_results(job_id: str) -> None:
+    with _remote_result_batches_lock:
+        for key in [key for key in _remote_result_batches if key[0] == job_id]:
+            del _remote_result_batches[key]
 
 
 def remote_worker_label(execution_target: str) -> str:
@@ -485,6 +512,7 @@ def heartbeat_tencent_qq_job(
     if job.execution_target != execution_target:
         raise HTTPException(status_code=409, detail="不是腾讯 QQ 验证节点任务")
     if job.status == "stopped":
+        discard_buffered_remote_results(job.id)
         return {"status": "stopped", "stop_requested": True}
     job = require_remote_job(job_id, (worker_id or "").strip(), execution_target)
     job_store.heartbeat(job)
@@ -505,12 +533,20 @@ def report_tencent_qq_results(
         raise HTTPException(status_code=409, detail="不是腾讯 QQ 验证节点任务")
     if job.status == "stopped":
         return {"status": "stopped", "stop_requested": True}
-    job = require_remote_job(job_id, (worker_id or "").strip(), execution_target)
-    merge_worker_results(job, payload.results)
-    job_store.persist(job)
+    worker_name = (worker_id or "").strip()
+    job = require_remote_job(job_id, worker_name, execution_target)
+    results_to_persist = buffer_remote_results(job.id, worker_name, payload.results)
+    if results_to_persist:
+        merge_worker_results(job, results_to_persist)
+        job_store.persist(job)
+        sync_parent_job(job)
     job_store.heartbeat(job)
-    sync_parent_job(job)
-    return {"status": job.status, "stop_requested": False, "completed": len(job.results)}
+    return {
+        "status": job.status,
+        "stop_requested": False,
+        "accepted": len(payload.results),
+        "persisted": len(results_to_persist),
+    }
 
 
 @router.post("/workers/{worker_target}/jobs/{job_id}/complete", response_model=JobResponse)
@@ -526,9 +562,14 @@ def complete_tencent_qq_job(
     if job.execution_target != execution_target:
         raise HTTPException(status_code=409, detail="不是腾讯 QQ 验证节点任务")
     if job.status == "stopped":
+        discard_buffered_remote_results(job.id)
         return serialize_job(job)
-    job = require_remote_job(job_id, (worker_id or "").strip(), execution_target)
-    merge_worker_results(job, payload.results)
+    worker_name = (worker_id or "").strip()
+    job = require_remote_job(job_id, worker_name, execution_target)
+    merge_worker_results(
+        job,
+        buffer_remote_results(job.id, worker_name, payload.results, force=True),
+    )
     if job.retry_parent_id:
         job.finished_at = utc_now()
         job.error = None

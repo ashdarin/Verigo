@@ -35,6 +35,7 @@ from openpyxl import Workbook
 
 import app.api.auth as auth_api
 from app.api.routes import (
+    REMOTE_RESULT_BATCH_SIZE,
     email_execution_target,
     gmail_target,
     remote_worker_count,
@@ -96,6 +97,44 @@ claimed_progress_job = job_store.claim_next("progress-worker", "progress-smoke")
 assert claimed_progress_job is not None
 assert all(item["progress_state"] == "verifying" for item in claimed_progress_job.results)
 assert job_progress(claimed_progress_job) == (0, 2, 0.0)
+
+batched_remote_job = verification_tasks.submit(
+    [f"batch-{index}@example.com" for index in range(REMOTE_RESULT_BATCH_SIZE)],
+    worker_count=1,
+    execution_target="gmail",
+)
+batched_remote_job = job_store.claim_next("batched-worker", "gmail")
+assert batched_remote_job is not None
+with TestClient(app) as remote_client:
+    headers = {
+        "X-Verigo-Worker-Token": "smoke-gmail-worker-token",
+        "X-Verigo-Worker-Id": "batched-worker",
+    }
+    for index, email in enumerate(batched_remote_job.emails):
+        response = remote_client.post(
+            f"/api/workers/gmail/jobs/{batched_remote_job.id}/results",
+            headers=headers,
+            json={"results": [{
+                "email": email,
+                "original_index": index,
+                "valid": True,
+                "deliverable": True,
+                "verification_method": "smoke",
+                "smtp_result": "smoke",
+                "message": "smoke",
+            }]},
+        )
+        assert response.status_code == 200
+        if index + 1 < REMOTE_RESULT_BATCH_SIZE:
+            assert response.json()["persisted"] == 0
+            persisted = job_store.get(batched_remote_job.id)
+            assert persisted is not None
+            assert persisted.results[index]["progress_state"] == "verifying"
+        else:
+            assert response.json()["persisted"] == REMOTE_RESULT_BATCH_SIZE
+persisted = job_store.get(batched_remote_job.id)
+assert persisted is not None
+assert all(result.get("progress_state") != "verifying" for result in persisted.results)
 
 failed_progress_job = verification_tasks.submit(
     ["failed-one@example.com", "failed-two@example.com"],
