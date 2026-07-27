@@ -1,0 +1,2 @@
+domain,first_name,last_name,expected_email,role
+example.com,John,Smith,john.smith@example.com,Example role only
