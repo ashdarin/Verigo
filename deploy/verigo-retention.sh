@@ -16,10 +16,10 @@ fi
 
 RESULTS_DAYS="$results_days" JOB_DAYS="$job_days" /opt/verigo/.venv/bin/python - <<'PY'
 import os
-import sqlite3
 from datetime import timedelta
 from pathlib import Path
 
+from app.db.sqlite import begin_immediate, connect
 from app.db.jobs import utc_now
 
 database = Path('/opt/verigo/data/verigo.db')
@@ -28,8 +28,8 @@ now = utc_now()
 results_cutoff = (now - timedelta(days=int(os.environ['RESULTS_DAYS']))).isoformat()
 jobs_cutoff = (now - timedelta(days=int(os.environ['JOB_DAYS']))).isoformat()
 
-with sqlite3.connect(database) as connection:
-    connection.execute('PRAGMA foreign_keys=ON')
+with connect(database) as connection:
+    begin_immediate(connection)
     stale_files = connection.execute(
         """SELECT id, csv_path FROM jobs
         WHERE status IN ('completed', 'failed') AND finished_at < ?""",

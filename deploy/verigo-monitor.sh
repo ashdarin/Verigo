@@ -16,8 +16,52 @@ queue_limit=${VERIGO_MONITOR_QUEUE_LIMIT:-10}
 mkdir -p "$state_dir"
 
 issues=()
-if ! curl -fsS --max-time 12 https://verigo.site/api/health >/dev/null; then
+health_payload=
+if ! health_payload=$(curl -fsS --max-time 12 https://verigo.site/api/health); then
     issues+=("public health endpoint is unavailable")
+else
+    read -r health_status service_mode queued pending verifying stale unhealthy < <(
+        HEALTH_PAYLOAD="$health_payload" /opt/verigo/.venv/bin/python - <<'PY'
+import json
+import os
+
+payload = json.loads(os.environ['HEALTH_PAYLOAD'])
+print(
+    payload.get('status', 'unknown'),
+    payload.get('service_mode', 'unknown'),
+    payload.get('queued_jobs', 0),
+    payload.get('pending_results', 0),
+    payload.get('verifying_results', 0),
+    payload.get('stale_leases', 0),
+    ','.join(payload.get('unhealthy_targets', [])) or '-',
+)
+PY
+    )
+    if [[ "$health_status" != "ok" ]]; then
+        issues+=("application health: ${health_status}")
+    fi
+    if [[ "$service_mode" != "active" ]]; then
+        issues+=("verification service mode: ${service_mode}")
+    fi
+    if (( stale > 0 )); then
+        issues+=("stale worker leases: ${stale}")
+    fi
+    if [[ "$unhealthy" != "-" ]]; then
+        issues+=("remote targets without healthy nodes: ${unhealthy}")
+    fi
+fi
+
+if ! PYTHONPATH=/opt/verigo/current /opt/verigo/.venv/bin/python - <<'PY'
+from pathlib import Path
+
+from app.db.sqlite import begin_immediate, connect
+
+with connect(Path('/opt/verigo/data/verigo.db')) as connection:
+    begin_immediate(connection)
+    connection.rollback()
+PY
+then
+    issues+=("database is not writable")
 fi
 
 disk_used=$(df -P / | awk 'NR==2 {gsub("%", "", $5); print $5}')
@@ -30,34 +74,8 @@ if [[ ! -f "$backup_success" ]] || (( $(date +%s) - $(stat -c %Y "$backup_succes
     issues+=("latest completed backup is older than ${backup_max_age_hours} hours")
 fi
 
-queued=$(/opt/verigo/.venv/bin/python - <<'PY'
-import sqlite3
-connection = sqlite3.connect('/opt/verigo/data/verigo.db')
-print(connection.execute("SELECT COUNT(*) FROM jobs WHERE status='queued'").fetchone()[0])
-PY
-)
-if (( queued >= queue_limit )); then
+if [[ -n "$health_payload" ]] && (( queued >= queue_limit )); then
     issues+=("queued jobs: ${queued}")
-fi
-
-unhealthy_targets=$(/opt/verigo/.venv/bin/python - <<'PY'
-import sqlite3
-
-connection = sqlite3.connect('/opt/verigo/data/verigo.db')
-targets = connection.execute("""
-    SELECT DISTINCT execution_target FROM jobs
-    WHERE status IN ('queued', 'running') AND execution_target NOT IN ('local', 'aggregate')
-""").fetchall()
-for (target,) in targets:
-    healthy = connection.execute(
-        "SELECT COUNT(*) FROM worker_nodes WHERE target=? AND health='healthy'", (target,)
-    ).fetchone()[0]
-    if not healthy:
-        print(target)
-PY
-)
-if [[ -n "$unhealthy_targets" ]]; then
-    issues+=("remote targets without healthy nodes: ${unhealthy_targets//$'\n'/,}")
 fi
 
 status=ok

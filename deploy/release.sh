@@ -62,13 +62,15 @@ rollback() {
 
 set_service_mode() {
     local mode=$1
-    MODE="$mode" "$state_dir/.venv/bin/python" - <<'PY'
+    MODE="$mode" PYTHONPATH="$release_dir" "$state_dir/.venv/bin/python" - <<'PY'
 import os
-import sqlite3
 from datetime import datetime, timezone
+from pathlib import Path
 
-database = '/opt/verigo/data/verigo.db'
-with sqlite3.connect(database, timeout=30) as connection:
+from app.db.sqlite import begin_immediate, connect
+
+with connect(Path('/opt/verigo/data/verigo.db')) as connection:
+    begin_immediate(connection)
     connection.execute('''CREATE TABLE IF NOT EXISTS service_state (
         name TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL)''')
     connection.execute('''INSERT INTO service_state(name, value, updated_at)
@@ -79,18 +81,23 @@ PY
 }
 
 active_job_count() {
-    "$state_dir/.venv/bin/python" - <<'PY'
-import sqlite3
-connection = sqlite3.connect('/opt/verigo/data/verigo.db', timeout=30)
+    PYTHONPATH="$release_dir" "$state_dir/.venv/bin/python" - <<'PY'
+from pathlib import Path
+
+from app.db.sqlite import connect
+
+connection = connect(Path('/opt/verigo/data/verigo.db'))
 print(connection.execute("SELECT COUNT(*) FROM jobs WHERE status IN ('queued', 'running')").fetchone()[0])
 PY
 }
 
 active_targets() {
-    "$state_dir/.venv/bin/python" - <<'PY'
-import sqlite3
+    PYTHONPATH="$release_dir" "$state_dir/.venv/bin/python" - <<'PY'
+from pathlib import Path
 
-connection = sqlite3.connect('/opt/verigo/data/verigo.db', timeout=30)
+from app.db.sqlite import connect
+
+connection = connect(Path('/opt/verigo/data/verigo.db'))
 for (target,) in connection.execute("""
     SELECT DISTINCT execution_target FROM jobs
     WHERE status IN ('queued', 'running') AND execution_target != 'aggregate'
@@ -101,10 +108,12 @@ PY
 }
 
 drain_progress_marker() {
-    "$state_dir/.venv/bin/python" - <<'PY'
-import sqlite3
+    PYTHONPATH="$release_dir" "$state_dir/.venv/bin/python" - <<'PY'
+from pathlib import Path
 
-connection = sqlite3.connect('/opt/verigo/data/verigo.db', timeout=30)
+from app.db.sqlite import connect
+
+connection = connect(Path('/opt/verigo/data/verigo.db'))
 rows = connection.execute("""
     SELECT j.status, j.execution_target, COUNT(*) AS jobs,
            COALESCE(MAX(j.heartbeat_at), ''),
@@ -219,6 +228,10 @@ install -m 644 "$release_path/deploy/verigo-retention.timer" /etc/systemd/system
 install -m 644 "$release_path/deploy/verigo.service" /etc/systemd/system/verigo.service
 install -m 644 "$release_path/deploy/verigo-supervisor.service" /etc/systemd/system/verigo-supervisor.service
 install -m 644 "$release_path/deploy/verigo-worker@.service" /etc/systemd/system/verigo-worker@.service
+install -d -m 700 /etc/verigo
+if [[ ! -f /etc/verigo/verigo.env ]]; then
+    install -m 600 "$release_path/deploy/verigo.env.example" /etc/verigo/verigo.env
+fi
 if [[ ! -f /etc/verigo/backup.env ]]; then
     install -m 600 "$release_path/deploy/verigo-backup.env.example" /etc/verigo/backup.env
 fi
@@ -253,9 +266,7 @@ for setting in \
     'VERIGO_SECURE_COOKIES=true'
 do
     key=${setting%%=*}
-    if grep -q "^${key}=" /etc/verigo/verigo.env; then
-        sed -i "s|^${key}=.*|${setting}|" /etc/verigo/verigo.env
-    else
+    if ! grep -q "^${key}=" /etc/verigo/verigo.env; then
         printf '%s\n' "$setting" >> /etc/verigo/verigo.env
     fi
 done

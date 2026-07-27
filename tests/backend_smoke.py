@@ -35,9 +35,6 @@ from openpyxl import Workbook
 
 import app.api.auth as auth_api
 from app.api.routes import (
-    REMOTE_RESULT_BATCH_SIZE,
-    buffer_remote_results,
-    discard_buffered_remote_results,
     email_execution_target,
     gmail_target,
     remote_worker_count,
@@ -100,26 +97,13 @@ assert claimed_progress_job is not None
 assert all(item["progress_state"] == "verifying" for item in claimed_progress_job.results)
 assert job_progress(claimed_progress_job) == (0, 2, 0.0)
 
-buffered_job_id = "batched-stream-smoke"
-assert buffer_remote_results(
-    buffered_job_id,
-    "worker-process-one",
-    [{"email": f"buffer-{index}@example.com"} for index in range(REMOTE_RESULT_BATCH_SIZE - 1)],
-) == []
-assert len(buffer_remote_results(
-    buffered_job_id,
-    "worker-process-two",
-    [{"email": "buffer-last@example.com"}],
-)) == REMOTE_RESULT_BATCH_SIZE
-discard_buffered_remote_results(buffered_job_id)
-
 batched_remote_job = verification_tasks.submit(
-    [f"batch-{index}@example{index}.com" for index in range(REMOTE_RESULT_BATCH_SIZE)],
+    [f"batch-{index}@example{index}.com" for index in range(25)],
     worker_count=1,
     execution_target="gmail",
 )
 batched_remote_job = job_store.claim_remote_lease(
-    "batched-worker", "gmail", shard_size=REMOTE_RESULT_BATCH_SIZE
+    "batched-worker", "gmail", shard_size=25
 )
 assert batched_remote_job is not None
 with TestClient(app) as remote_client:
@@ -142,13 +126,10 @@ with TestClient(app) as remote_client:
             }]},
         )
         assert response.status_code == 200
-        if index + 1 < REMOTE_RESULT_BATCH_SIZE:
-            assert response.json()["persisted"] == 0
-            persisted = job_store.get(batched_remote_job.id)
-            assert persisted is not None
-            assert persisted.results[index]["progress_state"] == "verifying"
-        else:
-            assert response.json()["persisted"] == REMOTE_RESULT_BATCH_SIZE
+        assert response.json()["persisted"] == 1
+        persisted = job_store.get(batched_remote_job.id)
+        assert persisted is not None
+        assert persisted.results[index]["progress_state"] == "completed"
 persisted = job_store.get(batched_remote_job.id)
 assert persisted is not None
 assert all(result.get("progress_state") != "verifying" for result in persisted.results)
@@ -678,7 +659,12 @@ object.__setattr__(
 
 
 with TestClient(app) as guest:
-    assert guest.get("/api/health").json() == {"status": "ok"}
+    health = guest.get("/api/health")
+    assert health.status_code == 200
+    health_payload = health.json()
+    assert health_payload["status"] in {"ok", "degraded"}
+    assert health_payload["database"] == "ok"
+    assert "pending_results" in health_payload
     assert guest.get("/dashboard").status_code == 200
     assert guest.get("/").status_code == 200
     robots = guest.get("/robots.txt")
@@ -834,6 +820,15 @@ with TestClient(app) as guest:
     assert cloudshell_claim.json()["job"]["id"] == cloudshell_fast_job.id
     assert cloudshell_claim.json()["job"]["worker_count"] == 8
     assert job_store.stop(cloudshell_fast_job.id).status == "stopped"
+
+
+auth_store.check_rate_limit("persistent-rate-limit-smoke", limit=1, window_seconds=3600)
+try:
+    auth_store.check_rate_limit("persistent-rate-limit-smoke", limit=1, window_seconds=3600)
+except ValueError:
+    pass
+else:
+    raise AssertionError("authentication attempt limits must persist in the database")
 
 
 with TestClient(app) as account:

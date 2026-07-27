@@ -11,7 +11,7 @@ from datetime import timedelta
 from zoneinfo import ZoneInfo
 
 from app.config import settings
-from app.db.sqlite import connect as connect_sqlite
+from app.db.sqlite import begin_immediate, connect as connect_sqlite
 from app.db.jobs import utc_now
 
 
@@ -103,7 +103,7 @@ class MetricsStore:
         key = (settings.metrics_salt or "verigo-metrics-unconfigured").encode("utf-8")
         visitor_hash = hmac.new(key, material, hashlib.sha256).hexdigest()
         with closing(self._connect()) as connection:
-            connection.execute("BEGIN IMMEDIATE")
+            begin_immediate(connection)
             is_new = connection.execute(
                 "INSERT OR IGNORE INTO daily_visitors(day, visitor_hash) VALUES (?, ?)",
                 (day, visitor_hash),
@@ -175,7 +175,7 @@ class MetricsStore:
             raise ValueError("免费单个验证暂不可用")
         period = self._day()
         with closing(self._connect()) as connection:
-            connection.execute("BEGIN IMMEDIATE")
+            begin_immediate(connection)
             row = connection.execute(
                 "SELECT count FROM anonymous_free_usage WHERE network_hash=? AND period=?",
                 (network_hash, period),

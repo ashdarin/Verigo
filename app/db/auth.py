@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 
 from app.config import settings
 from app.core.security import hash_password, new_token, token_hash, verify_password
-from app.db.sqlite import connect as connect_sqlite
+from app.db.sqlite import begin_immediate, connect as connect_sqlite
 from app.db.jobs import utc_now
 
 
@@ -193,6 +193,18 @@ class AuthStore:
                 )
                 connection.execute(
                     """
+                    CREATE TABLE IF NOT EXISTS auth_rate_limit_events (
+                        key_hash TEXT NOT NULL,
+                        occurred_at TEXT NOT NULL
+                    )
+                    """
+                )
+                connection.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_auth_rate_limit_events_key "
+                    "ON auth_rate_limit_events(key_hash, occurred_at)"
+                )
+                connection.execute(
+                    """
                     CREATE TABLE IF NOT EXISTS promo_credit_grants (
                         id TEXT PRIMARY KEY,
                         user_id TEXT NOT NULL,
@@ -306,6 +318,37 @@ class AuthStore:
                 connection.execute("DELETE FROM email_bindings WHERE expires_at <= ?", (utc_now().isoformat(),))
             self._initialized = True
 
+    def check_rate_limit(self, key: str, limit: int, window_seconds: int) -> None:
+        """Persist a rolling authentication limit across web process restarts."""
+        self.initialize()
+        now = utc_now()
+        cutoff = (now - timedelta(seconds=window_seconds)).isoformat()
+        key_hash = token_hash(key)
+        with closing(self._connect()) as connection:
+            begin_immediate(connection)
+            connection.execute(
+                "DELETE FROM auth_rate_limit_events WHERE key_hash=? AND occurred_at <= ?",
+                (key_hash, cutoff),
+            )
+            count = int(connection.execute(
+                "SELECT COUNT(*) FROM auth_rate_limit_events WHERE key_hash=?",
+                (key_hash,),
+            ).fetchone()[0])
+            if count >= limit:
+                connection.rollback()
+                raise ValueError("尝试次数过多，请稍后再试")
+            connection.execute(
+                "INSERT INTO auth_rate_limit_events(key_hash, occurred_at) VALUES (?, ?)",
+                (key_hash, now.isoformat()),
+            )
+            # All configured windows are at most one hour. Bound data growth
+            # from keys that will never be seen again without retaining IPs.
+            connection.execute(
+                "DELETE FROM auth_rate_limit_events WHERE occurred_at <= ?",
+                ((now - timedelta(days=1)).isoformat(),),
+            )
+            connection.commit()
+
     @staticmethod
     def _trial_credit_summary(connection: sqlite3.Connection, user_id: str) -> tuple[int, str | None]:
         row = connection.execute(
@@ -406,7 +449,7 @@ class AuthStore:
         normalized_email = email.strip().lower()
         code = f"{secrets.randbelow(1_000_000):06d}"
         with closing(self._connect()) as connection:
-            connection.execute("BEGIN IMMEDIATE")
+            begin_immediate(connection)
             user = connection.execute(
                 "SELECT email FROM users WHERE id=?", (user_id,)
             ).fetchone()
@@ -450,7 +493,7 @@ class AuthStore:
         self.initialize()
         now = utc_now().isoformat()
         with closing(self._connect()) as connection:
-            connection.execute("BEGIN IMMEDIATE")
+            begin_immediate(connection)
             binding = connection.execute(
                 "SELECT email, code_hash, expires_at, attempts FROM email_bindings WHERE user_id=?",
                 (user_id,),
@@ -501,7 +544,7 @@ class AuthStore:
         self.initialize()
         now = utc_now()
         with closing(self._connect()) as connection:
-            connection.execute("BEGIN IMMEDIATE")
+            begin_immediate(connection)
             row = connection.execute("SELECT code_hash, expires_at, attempts FROM email_verifications WHERE user_id = ?", (user_id,)).fetchone()
             now_value = now.isoformat()
             if row is None or row[1] <= now_value or row[2] >= 5 or not hmac.compare_digest(row[0], token_hash(code)):
@@ -572,7 +615,7 @@ class AuthStore:
             raise ValueError("扣减额度必须大于零")
         now = utc_now().isoformat()
         with closing(self._connect()) as connection:
-            connection.execute("BEGIN IMMEDIATE")
+            begin_immediate(connection)
             row = connection.execute(
                 "SELECT email_verified, credits, email FROM users WHERE id=?", (user_id,)
             ).fetchone()
@@ -644,7 +687,7 @@ class AuthStore:
         adjustment_id = uuid.uuid4().hex
         reference = f"admin_adjustment:{adjustment_id}"
         with closing(self._connect()) as connection:
-            connection.execute("BEGIN IMMEDIATE")
+            begin_immediate(connection)
             row = connection.execute(
                 """
                 SELECT id, username, email, email_verified, credits, created_at
@@ -860,7 +903,7 @@ class AuthStore:
         self.initialize()
         now = utc_now().isoformat()
         with closing(self._connect()) as connection:
-            connection.execute("BEGIN IMMEDIATE")
+            begin_immediate(connection)
             debit = connection.execute(
                 """
                 SELECT paid_credits, promo_credits, refunded_at
@@ -909,7 +952,7 @@ class AuthStore:
         now = utc_now()
         period = usage_period()
         with closing(self._connect()) as connection:
-            connection.execute("BEGIN IMMEDIATE")
+            begin_immediate(connection)
             row = connection.execute(
                 "SELECT email_verified FROM users WHERE id=?", (user_id,)
             ).fetchone()
@@ -961,7 +1004,7 @@ class AuthStore:
         self.initialize()
         now = utc_now().isoformat()
         with closing(self._connect()) as connection:
-            connection.execute("BEGIN IMMEDIATE")
+            begin_immediate(connection)
             row = connection.execute(
                 """
                 SELECT users.id, password_resets.code_hash, password_resets.expires_at, password_resets.attempts
@@ -987,7 +1030,7 @@ class AuthStore:
     ) -> None:
         self.initialize()
         with closing(self._connect()) as connection:
-            connection.execute("BEGIN IMMEDIATE")
+            begin_immediate(connection)
             row = connection.execute(
                 "SELECT password_hash FROM users WHERE id=?", (user_id,)
             ).fetchone()
@@ -1054,7 +1097,7 @@ class AuthStore:
             "last_used_at": None,
         }
         with closing(self._connect()) as connection:
-            connection.execute("BEGIN IMMEDIATE")
+            begin_immediate(connection)
             active_count = connection.execute(
                 "SELECT COUNT(*) FROM api_keys WHERE user_id=? AND revoked_at IS NULL",
                 (user_id,),
@@ -1131,7 +1174,7 @@ class AuthStore:
         """Delete account-owned records and return result files that may be removed."""
         self.initialize()
         with closing(self._connect()) as connection:
-            connection.execute("BEGIN IMMEDIATE")
+            begin_immediate(connection)
             active_jobs = connection.execute(
                 "SELECT COUNT(*) FROM jobs WHERE owner_id=? AND status IN ('queued', 'running')",
                 (user_id,),

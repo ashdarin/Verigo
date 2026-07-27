@@ -315,6 +315,63 @@ class JobStore:
             ).fetchone()
         return str(row[0]) if row and row[0] in {"active", "draining"} else "active"
 
+    def health_summary(self) -> dict[str, object]:
+        """Return inexpensive readiness signals without hydrating task payloads."""
+        self.initialize()
+        stale_before = (
+            utc_now() - timedelta(seconds=settings.worker_lease_seconds)
+        ).isoformat()
+        with closing(self._connect()) as connection:
+            mode_row = connection.execute(
+                "SELECT value FROM service_state WHERE name='verification_mode'"
+            ).fetchone()
+            job_counts = connection.execute(
+                """
+                SELECT
+                    COALESCE(SUM(status='queued'), 0),
+                    COALESCE(SUM(status='running'), 0)
+                FROM jobs
+                """
+            ).fetchone()
+            result_counts = connection.execute(
+                """
+                SELECT
+                    COALESCE(SUM(progress_state='pending'), 0),
+                    COALESCE(SUM(progress_state='verifying'), 0)
+                FROM job_results
+                """
+            ).fetchone()
+            stale_leases = connection.execute(
+                "SELECT COUNT(*) FROM job_leases WHERE completed_at IS NULL AND heartbeat_at < ?",
+                (stale_before,),
+            ).fetchone()[0]
+            unhealthy_targets = [
+                str(row[0])
+                for row in connection.execute(
+                    """
+                    SELECT DISTINCT j.execution_target
+                    FROM jobs j
+                    WHERE j.status IN ('queued', 'running')
+                      AND j.execution_target NOT IN ('local', 'aggregate')
+                      AND NOT EXISTS (
+                          SELECT 1 FROM worker_nodes n
+                          WHERE n.target=j.execution_target AND n.health='healthy'
+                      )
+                    ORDER BY j.execution_target
+                    """
+                ).fetchall()
+            ]
+        mode = str(mode_row[0]) if mode_row and mode_row[0] in {"active", "draining"} else "active"
+        return {
+            "service_mode": mode,
+            "queued_jobs": int(job_counts[0]),
+            "running_jobs": int(job_counts[1]),
+            "pending_results": int(result_counts[0]),
+            "verifying_results": int(result_counts[1]),
+            "stale_leases": int(stale_leases),
+            "unhealthy_targets": unhealthy_targets,
+        }
+
     def set_service_mode(self, mode: str) -> None:
         if mode not in {"active", "draining"}:
             raise ValueError("Unsupported verification service mode")
@@ -405,7 +462,7 @@ class JobStore:
         migrated_rows = 0
         linked_rows = 0
         with self._lock, closing(self._connect()) as connection:
-            connection.execute("BEGIN IMMEDIATE")
+            begin_immediate(connection)
             now = utc_now().isoformat()
             for job_id, emails_json, results_json in connection.execute(
                 "SELECT id, emails_json, results_json FROM jobs"
@@ -528,7 +585,7 @@ class JobStore:
     def add(self, job: Job, max_active: int | None = None) -> None:
         self.initialize()
         with self._lock, closing(self._connect()) as connection:
-            connection.execute("BEGIN IMMEDIATE")
+            begin_immediate(connection)
             active = connection.execute(
                 "SELECT COUNT(*) FROM jobs WHERE status IN ('queued', 'running')"
             ).fetchone()[0]
@@ -1425,7 +1482,7 @@ class JobStore:
         offline_seconds = max(settings.node_stale_seconds + 1, settings.node_offline_seconds)
         offline_before = (now - timedelta(seconds=offline_seconds)).isoformat()
         with self._lock, closing(self._connect()) as connection:
-            connection.execute("BEGIN IMMEDIATE")
+            begin_immediate(connection)
             offline = connection.execute(
                 "UPDATE worker_nodes SET health='offline' WHERE health!='offline' AND last_seen_at < ?",
                 (offline_before,),
@@ -1540,7 +1597,7 @@ class JobStore:
         """Stop a queued or running job without discarding completed results."""
         self.initialize()
         with self._lock, closing(self._connect()) as connection:
-            connection.execute("BEGIN IMMEDIATE")
+            begin_immediate(connection)
             row = connection.execute(
                 f"SELECT {self._select_columns()} FROM jobs WHERE id=?", (job_id,)
             ).fetchone()
@@ -1589,7 +1646,7 @@ class JobStore:
         """Resume a stopped task in place and return work that was re-queued."""
         self.initialize()
         with self._lock, closing(self._connect()) as connection:
-            connection.execute("BEGIN IMMEDIATE")
+            begin_immediate(connection)
             row = connection.execute(
                 f"SELECT {self._select_columns()} FROM jobs WHERE id=?", (job_id,)
             ).fetchone()

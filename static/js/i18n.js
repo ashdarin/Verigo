@@ -95,7 +95,7 @@ const VerigoI18n = (() => {
     if (english[text] || backend[text]) return english[text] || backend[text];
     if (/^(\d+) \/ (\d+) 已处理$/.test(text)) return text.replace(/^(\d+) \/ (\d+) 已处理$/, "$1 / $2 processed");
     if (/^排队中，前方还有 (\d+) 个任务$/.test(text)) return text.replace(/^排队中，前方还有 (\d+) 个任务$/, "Queued; $1 job(s) ahead");
-    if (/^已显示 (\d+)-(\d+)，共 (\d+) 条已出结果$/.test(text)) return text.replace(/^已显示 (\d+)-(\d+)，共 (\d+) 条已出结果$/, "Showing $1-$2 of $3 results");
+    if (/^已显示 (\d+)-(\d+)，共 (\d+) 个邮箱$/.test(text)) return text.replace(/^已显示 (\d+)-(\d+)，共 (\d+) 个邮箱$/, "Showing $1-$2 of $3 email addresses");
     if (/^(\d+) 秒$/.test(text)) return text.replace(/^(\d+) 秒$/, "$1 sec");
     if (/^(\d+) 次$/.test(text)) return text.replace(/^(\d+) 次$/, "$1 verifications");
     if (/^(\d+) 笔已支付订单$/.test(text)) return text.replace(/^(\d+) 笔已支付订单$/, "$1 paid orders");

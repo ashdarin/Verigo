@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import re
-import threading
-import time
 import hashlib
 import hmac
 import json
@@ -10,7 +8,6 @@ from pathlib import Path
 from urllib.error import URLError
 from urllib.parse import urlencode
 from urllib.request import Request as UrlRequest, urlopen
-from collections import defaultdict, deque
 from typing import Annotated
 
 from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Request, Response
@@ -138,23 +135,11 @@ class ApiKeyCreatedResponse(ApiKeyResponse):
     token: str = Field(description="Only returned once when the API Key is created.")
 
 
-class AttemptLimiter:
-    def __init__(self) -> None:
-        self._events: dict[str, deque[float]] = defaultdict(deque)
-        self._lock = threading.Lock()
-
-    def check(self, key: str, limit: int = 12, window: int = 300) -> None:
-        now = time.monotonic()
-        with self._lock:
-            events = self._events[key]
-            while events and now - events[0] > window:
-                events.popleft()
-            if len(events) >= limit:
-                raise HTTPException(status_code=429, detail="尝试次数过多，请稍后再试")
-            events.append(now)
-
-
-attempt_limiter = AttemptLimiter()
+def check_attempt_limit(key: str, limit: int = 12, window: int = 300) -> None:
+    try:
+        auth_store.check_rate_limit(key, limit, window)
+    except ValueError as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
 
 
 def request_network_hash(request: Request) -> str:
@@ -283,7 +268,7 @@ def set_session_cookie(response: Response, token: str) -> None:
 
 @auth_router.post("/register", response_model=UserResponse, status_code=201)
 def register(payload: RegistrationCredentials, request: Request, response: Response) -> UserResponse:
-    attempt_limiter.check(
+    check_attempt_limit(
         f"register:{request_network_hash(request)}", limit=5, window=3600
     )
     verify_turnstile(payload.turnstile_token, request)
@@ -297,7 +282,7 @@ def register(payload: RegistrationCredentials, request: Request, response: Respo
 
 @auth_router.post("/login", response_model=UserResponse)
 def login(payload: LoginCredentials, request: Request, response: Response) -> UserResponse:
-    attempt_limiter.check(f"login:{request.client.host if request.client else 'unknown'}")
+    check_attempt_limit(f"login:{request.client.host if request.client else 'unknown'}")
     user = auth_store.authenticate(payload.account, payload.password)
     if user is None:
         raise HTTPException(status_code=401, detail="账号或密码错误")
@@ -311,8 +296,8 @@ def request_email_verification(
 ) -> None:
     if not user.email:
         raise HTTPException(status_code=409, detail="旧账号尚未绑定邮箱，请联系管理员")
-    attempt_limiter.check(f"verify-email:{user.id}", limit=3, window=900)
-    attempt_limiter.check(f"verify-email-network:{request_network_hash(request)}", limit=12, window=900)
+    check_attempt_limit(f"verify-email:{user.id}", limit=3, window=900)
+    check_attempt_limit(f"verify-email-network:{request_network_hash(request)}", limit=12, window=900)
     try:
         code = auth_store.create_email_verification(user.id)
         send_email_verification(user.email, code)
@@ -341,7 +326,7 @@ def confirm_email_verification(
 def request_email_binding(
     payload: EmailBindingRequest, user: Annotated[User, Depends(require_user)]
 ) -> None:
-    attempt_limiter.check(f"binding:{user.id}", limit=5, window=900)
+    check_attempt_limit(f"binding:{user.id}", limit=5, window=900)
     try:
         code = auth_store.create_email_binding(user.id, payload.email)
         send_email_binding(payload.email, code)
@@ -366,7 +351,7 @@ def confirm_email_binding(
 
 @auth_router.post("/password-reset/request", status_code=204)
 def request_password_reset(payload: PasswordResetRequest, request: Request) -> None:
-    attempt_limiter.check(f"reset:{request.client.host if request.client else 'unknown'}", limit=5, window=900)
+    check_attempt_limit(f"reset:{request.client.host if request.client else 'unknown'}", limit=5, window=900)
     try:
         code = auth_store.create_password_reset(payload.email)
         if code:
@@ -379,7 +364,7 @@ def request_password_reset(payload: PasswordResetRequest, request: Request) -> N
 
 @auth_router.post("/password-reset/confirm", status_code=204)
 def confirm_password_reset(payload: PasswordResetConfirm, request: Request) -> None:
-    attempt_limiter.check(f"reset-confirm:{request.client.host if request.client else 'unknown'}", limit=8, window=900)
+    check_attempt_limit(f"reset-confirm:{request.client.host if request.client else 'unknown'}", limit=8, window=900)
     try:
         auth_store.reset_password(payload.email, payload.code, payload.password)
     except ValueError as exc:
@@ -393,7 +378,7 @@ def change_password(
     user: Annotated[User, Depends(require_user)],
     session: Annotated[str | None, Cookie(alias=settings.session_cookie_name)] = None,
 ) -> None:
-    attempt_limiter.check(f"password-change:{user.id}", limit=5, window=900)
+    check_attempt_limit(f"password-change:{user.id}", limit=5, window=900)
     try:
         auth_store.change_password(
             user.id, payload.current_password, payload.new_password, session
