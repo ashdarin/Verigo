@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 
 from app.config import settings
 from app.core.security import hash_password, new_token, token_hash, verify_password
+from app.db.sqlite import connect as connect_sqlite
 from app.db.jobs import utc_now
 
 
@@ -50,10 +51,7 @@ class AuthStore:
         self._initialized = False
 
     def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(settings.database_path, timeout=30, isolation_level=None)
-        connection.execute("PRAGMA journal_mode=WAL")
-        connection.execute("PRAGMA foreign_keys=ON")
-        return connection
+        return connect_sqlite(settings.database_path)
 
     @staticmethod
     def _insert_notification(

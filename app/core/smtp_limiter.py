@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Iterator
 
 from app.config import settings
+from app.db.sqlite import connect as connect_sqlite
 
 
 class SMTPDeliveryLimiter:
@@ -18,10 +19,7 @@ class SMTPDeliveryLimiter:
         self._initialized = False
 
     def _connect(self) -> sqlite3.Connection:
-        self._database_path.parent.mkdir(parents=True, exist_ok=True)
-        connection = sqlite3.connect(self._database_path, timeout=10, isolation_level=None)
-        connection.execute("PRAGMA journal_mode=WAL")
-        return connection
+        return connect_sqlite(self._database_path, timeout_seconds=10.0)
 
     def _initialize(self) -> None:
         if self._initialized:

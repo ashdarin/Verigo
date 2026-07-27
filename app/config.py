@@ -220,6 +220,9 @@ class Settings:
     )
     worker_poll_seconds: float = float(os.getenv("VERIGO_WORKER_POLL_SECONDS", "1"))
     worker_lease_seconds: int = int(os.getenv("VERIGO_WORKER_LEASE_SECONDS", "180"))
+    sqlite_busy_timeout_ms: int = max(
+        1_000, int(os.getenv("VERIGO_SQLITE_BUSY_TIMEOUT_MS", "30000"))
+    )
     node_stale_seconds: int = max(
         30, int(os.getenv("VERIGO_NODE_STALE_SECONDS", "180"))
     )

@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from app.config import settings
+from app.db.sqlite import connect as connect_sqlite
 
 
 def utc_now() -> datetime:
@@ -90,9 +91,7 @@ class JobStore:
         self._initialized = False
 
     def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(settings.database_path, timeout=30, isolation_level=None)
-        connection.execute("PRAGMA journal_mode=WAL")
-        return connection
+        return connect_sqlite(settings.database_path)
 
     @classmethod
     def _select_columns(cls) -> str:

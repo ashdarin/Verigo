@@ -11,6 +11,7 @@ from datetime import timedelta
 from zoneinfo import ZoneInfo
 
 from app.config import settings
+from app.db.sqlite import connect as connect_sqlite
 from app.db.jobs import utc_now
 
 
@@ -26,9 +27,7 @@ class MetricsStore:
         self._initialized = False
 
     def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(settings.database_path, timeout=30, isolation_level=None)
-        connection.execute("PRAGMA journal_mode=WAL")
-        return connection
+        return connect_sqlite(settings.database_path)
 
     @staticmethod
     def _day() -> str:
