@@ -961,7 +961,9 @@ def stop_prospecting_run(
     run = prospecting_store.get(run_id, user.id)
     if run is None:
         raise HTTPException(status_code=404, detail="内测任务不存在")
-    job_store.stop(run.verification_job_id)
+    stopped_job = job_store.stop(run.verification_job_id)
+    if stopped_job is None:
+        raise HTTPException(status_code=404, detail="Verification job no longer exists")
     return serialize_prospecting_run(run)
 
 

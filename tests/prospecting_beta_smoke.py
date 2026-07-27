@@ -155,8 +155,11 @@ with TestClient(app) as client:
         {item["email"] for item in third_candidates}
     )
 
-    stopped = client.post(f"/api/prospecting-beta/runs/{run['id']}/stop")
+    stopped = client.post(f"/api/prospecting-beta/runs/{third.json()['id']}/stop")
     assert stopped.status_code == 200
-    assert stopped.json()["status"] == "completed"
+    assert stopped.json()["status"] == "stopped"
+    stopped_read = client.get(f"/api/prospecting-beta/runs/{third.json()['id']}")
+    assert stopped_read.status_code == 200
+    assert stopped_read.json()["status"] == "stopped"
 
 print("prospecting beta smoke: ok")

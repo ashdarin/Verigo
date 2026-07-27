@@ -1,4 +1,4 @@
-const state = { run: null, timer: null };
+const state = { run: null, timer: null, pollGeneration: 0 };
 const byId = (id) => document.getElementById(id);
 const labels = { queued: "排队中", running: "验证中", completed: "已完成", failed: "失败", stopped: "已停止" };
 
@@ -91,14 +91,21 @@ function renderRun(run) {
 
 async function poll() {
   if (!state.run) return;
+  const runId = state.run.id;
+  const generation = state.pollGeneration;
   try {
-    const run = await api(`/api/prospecting-beta/runs/${state.run.id}`); renderRun(run);
+    const run = await api(`/api/prospecting-beta/runs/${runId}`);
+    // Do not let an in-flight poll restore a task that the user just stopped.
+    if (generation !== state.pollGeneration || state.run?.id !== runId) return;
+    renderRun(run);
     if (run.status === "queued" || run.status === "running") state.timer = setTimeout(poll, 1500);
-  } catch (error) { byId("run-error").textContent = error.message; }
+  } catch (error) {
+    if (generation === state.pollGeneration && state.run?.id === runId) byId("run-error").textContent = error.message;
+  }
 }
 
 byId("run-form").addEventListener("submit", async (event) => {
-  event.preventDefault(); clearTimeout(state.timer); byId("form-error").textContent = "";
+  event.preventDefault(); clearTimeout(state.timer); state.pollGeneration += 1; byId("form-error").textContent = "";
   const button = byId("submit"); button.disabled = true;
   try {
     const run = await api("/api/prospecting-beta/runs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ domain: byId("domain").value, country: byId("country").value, email_pattern: byId("email-pattern").value || null, known_first_name: byId("known-first-name").value || null, known_last_name: byId("known-last-name").value || null, known_email: byId("known-email").value || null }) });
@@ -109,6 +116,7 @@ byId("run-form").addEventListener("submit", async (event) => {
 
 byId("stop").addEventListener("click", async () => {
   if (!state.run) return;
+  clearTimeout(state.timer); state.pollGeneration += 1;
   byId("stop").disabled = true;
   try { renderRun(await api(`/api/prospecting-beta/runs/${state.run.id}/stop`, { method: "POST" })); }
   catch (error) { byId("run-error").textContent = error.message; }
