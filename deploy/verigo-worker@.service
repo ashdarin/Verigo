@@ -1,0 +1,23 @@
+[Unit]
+Description=Verigo verification worker %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=verigo
+Group=verigo
+WorkingDirectory=/opt/verigo/current
+EnvironmentFile=/etc/verigo/verigo.env
+ExecStart=/opt/verigo/.venv/bin/python -m app.worker --name %H-%i
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/opt/verigo/data
+
+[Install]
+WantedBy=multi-user.target

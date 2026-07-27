@@ -143,6 +143,7 @@ install -m 644 "$release_path/deploy/verigo-retention.service" /etc/systemd/syst
 install -m 644 "$release_path/deploy/verigo-retention.timer" /etc/systemd/system/verigo-retention.timer
 install -m 644 "$release_path/deploy/verigo.service" /etc/systemd/system/verigo.service
 install -m 644 "$release_path/deploy/verigo-supervisor.service" /etc/systemd/system/verigo-supervisor.service
+install -m 644 "$release_path/deploy/verigo-worker@.service" /etc/systemd/system/verigo-worker@.service
 if [[ ! -f /etc/verigo/backup.env ]]; then
     install -m 600 "$release_path/deploy/verigo-backup.env.example" /etc/verigo/backup.env
 fi
