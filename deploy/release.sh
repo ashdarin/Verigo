@@ -86,6 +86,61 @@ print(connection.execute("SELECT COUNT(*) FROM jobs WHERE status IN ('queued', '
 PY
 }
 
+active_targets() {
+    "$state_dir/.venv/bin/python" - <<'PY'
+import sqlite3
+
+connection = sqlite3.connect('/opt/verigo/data/verigo.db', timeout=30)
+for (target,) in connection.execute("""
+    SELECT DISTINCT execution_target FROM jobs
+    WHERE status IN ('queued', 'running') AND execution_target != 'aggregate'
+    ORDER BY execution_target
+"""):
+    print(target)
+PY
+}
+
+drain_progress_marker() {
+    "$state_dir/.venv/bin/python" - <<'PY'
+import sqlite3
+
+connection = sqlite3.connect('/opt/verigo/data/verigo.db', timeout=30)
+rows = connection.execute("""
+    SELECT j.status, j.execution_target, COUNT(*) AS jobs,
+           COALESCE(MAX(j.heartbeat_at), ''),
+           COALESCE(MAX(r.updated_at), '')
+    FROM jobs j
+    LEFT JOIN job_results r ON r.job_id = j.id
+    WHERE j.status IN ('queued', 'running')
+    GROUP BY j.status, j.execution_target
+    ORDER BY j.status, j.execution_target
+""").fetchall()
+print('|'.join(':'.join(str(value) for value in row) for row in rows))
+PY
+}
+
+ensure_drain_workers() {
+    local targets=()
+    mapfile -t targets < <(active_targets)
+    if (( ${#targets[@]} == 0 )); then
+        return 0
+    fi
+
+    local target
+    for target in "${targets[@]}"; do
+        if [[ "$target" == "local" ]]; then
+            if ! systemctl is-active --quiet verigo-worker@1.service \
+                && ! systemctl is-active --quiet verigo-worker@2.service; then
+                echo "Cannot drain local verification jobs: no local worker is active" >&2
+                return 1
+            fi
+        elif ! systemctl is-active --quiet verigo-supervisor.service; then
+            echo "Cannot drain $target verification jobs: remote node supervisor is inactive" >&2
+            return 1
+        fi
+    done
+}
+
 mkdir -p "$releases_dir"
 ensure_legacy_release
 previous_release=$(readlink -f "$current_link")
@@ -95,16 +150,36 @@ trap rollback ERR
 # A timeout restores active mode and leaves the current release untouched.
 if [[ -f "$state_dir/data/verigo.db" ]]; then
     drain_timeout=${VERIGO_DEPLOY_DRAIN_TIMEOUT_SECONDS:-900}
+    drain_stall_timeout=${VERIGO_DEPLOY_DRAIN_STALL_SECONDS:-180}
     if ! [[ "$drain_timeout" =~ ^[1-9][0-9]*$ ]]; then
         echo "VERIGO_DEPLOY_DRAIN_TIMEOUT_SECONDS must be a positive integer" >&2
         exit 1
     fi
+    if ! [[ "$drain_stall_timeout" =~ ^[1-9][0-9]*$ ]]; then
+        echo "VERIGO_DEPLOY_DRAIN_STALL_SECONDS must be a positive integer" >&2
+        exit 1
+    fi
     set_service_mode draining
+    if ! ensure_drain_workers; then
+        set_service_mode active
+        exit 2
+    fi
     deadline=$((SECONDS + drain_timeout))
+    last_progress_at=$SECONDS
+    progress_marker=$(drain_progress_marker)
     while :; do
         active_jobs=$(active_job_count)
         if [[ "$active_jobs" == "0" ]]; then
             break
+        fi
+        current_marker=$(drain_progress_marker)
+        if [[ "$current_marker" != "$progress_marker" ]]; then
+            progress_marker=$current_marker
+            last_progress_at=$SECONDS
+        elif (( SECONDS - last_progress_at >= drain_stall_timeout )); then
+            echo "Release drain stalled for ${drain_stall_timeout}s with $active_jobs active verification jobs: $current_marker" >&2
+            set_service_mode active
+            exit 2
         fi
         if (( SECONDS >= deadline )); then
             echo "Release drain timed out with $active_jobs active verification jobs" >&2
