@@ -20,6 +20,12 @@ from app.core.result_retry import (
     smtp_permanent_status,
     smtp_temporary_status,
 )
+from app.core.verification_outcome import (
+    RETRY_NEVER,
+    apply_outcome,
+    ensure_outcome,
+    retry_policy,
+)
 from app.core.security import token_hash
 from app.core.worker_lifecycle import (
     DOMESTIC_CLOUDSTUDIO_TARGET,
@@ -58,13 +64,14 @@ METHOD_LABELS = {
 def normalize_result(result: dict[str, Any]) -> dict[str, Any]:
     """Normalize presentation and keep temporary SMTP failures inconclusive."""
     result = dict(result)
+    ensure_outcome(result)
     detail = str(result.get("smtp_result") or result.get("message") or "")
     detail_lower = detail.lower()
     match = re.search(r"\b([245]\d{2})\b", detail)
     code = match.group(1) if match else None
-    if "域名不存在" in detail:
+    if result.get("failure_reason") == "domain_nxdomain":
         display_detail = "域名不存在"
-    elif "mx" in detail_lower or "没有邮件服务器" in detail:
+    elif result.get("failure_reason") == "mx_missing":
         display_detail = "没有邮箱服务器"
     elif (
         result.get("verification_method") == "microsoft_api"
@@ -638,10 +645,23 @@ def retry_temporary_smtp_results(job: Job, by_index: dict[int, dict[str, Any]]) 
 
 
 def finalize_temporary_smtp_results(results: list[dict[str, Any]]) -> None:
-    """Apply the configured three-attempt policy to unresolved SMTP 4xx results."""
+    """Finalize exhausted transient outcomes without turning DNS failures into false negatives."""
     for result in results:
+        if retry_policy(result) == RETRY_NEVER:
+            continue
         code = smtp_temporary_status(result)
         if not code:
+            result["deliverable"] = None
+            result["valid"] = True
+            result["transient_retries_exhausted"] = True
+            result["smtp_result"] = "验证基础设施暂时无法确认，复核次数已用尽"
+            result["message"] = "验证基础设施暂时无法确认，复核次数已用尽"
+            apply_outcome(
+                result,
+                stage=str(result.get("failure_stage") or "verification"),
+                reason="transient_exhausted",
+                retry_policy=RETRY_NEVER,
+            )
             continue
         if is_recipient_mailbox_full(result):
             raw_detail = str(result.get("smtp_raw_result") or result.get("smtp_result") or "")
@@ -736,6 +756,7 @@ def requeue_recent_single_temporary_jobs() -> int:
             result for result in normalized
             if is_retryable_smtp_result(result)
             and not result.get("temporary_retries_exhausted")
+            and not result.get("transient_retries_exhausted")
             and not result.get("greylist_retry_exhausted")
         ]
         if not pending:

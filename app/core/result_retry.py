@@ -3,6 +3,12 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from app.core.verification_outcome import (
+    is_greylist,
+    is_retryable,
+    smtp_code,
+)
+
 
 GREYLIST_MARKERS = ("greylist", "greylisted", "postgrey", "灰名单")
 MAILBOX_FULL_MARKERS = (
@@ -25,11 +31,7 @@ MAILBOX_FULL_MARKERS = (
 
 def smtp_status_code(result: dict[str, Any]) -> str | None:
     """Extract the first SMTP completion status from a verification result."""
-    detail = " ".join(
-        str(result.get(field) or "") for field in ("smtp_result", "message")
-    )
-    match = re.search(r"\b([245]\d{2})\b", detail)
-    return match.group(1) if match else None
+    return smtp_code(result)
 
 
 def smtp_temporary_status(result: dict[str, Any]) -> str | None:
@@ -53,19 +55,8 @@ def is_recipient_mailbox_full(result: dict[str, Any]) -> bool:
 
 
 def is_retryable_smtp_result(result: dict[str, Any]) -> bool:
-    """Retry transient SMTP responses, never full mailboxes or permanent failures."""
-    if is_recipient_mailbox_full(result):
-        return False
-    if smtp_temporary_status(result):
-        return True
-    if smtp_permanent_status(result):
-        return False
-    detail = " ".join(
-        str(result.get(field) or "") for field in ("smtp_result", "message")
-    ).lower()
-    return any(marker in detail for marker in (
-        "timeout", "timed out", "connection", "connect", "smtp", "超时", "连接",
-    ))
+    """Compatibility name for the canonical structured retry policy."""
+    return is_retryable(result)
 
 
 def smtp_permanent_status(result: dict[str, Any]) -> str | None:
@@ -75,12 +66,7 @@ def smtp_permanent_status(result: dict[str, Any]) -> str | None:
 
 
 def is_smtp_greylisted(result: dict[str, Any]) -> bool:
-    detail = " ".join(
-        str(result.get(field) or "") for field in ("smtp_result", "message")
-    ).lower()
-    return smtp_temporary_status(result) == "450" and any(
-        marker in detail for marker in GREYLIST_MARKERS
-    )
+    return is_greylist(result)
 
 
 def is_temporary_smtp_452(result: dict[str, Any]) -> bool:

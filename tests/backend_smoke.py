@@ -309,6 +309,31 @@ try:
 finally:
     legacy_module.dns.resolver.resolve = original_resolve
 
+try:
+    legacy_module.dns.resolver.resolve = lambda *_args: (_ for _ in ()).throw(
+        legacy_module.dns.resolver.NXDOMAIN()
+    )
+    dns_verifier = legacy_module.EmailVerifier()
+    assert dns_verifier.check_domain_status("missing.example") == "nxdomain"
+    assert dns_verifier.get_mx_record_status("missing.example") == ("nxdomain", [])
+    missing_result = dns_verifier.verify_email_comprehensive("person@missing.example")
+    assert missing_result["failure_reason"] == "domain_nxdomain"
+    assert missing_result["retry_policy"] == "never"
+    assert not is_retryable_smtp_result(missing_result)
+
+    legacy_module.dns.resolver.resolve = lambda *_args: (_ for _ in ()).throw(
+        legacy_module.dns.resolver.NoNameservers()
+    )
+    transient_verifier = legacy_module.EmailVerifier()
+    assert transient_verifier.check_domain_status("dns-failure.example") == "transient"
+    assert transient_verifier.get_mx_record_status("dns-failure.example") == ("transient", [])
+    transient_result = transient_verifier.verify_email_comprehensive("person@dns-failure.example")
+    assert transient_result["failure_reason"] == "dns_transient"
+    assert transient_result["retry_policy"] == "delayed"
+    assert is_retryable_smtp_result(transient_result)
+finally:
+    legacy_module.dns.resolver.resolve = original_resolve
+
 finalize_temporary_smtp_results([greylisted])
 assert greylisted["deliverable"] is None
 assert greylisted["valid"] is True
@@ -375,6 +400,25 @@ assert stale_retry_children[0].status == "queued"
 assert stale_retry_children[0].deferred_retry_at is not None
 assert requeue_recent_single_temporary_jobs() == 0
 assert len(job_store.retry_children(stale_single_temporary.id)) == 1
+
+exhausted_dns_retry = normalize_result({
+    "email": "dns-retry@example.com", "deliverable": None,
+    "checks": {"format": True, "domain": None, "mx": None, "smtp": None},
+    "smtp_result": "DNS 查询暂时失败，未发起SMTP验证",
+    "failure_stage": "dns",
+    "failure_reason": "dns_transient",
+    "retry_policy": "delayed",
+})
+finalize_temporary_smtp_results([exhausted_dns_retry])
+assert exhausted_dns_retry["transient_retries_exhausted"] is True
+assert exhausted_dns_retry["retry_policy"] == "never"
+exhausted_dns_job = Job(
+    id="smoketempdns01", emails=["dns-retry@example.com"], worker_count=1,
+    status="completed", finished_at=utc_now(), results=[exhausted_dns_retry],
+)
+job_store.add(exhausted_dns_job)
+assert requeue_recent_single_temporary_jobs() == 0
+assert not job_store.retry_children(exhausted_dns_job.id)
 
 background_parent = Job(
     id="smokebackground01", emails=["later@example.com"], worker_count=1,

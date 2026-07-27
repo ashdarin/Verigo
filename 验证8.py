@@ -52,6 +52,11 @@ from email import encoders
 from app.config import settings
 from app.core.qq_evidence import qq_avatar_evidence
 from app.core.smtp_limiter import SMTPDeliveryLimiter
+from app.core.verification_outcome import (
+    RETRY_DELAYED,
+    RETRY_NEVER,
+    apply_outcome,
+)
 
 
 SMTP_MAX_CONCURRENT_PER_MX = max(1, int(os.getenv('VERIGO_SMTP_PER_MX', '8')))
@@ -471,67 +476,76 @@ class EmailVerifier:
         else:
             return 'normal'
 
-    def check_domain_exists(self, domain):
-        """Check DNS existence without requiring a website A record."""
-        # 🔧 优化：使用DNS缓存检查域名是否已验证过
-        cache_key = f"domain_{domain}"
+    def check_domain_status(self, domain):
+        """Return exists, nxdomain, or transient without collapsing DNS failures."""
+        cache_key = f"domain_status_{domain}"
         with self.dns_cache_lock:
-            if cache_key in self.dns_cache:
-                cached_time, cached_result = self.dns_cache[cache_key]
-                if datetime.now() - cached_time < self.dns_cache_ttl:
-                    return cached_result
-        
-        result = False
-        try:
-            for record_type in ('MX', 'A', 'AAAA', 'NS', 'SOA'):
-                try:
-                    answers = dns.resolver.resolve(domain, record_type)
-                    if answers:
-                        result = True
-                        break
-                except dns.resolver.NXDOMAIN:
-                    result = False
+            cached = self.dns_cache.get(cache_key)
+            if cached and datetime.now() - cached[0] < self.dns_cache_ttl:
+                return cached[1]
+
+        saw_authoritative_empty = False
+        saw_transient_failure = False
+        status = "transient"
+        for record_type in ('MX', 'A', 'AAAA', 'NS', 'SOA'):
+            try:
+                answers = dns.resolver.resolve(domain, record_type)
+                if answers:
+                    status = "exists"
                     break
-                except (dns.resolver.NoAnswer, dns.resolver.NoNameservers):
-                    continue
-                except dns.exception.DNSException:
-                    # A transient resolver failure must not become a false
-                    # "domain does not exist" verdict.
-                    continue
-        except dns.exception.DNSException:
-            result = False
-        
-        # 缓存结果
+                saw_authoritative_empty = True
+            except dns.resolver.NXDOMAIN:
+                status = "nxdomain"
+                break
+            except dns.resolver.NoAnswer:
+                saw_authoritative_empty = True
+            except (dns.resolver.NoNameservers, dns.exception.DNSException):
+                saw_transient_failure = True
+        else:
+            if saw_authoritative_empty:
+                status = "exists"
+            elif saw_transient_failure:
+                status = "transient"
+
         with self.dns_cache_lock:
-            self.dns_cache[cache_key] = (datetime.now(), result)
-        
-        return result
+            self.dns_cache[cache_key] = (datetime.now(), status)
+        return status
+
+    def check_domain_exists(self, domain):
+        """Backward-compatible boolean view for callers outside the result pipeline."""
+        return self.check_domain_status(domain) == "exists"
+
+    def get_mx_record_status(self, domain):
+        """Return found, missing, nxdomain, or transient with MX hosts."""
+        cache_key = f"mx_status_{domain}"
+        with self.dns_cache_lock:
+            cached = self.dns_cache.get(cache_key)
+            if cached and datetime.now() - cached[0] < self.dns_cache_ttl:
+                return cached[1]
+
+        try:
+            records = [
+                (rdata.preference, str(rdata.exchange).rstrip('.'))
+                for rdata in dns.resolver.resolve(domain, 'MX')
+            ]
+        except dns.resolver.NXDOMAIN:
+            outcome = ("nxdomain", [])
+        except dns.resolver.NoAnswer:
+            outcome = ("missing", [])
+        except (dns.resolver.NoNameservers, dns.exception.DNSException):
+            outcome = ("transient", [])
+        else:
+            records.sort(key=lambda item: item[0])
+            outcome = ("found", [host for _, host in records])
+
+        with self.dns_cache_lock:
+            self.dns_cache[cache_key] = (datetime.now(), outcome)
+        return outcome
 
     def get_mx_records(self, domain):
-        """获取MX记录 - 保持原有DNS缓存逻辑"""
-        cache_key = f"mx_{domain}"
-        
-        with self.dns_cache_lock:
-            if cache_key in self.dns_cache:
-                cached_time, cached_records = self.dns_cache[cache_key]
-                if datetime.now() - cached_time < self.dns_cache_ttl:
-                    return cached_records
-
-        try:
-            mx_records = []
-            answers = dns.resolver.resolve(domain, 'MX')
-            for rdata in answers:
-                mx_records.append((rdata.preference, str(rdata.exchange).rstrip('.')))
-            
-            mx_records.sort(key=lambda x: x[0])
-            mx_hosts = [mx[1] for mx in mx_records]
-            
-            with self.dns_cache_lock:
-                self.dns_cache[cache_key] = (datetime.now(), mx_hosts)
-            
-            return mx_hosts
-        except Exception:
-            return []
+        """Backward-compatible MX list for helpers that do not need failure semantics."""
+        status, records = self.get_mx_record_status(domain)
+        return records if status == "found" else []
 
     def get_dns_cache_stats(self):
         """获取DNS缓存统计信息 - 保持原有功能"""
@@ -919,6 +933,9 @@ class EmailVerifier:
                 result['message'] = '邮箱格式不正确'
                 result['deliverable'] = False
                 result['checks']['smtp'] = False
+                apply_outcome(
+                    result, stage='format', reason='format_invalid', retry_policy=RETRY_NEVER
+                )
                 return result
 
             result['checks']['format'] = True
@@ -952,12 +969,18 @@ class EmailVerifier:
                     result['deliverable'] = False
                     result['checks']['smtp'] = False
                     result['message'] = '❌ Outlook 邮箱不可投递'
+                    apply_outcome(
+                        result, stage='provider_api', reason='smtp_permanent', retry_policy=RETRY_NEVER
+                    )
                 else:
                     # 限流/分歧 -> 状态未知, 绝不误判
                     result['valid'] = True
                     result['deliverable'] = None
                     result['checks']['smtp'] = None
                     result['message'] = '⚠️ Outlook 邮箱暂时无法确认'
+                    apply_outcome(
+                        result, stage='provider_api', reason='provider_unknown', retry_policy=RETRY_NEVER
+                    )
                 return result
 
             strategy = self.get_domain_strategy(domain)
@@ -970,22 +993,60 @@ class EmailVerifier:
                 result['consumer_provider'] = fix_strategy['provider']
 
             # 第二步：域名检查
-            if not self.check_domain_exists(domain):
+            domain_status = self.check_domain_status(domain)
+            if domain_status == 'nxdomain':
                 result['message'] = f'域名 {domain} 不存在'
                 result['smtp_result'] = '域名不存在，未发起SMTP验证'
                 result['deliverable'] = False
                 result['checks']['smtp'] = False
+                apply_outcome(
+                    result, stage='dns', reason='domain_nxdomain', retry_policy=RETRY_NEVER
+                )
+                return result
+            if domain_status == 'transient':
+                result['message'] = f'域名 {domain} 的 DNS 暂时无法确认'
+                result['smtp_result'] = 'DNS 查询暂时失败，未发起SMTP验证'
+                result['deliverable'] = None
+                result['checks']['domain'] = None
+                result['checks']['mx'] = None
+                result['checks']['smtp'] = None
+                apply_outcome(
+                    result, stage='dns', reason='dns_transient', retry_policy=RETRY_DELAYED
+                )
                 return result
 
             result['checks']['domain'] = True
 
             # 第三步：MX记录检查
-            mx_records = self.get_mx_records(domain)
-            if not mx_records:
+            mx_status, mx_records = self.get_mx_record_status(domain)
+            if mx_status == 'nxdomain':
+                result['message'] = f'域名 {domain} 不存在'
+                result['smtp_result'] = '域名不存在，未发起SMTP验证'
+                result['deliverable'] = False
+                result['checks']['domain'] = False
+                result['checks']['smtp'] = False
+                apply_outcome(
+                    result, stage='dns', reason='domain_nxdomain', retry_policy=RETRY_NEVER
+                )
+                return result
+            if mx_status == 'transient':
+                result['message'] = f'域名 {domain} 的 MX 暂时无法查询'
+                result['smtp_result'] = 'MX 查询暂时失败，未发起SMTP验证'
+                result['deliverable'] = None
+                result['checks']['mx'] = None
+                result['checks']['smtp'] = None
+                apply_outcome(
+                    result, stage='mx', reason='dns_transient', retry_policy=RETRY_DELAYED
+                )
+                return result
+            if mx_status == 'missing':
                 result['message'] = f'域名 {domain} 没有邮件服务器'
                 result['smtp_result'] = '未找到MX记录，未发起SMTP验证'
                 result['deliverable'] = False
                 result['checks']['smtp'] = False
+                apply_outcome(
+                    result, stage='mx', reason='mx_missing', retry_policy=RETRY_NEVER
+                )
                 return result
 
             result['checks']['mx'] = True
@@ -1013,6 +1074,9 @@ class EmailVerifier:
                 result['smtp_result'] = '未找到MX记录，未发起SMTP验证'
                 result['deliverable'] = False
                 result['checks']['smtp'] = False
+                apply_outcome(
+                    result, stage='mx', reason='mx_missing', retry_policy=RETRY_NEVER
+                )
                 return result
 
             # 第五步：SMTP验证 - 🆕 优先使用修复策略
@@ -1047,6 +1111,18 @@ class EmailVerifier:
 
             result['checks']['smtp'] = smtp_success
             result['smtp_result'] = smtp_message
+            if smtp_success is None:
+                apply_outcome(
+                    result, stage='smtp', reason='smtp_temporary', retry_policy=RETRY_DELAYED
+                )
+            elif smtp_success is False:
+                apply_outcome(
+                    result, stage='smtp', reason='smtp_permanent', retry_policy=RETRY_NEVER
+                )
+            else:
+                apply_outcome(
+                    result, stage='smtp', reason='smtp_accepted', retry_policy=RETRY_NEVER
+                )
 
             if (
                 smtp_success is None
@@ -1061,6 +1137,9 @@ class EmailVerifier:
                     result['qq_avatar_evidence'] = avatar
                     result['smtp_result'] = (
                         f"{smtp_message}；检测到非默认 QQ 头像，作为账号存在的辅助证据"
+                    )
+                    apply_outcome(
+                        result, stage='smtp', reason='smtp_accepted', retry_policy=RETRY_NEVER
                     )
 
             # 综合判断 - 保持原版本逻辑
