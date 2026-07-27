@@ -21,6 +21,7 @@ os.environ["VERIGO_PROSPECTING_BETA_MAX_CANDIDATES"] = "48"
 
 from fastapi.testclient import TestClient
 
+from app.config import settings
 from app.core.prospecting import generate_candidates, normalize_company_domain
 from app.db.auth import auth_store
 from app.db.jobs import job_store, utc_now
@@ -69,6 +70,7 @@ with TestClient(app) as client:
     personal = next(item for item in candidates if item["category"] == "personal_candidate")
     job = job_store.get(run["verification_job_id"])
     assert job is not None
+    assert job.worker_count == settings.max_workers_per_job
     for result in job.results:
         result["deliverable"] = False
         result["valid"] = False

@@ -873,7 +873,7 @@ def create_prospecting_run(
     try:
         job = submit_routed_job(
             [candidate.email for candidate in candidates],
-            worker_count=min(4, settings.max_workers_per_job),
+            worker_count=settings.max_workers_per_job,
             owner_id=user.id,
             owner_email=user.email,
             stop_on_deliverable=False,
