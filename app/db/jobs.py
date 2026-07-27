@@ -336,9 +336,11 @@ class JobStore:
             result_counts = connection.execute(
                 """
                 SELECT
-                    COALESCE(SUM(progress_state='pending'), 0),
-                    COALESCE(SUM(progress_state='verifying'), 0)
-                FROM job_results
+                    COALESCE(SUM(r.progress_state='pending'), 0),
+                    COALESCE(SUM(r.progress_state='verifying'), 0)
+                FROM job_results r
+                JOIN jobs j ON j.id=r.job_id
+                WHERE j.status IN ('queued', 'running')
                 """
             ).fetchone()
             stale_leases = connection.execute(
