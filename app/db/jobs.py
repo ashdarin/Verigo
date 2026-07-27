@@ -1142,8 +1142,12 @@ class JobStore:
                         AND progress_state='pending' ORDER BY original_index
                 """, (candidate.id,)):
                     mx_key = self._scheduler_key_for_email(connection, str(email))
-                    if index in leased or candidate_load.get(mx_key, 0) >= self._scheduler_profile_limit(
-                        connection, mx_key, now
+                    if (
+                        index in leased
+                        or self._scheduler_profile_is_cooling_down(connection, mx_key, now)
+                        or candidate_load.get(mx_key, 0) >= self._scheduler_profile_limit(
+                            connection, mx_key, now
+                        )
                     ):
                         continue
                     candidate_indices.append(int(index))
@@ -1295,6 +1299,21 @@ class JobStore:
         if row is None:
             return maximum if mx_key in {"gmail", "microsoft"} else cls._scheduler_mx_capacity(mx_key)
         return max(1, min(int(row[0]), maximum))
+
+    @staticmethod
+    def _scheduler_profile_is_cooling_down(
+        connection: sqlite3.Connection, mx_key: str, now: datetime
+    ) -> bool:
+        """Do not send a fresh probe while the receiver cooldown is active."""
+        row = connection.execute(
+            "SELECT cooldown_until FROM scheduler_domain_profiles WHERE scheduler_key=?", (mx_key,)
+        ).fetchone()
+        if row is None or not row[0]:
+            return False
+        try:
+            return datetime.fromisoformat(str(row[0])) > now
+        except ValueError:
+            return False
 
     @staticmethod
     def _scheduler_pressure_signal(result: dict[str, Any]) -> bool:
@@ -1933,6 +1952,57 @@ class JobStore:
             ).fetchone()
             connection.commit()
         return self._hydrate_results(self._job_from_row(row))
+
+    def stop_with_reason(self, job_id: str, reason: str) -> Job | None:
+        """Stop a job because a receiver explicitly rejected further probing."""
+        self.initialize()
+        with self._lock, closing(self._connect()) as connection:
+            begin_immediate(connection)
+            row = connection.execute(
+                f"SELECT {self._select_columns()} FROM jobs WHERE id=?", (job_id,)
+            ).fetchone()
+            if row is None:
+                connection.rollback()
+                return None
+            job = self._job_from_row(row)
+            if job.status not in {"queued", "running"}:
+                connection.commit()
+                return self._hydrate_results(job)
+            now = utc_now().isoformat()
+            connection.execute(
+                """UPDATE jobs SET status='stopped', finished_at=?, error=?,
+                    worker_id=NULL, heartbeat_at=NULL WHERE id=?""",
+                (now, reason[:500], job_id),
+            )
+            lease_ids = [item[0] for item in connection.execute(
+                "SELECT id FROM job_leases WHERE job_id=? AND completed_at IS NULL", (job_id,)
+            )]
+            connection.execute(
+                "UPDATE job_leases SET completed_at=? WHERE job_id=? AND completed_at IS NULL",
+                (now, job_id),
+            )
+            if lease_ids:
+                connection.executemany(
+                    "DELETE FROM mx_scheduler_leases WHERE lease_id=?", [(lease_id,) for lease_id in lease_ids]
+                )
+            row = connection.execute(
+                f"SELECT {self._select_columns()} FROM jobs WHERE id=?", (job_id,)
+            ).fetchone()
+            connection.commit()
+        return self._hydrate_results(self._job_from_row(row))
+
+    def defer_job(self, job_id: str, until: datetime, reason: str) -> Job | None:
+        """Release pending work until a receiver's cooling period ends."""
+        self.initialize()
+        with self._lock, closing(self._connect()) as connection:
+            changed = connection.execute(
+                """UPDATE jobs SET status='queued', worker_id=NULL, heartbeat_at=NULL,
+                    deferred_retry_at=?, error=? WHERE id=? AND status IN ('queued', 'running')""",
+                (until.isoformat(), reason[:500], job_id),
+            ).rowcount
+            if not changed:
+                return None
+        return self.get(job_id)
 
     def resume(self, job_id: str) -> tuple[Job | None, list[Job]]:
         """Resume a stopped task in place and return work that was re-queued."""

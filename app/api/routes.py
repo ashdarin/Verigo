@@ -861,6 +861,7 @@ def serialize_prospecting_run(run: ProspectingRun) -> ProspectingRunResponse:
         summary=summary,
         results=results,
         saved_count=prospecting_store.saved_contact_count(run.owner_id),
+        protection=prospecting_store.protection_status(run.domain),
     )
 
 
@@ -872,6 +873,12 @@ def create_prospecting_run(
     require_verification_submission_open()
     try:
         domain = normalize_company_domain(payload.domain)
+        blocked_until = prospecting_store.blocked_until(domain)
+        if blocked_until is not None:
+            raise HTTPException(
+                status_code=429,
+                detail=f"Discovery for this domain is temporarily protected until {blocked_until.isoformat()}",
+            )
         known_pattern = None
         known_email = None
         if payload.known_email:
@@ -930,10 +937,24 @@ def create_prospecting_run(
 @router.get("/prospecting-beta/saved-contacts", response_model=SavedProspectingContactsResponse)
 def list_saved_prospecting_contacts(
     user: Annotated[User, Depends(require_prospecting_beta)],
+    domain: str | None = Query(default=None, min_length=3, max_length=253),
+    search: str = Query(default="", max_length=128),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=50, ge=1, le=100),
 ) -> SavedProspectingContactsResponse:
+    try:
+        normalized_domain = normalize_company_domain(domain) if domain else None
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    total, items = prospecting_store.saved_contacts(
+        user.id, domain=normalized_domain, search=search.strip(), offset=offset, limit=limit,
+    )
     return SavedProspectingContactsResponse(
-        total=prospecting_store.saved_contact_count(user.id),
-        items=prospecting_store.saved_contacts(user.id),
+        total=total,
+        items=items,
+        domains=prospecting_store.saved_contact_domains(user.id, search.strip()),
+        offset=offset,
+        limit=limit,
     )
 
 

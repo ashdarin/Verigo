@@ -85,6 +85,7 @@
         <div><span>Catch-all</span><strong id="metric-catchall">0</strong></div>
       </div>
       <p id="profile-copy" class="profile-copy"></p>
+      <p id="run-protection" class="protection-note hidden" role="status"></p>
       <p id="run-error" class="error" role="alert"></p>
     </section>
 
@@ -101,12 +102,19 @@
     <section id="saved-contacts-panel" class="results" aria-labelledby="saved-contacts-title">
       <div class="results-heading"><div><p class="eyebrow">我的联系人</p><h2 id="saved-contacts-title">已保存的有效邮箱</h2></div><span id="saved-contact-count" class="limit">0</span></div>
       <p class="profile-copy">非 catch-all 的有效结果会自动保存到当前账号，后续登录仍可查看。</p>
+      <div class="saved-controls">
+        <label class="saved-search"><span>搜索邮箱或域名</span><input id="saved-contact-search" type="search" autocomplete="off"></label>
+        <button id="saved-show-all" class="secondary" type="button">全部域名</button>
+      </div>
+      <div id="saved-domain-list" class="saved-domain-list" aria-label="按域名查看联系人"></div>
+      <div class="saved-table-heading"><div><h3 id="saved-contact-view-title">全部已保存联系人</h3></div><span id="saved-contact-view-count" class="limit">0</span></div>
       <div class="table-wrap">
         <table>
           <thead><tr><th>邮箱</th><th>公司域名</th><th>邮箱规则</th><th>保存时间</th></tr></thead>
           <tbody id="saved-contacts-body"></tbody>
         </table>
       </div>
+      <div class="saved-pagination"><button id="saved-previous" class="secondary" type="button">上一页</button><button id="saved-next" class="secondary" type="button">下一页</button></div>
     </section>
   </main>
   <script src="/static/js/prospecting-beta.js"></script>

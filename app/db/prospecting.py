@@ -6,7 +6,7 @@ import threading
 import uuid
 from contextlib import closing
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
 
 from app.config import settings
@@ -85,6 +85,21 @@ class ProspectingStore:
                 connection.execute("CREATE INDEX IF NOT EXISTS idx_prospecting_runs_owner ON prospecting_runs(owner_id, created_at DESC)")
                 connection.execute("CREATE INDEX IF NOT EXISTS idx_prospecting_candidates_run ON prospecting_candidates(run_id, original_index)")
                 connection.execute("CREATE INDEX IF NOT EXISTS idx_prospecting_saved_contacts_owner ON prospecting_saved_contacts(owner_id, saved_at DESC)")
+                connection.execute("CREATE INDEX IF NOT EXISTS idx_prospecting_saved_contacts_owner_domain ON prospecting_saved_contacts(owner_id, domain, saved_at DESC)")
+                connection.execute("""
+                    CREATE TABLE IF NOT EXISTS prospecting_domain_protection (
+                        domain TEXT PRIMARY KEY, pressure_events INTEGER NOT NULL DEFAULT 0,
+                        strong_events INTEGER NOT NULL DEFAULT 0, cooldown_until TEXT,
+                        stop_until TEXT, last_reason TEXT, updated_at TEXT NOT NULL
+                    )
+                """)
+                connection.execute("""
+                    CREATE TABLE IF NOT EXISTS prospecting_protection_events (
+                        run_id TEXT NOT NULL, original_index INTEGER NOT NULL, signal TEXT NOT NULL,
+                        created_at TEXT NOT NULL, PRIMARY KEY(run_id, original_index),
+                        FOREIGN KEY(run_id) REFERENCES prospecting_runs(id) ON DELETE CASCADE
+                    )
+                """)
             self._initialized = True
 
     @staticmethod
@@ -148,6 +163,16 @@ class ProspectingStore:
                        profile_patterns_json, profiles_recorded_at
                 FROM prospecting_runs WHERE id=? AND owner_id=?
             """, (run_id, owner_id)).fetchone()
+        return self._run_from_row(row) if row else None
+
+    def get_by_job_id(self, verification_job_id: str) -> ProspectingRun | None:
+        self.initialize()
+        with closing(self._connect()) as connection:
+            row = connection.execute("""
+                SELECT id, owner_id, domain, country, requested_pattern, verification_job_id, candidate_count, created_at,
+                       profile_patterns_json, profiles_recorded_at
+                FROM prospecting_runs WHERE verification_job_id=?
+            """, (verification_job_id,)).fetchone()
         return self._run_from_row(row) if row else None
 
     def recent(self, owner_id: str, limit: int = 10) -> list[ProspectingRun]:
@@ -244,15 +269,177 @@ class ProspectingStore:
                 raise
         return inserted
 
-    def saved_contacts(self, owner_id: str, limit: int = 200) -> list[dict[str, Any]]:
+    @staticmethod
+    def _protection_signal(result: dict[str, Any]) -> tuple[str, str] | None:
+        """Classify receiver feedback conservatively; mailbox failures never count."""
+        detail = " ".join(
+            str(result.get(field) or "")
+            for field in ("smtp_raw_result", "smtp_result", "message", "failure_reason")
+        ).lower()
+        if not detail or result.get("delivery_block_reason") == "mailbox_full":
+            return None
+        strong_markers = (
+            "anti-enumerat", "anti enumerat", "enumeration", "directory harvest",
+            "too many invalid recipient", "too many recipients", "recipient verification",
+            "verification not permitted", "verification not allowed",
+        )
+        if any(marker in detail for marker in strong_markers):
+            return "stop", "The receiving mail system rejected further address discovery"
+        pressure_markers = (
+            "rate limit", "rate limited", "throttl", "too many connection", "too many request",
+            "temporarily blocked", "try again later", "server busy",
+        )
+        code = str(result.get("smtp_code") or "")
+        if code.startswith("4") or any(marker in detail for marker in pressure_markers):
+            return "wait", "The receiving mail system requested a cooldown before more checks"
+        return None
+
+    def _protection_status(self, domain: str, now: datetime | None = None) -> dict[str, Any]:
         self.initialize()
+        now = now or utc_now()
         with closing(self._connect()) as connection:
-            rows = connection.execute("""
-                SELECT email, domain, category, pattern, source, run_id, saved_at
-                FROM prospecting_saved_contacts WHERE owner_id=?
-                ORDER BY saved_at DESC, email ASC LIMIT ?
-            """, (owner_id, limit)).fetchall()
+            row = connection.execute("""
+                SELECT pressure_events, strong_events, cooldown_until, stop_until, last_reason
+                FROM prospecting_domain_protection WHERE domain=?
+            """, (domain,)).fetchone()
+        if row is None:
+            return {"state": "clear", "resume_at": None, "message": None}
+        cooldown_until = datetime.fromisoformat(row[2]) if row[2] else None
+        stop_until = datetime.fromisoformat(row[3]) if row[3] else None
+        if stop_until and stop_until > now:
+            return {
+                "state": "stopped", "resume_at": stop_until.isoformat(), "message": row[4],
+                "pressure_events": int(row[0]), "strong_events": int(row[1]),
+            }
+        if cooldown_until and cooldown_until > now:
+            return {
+                "state": "waiting", "resume_at": cooldown_until.isoformat(), "message": row[4],
+                "pressure_events": int(row[0]), "strong_events": int(row[1]),
+            }
+        return {
+            "state": "clear", "resume_at": None, "message": None,
+            "pressure_events": int(row[0]), "strong_events": int(row[1]),
+        }
+
+    def protection_status(self, domain: str) -> dict[str, Any]:
+        return self._protection_status(domain)
+
+    def blocked_until(self, domain: str) -> datetime | None:
+        status = self._protection_status(domain)
+        if status["state"] != "stopped" or not status["resume_at"]:
+            return None
+        return datetime.fromisoformat(str(status["resume_at"]))
+
+    def apply_protection_outcomes(
+        self, verification_job_id: str, results: list[dict[str, Any]]
+    ) -> dict[str, Any] | None:
+        """Persist new receiver-pressure signals and choose wait versus stop once."""
+        run = self.get_by_job_id(verification_job_id)
+        if run is None:
+            return None
+        signals: list[tuple[int, str, str]] = []
+        for fallback_index, raw in enumerate(results):
+            signal = self._protection_signal(raw)
+            if signal is not None:
+                signals.append((int(raw.get("original_index", fallback_index)), *signal))
+        if not signals:
+            return None
+
+        now = utc_now()
+        new_signals: list[tuple[int, str, str]] = []
+        with closing(self._connect()) as connection:
+            begin_immediate(connection)
+            try:
+                connection.execute("""
+                    INSERT INTO prospecting_domain_protection(domain, updated_at)
+                    VALUES (?, ?) ON CONFLICT(domain) DO NOTHING
+                """, (run.domain, now.isoformat()))
+                for index, signal, reason in signals:
+                    inserted = connection.execute("""
+                        INSERT INTO prospecting_protection_events(run_id, original_index, signal, created_at)
+                        VALUES (?, ?, ?, ?) ON CONFLICT(run_id, original_index) DO NOTHING
+                    """, (run.id, index, signal, now.isoformat())).rowcount
+                    if inserted:
+                        new_signals.append((index, signal, reason))
+                if not new_signals:
+                    connection.execute("COMMIT")
+                    return None
+                pressure_count = sum(signal == "wait" for _, signal, _ in new_signals)
+                strong_count = sum(signal == "stop" for _, signal, _ in new_signals)
+                run_pressure_count = int(connection.execute("""
+                    SELECT COUNT(*) FROM prospecting_protection_events WHERE run_id=? AND signal='wait'
+                """, (run.id,)).fetchone()[0])
+                stop = strong_count > 0 or run_pressure_count >= settings.prospecting_protection_max_pressure_events
+                reason = new_signals[-1][2]
+                cooldown_until = now + timedelta(seconds=settings.prospecting_protection_cooldown_seconds)
+                stop_until = now + timedelta(seconds=settings.prospecting_protection_stop_seconds)
+                connection.execute("""
+                    UPDATE prospecting_domain_protection SET
+                        pressure_events=pressure_events+?, strong_events=strong_events+?,
+                        cooldown_until=CASE WHEN ? THEN cooldown_until ELSE ? END,
+                        stop_until=CASE WHEN ? THEN ? ELSE stop_until END,
+                        last_reason=?, updated_at=? WHERE domain=?
+                """, (
+                    pressure_count, strong_count, int(stop), cooldown_until.isoformat(),
+                    int(stop), stop_until.isoformat(), reason, now.isoformat(), run.domain,
+                ))
+                connection.execute("COMMIT")
+            except Exception:
+                connection.execute("ROLLBACK")
+                raise
+        if stop:
+            return {
+                "action": "stop", "resume_at": stop_until, "message":
+                "Discovery stopped automatically because the receiving system rejected further address checks",
+            }
+        return {
+            "action": "wait", "resume_at": cooldown_until, "message":
+            "Discovery paused automatically to respect the receiving system's rate limit",
+        }
+
+    def saved_contact_domains(self, owner_id: str, search: str = "") -> list[dict[str, Any]]:
+        self.initialize()
+        clauses = ["owner_id=?"]
+        parameters: list[Any] = [owner_id]
+        if search:
+            clauses.append("(domain LIKE ? COLLATE NOCASE OR email LIKE ? COLLATE NOCASE)")
+            parameters.extend((f"%{search}%", f"%{search}%"))
+        where = " AND ".join(clauses)
+        with closing(self._connect()) as connection:
+            rows = connection.execute(f"""
+                SELECT domain, COUNT(*) AS contact_count, MAX(saved_at) AS latest_saved_at
+                FROM prospecting_saved_contacts WHERE {where}
+                GROUP BY domain ORDER BY contact_count DESC, latest_saved_at DESC, domain ASC
+            """, parameters).fetchall()
         return [
+            {"domain": row[0], "contact_count": int(row[1]), "latest_saved_at": row[2]}
+            for row in rows
+        ]
+
+    def saved_contacts(
+        self, owner_id: str, *, domain: str | None = None, search: str = "",
+        offset: int = 0, limit: int = 50,
+    ) -> tuple[int, list[dict[str, Any]]]:
+        self.initialize()
+        clauses = ["owner_id=?"]
+        parameters: list[Any] = [owner_id]
+        if domain:
+            clauses.append("domain=?")
+            parameters.append(domain)
+        if search:
+            clauses.append("email LIKE ? COLLATE NOCASE")
+            parameters.append(f"%{search}%")
+        where = " AND ".join(clauses)
+        with closing(self._connect()) as connection:
+            total = int(connection.execute(
+                f"SELECT COUNT(*) FROM prospecting_saved_contacts WHERE {where}", parameters
+            ).fetchone()[0])
+            rows = connection.execute(f"""
+                SELECT email, domain, category, pattern, source, run_id, saved_at
+                FROM prospecting_saved_contacts WHERE {where}
+                ORDER BY saved_at DESC, email ASC LIMIT ? OFFSET ?
+            """, [*parameters, limit, offset]).fetchall()
+        return total, [
             {"email": row[0], "domain": row[1], "category": row[2], "pattern": row[3],
              "source": row[4], "run_id": row[5], "saved_at": row[6]}
             for row in rows

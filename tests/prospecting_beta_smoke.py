@@ -145,9 +145,15 @@ with TestClient(app) as client:
     saved = client.get("/api/prospecting-beta/saved-contacts")
     assert saved.status_code == 200, saved.text
     assert saved.json()["total"] == 2
+    assert saved.json()["domains"][0]["domain"] == "example.com"
+    assert saved.json()["domains"][0]["contact_count"] == 2
     assert {item["email"] for item in saved.json()["items"]} == {
         candidates[0]["email"], personal["email"],
     }
+    first_page = client.get("/api/prospecting-beta/saved-contacts?domain=example.com&limit=1")
+    assert first_page.status_code == 200, first_page.text
+    assert first_page.json()["total"] == 2
+    assert len(first_page.json()["items"]) == 1
 
     second = client.post("/api/prospecting-beta/runs", json={
         "domain": "example.com", "country": "DE",
@@ -181,5 +187,16 @@ with TestClient(app) as client:
     stopped_read = client.get(f"/api/prospecting-beta/runs/{third.json()['id']}")
     assert stopped_read.status_code == 200
     assert stopped_read.json()["status"] == "stopped"
+
+    protection = prospecting_store.apply_protection_outcomes(third.json()["verification_job_id"], [{
+        "original_index": 0,
+        "smtp_result": "550 5.7.1 anti-enumeration policy rejected recipient discovery",
+    }])
+    assert protection is not None and protection["action"] == "stop"
+    assert prospecting_store.protection_status("example.com")["state"] == "stopped"
+    protected = client.post("/api/prospecting-beta/runs", json={
+        "domain": "example.com", "country": "DE", "email_pattern": "last.first",
+    })
+    assert protected.status_code == 429
 
 print("prospecting beta smoke: ok")

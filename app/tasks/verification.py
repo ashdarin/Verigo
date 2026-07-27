@@ -731,6 +731,18 @@ def requeue_recent_single_temporary_jobs() -> int:
     return repaired
 
 
+def apply_prospecting_receiver_protection(job: Job) -> Job | None:
+    """Apply the prospecting-only safety policy after a completed worker lease."""
+    from app.db.prospecting import prospecting_store
+
+    decision = prospecting_store.apply_protection_outcomes(job.id, job.results)
+    if decision is None:
+        return None
+    if decision["action"] == "stop":
+        return job_store.stop_with_reason(job.id, str(decision["message"]))
+    return job_store.defer_job(job.id, decision["resume_at"], str(decision["message"]))
+
+
 def run_job(job: Job) -> None:
     """Execute a claimed job and make incremental progress visible through SQLite."""
     job.status = "running"
@@ -837,6 +849,10 @@ def run_job(job: Job) -> None:
                 return
             refreshed = job_store.get(job.id)
             if refreshed is None or job_store.is_stopped(job.id):
+                return
+            protected = apply_prospecting_receiver_protection(refreshed)
+            if protected is not None:
+                job = protected
                 return
             overview = job_store.result_overview(job.id)
             if overview.settled < overview.total:

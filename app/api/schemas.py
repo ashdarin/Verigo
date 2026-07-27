@@ -126,11 +126,15 @@ class ProspectingRunResponse(BaseModel):
     summary: dict[str, int]
     results: list[dict[str, Any]]
     saved_count: int
+    protection: dict[str, Any]
 
 
 class SavedProspectingContactsResponse(BaseModel):
     total: int
     items: list[dict[str, Any]]
+    domains: list[dict[str, Any]]
+    offset: int
+    limit: int
 
 
 class PaymentOrderRequest(BaseModel):

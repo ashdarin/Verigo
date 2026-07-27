@@ -115,6 +115,17 @@ class Settings:
     prospecting_beta_catalogue_candidates: int = max(
         100, int(os.getenv("VERIGO_PROSPECTING_BETA_CATALOGUE_CANDIDATES", "10000"))
     )
+    # Domain prospecting deliberately backs off when a receiver signals that
+    # recipient enumeration or rapid probing is unwelcome.
+    prospecting_protection_cooldown_seconds: int = max(
+        60, int(os.getenv("VERIGO_PROSPECTING_PROTECTION_COOLDOWN_SECONDS", "300"))
+    )
+    prospecting_protection_stop_seconds: int = max(
+        300, int(os.getenv("VERIGO_PROSPECTING_PROTECTION_STOP_SECONDS", "86400"))
+    )
+    prospecting_protection_max_pressure_events: int = max(
+        2, int(os.getenv("VERIGO_PROSPECTING_PROTECTION_MAX_PRESSURE_EVENTS", "4"))
+    )
     metrics_salt: str = os.getenv("VERIGO_METRICS_SALT", "")
     # Restricts operational queue and worker details to the local monitor.
     monitor_token: str = os.getenv("VERIGO_MONITOR_TOKEN", "")
