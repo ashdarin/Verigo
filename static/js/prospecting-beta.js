@@ -51,7 +51,7 @@ function renderResults(run) {
 function renderRun(run) {
   state.run = run;
   byId("run-panel").classList.remove("hidden"); byId("results-panel").classList.remove("hidden");
-  byId("run-domain").textContent = run.domain;
+  byId("run-domain").textContent = `${run.domain} (${run.country})`;
   const status = byId("run-status"); status.textContent = labels[run.status] || run.status; status.className = `status ${run.status}`;
   const active = run.status === "queued" || run.status === "running";
   byId("stop").classList.toggle("hidden", !active);
@@ -59,7 +59,9 @@ function renderRun(run) {
   byId("progress-value").textContent = `${run.progress}%`; byId("progress-bar").style.width = `${run.progress}%`;
   byId("metric-total").textContent = run.total; byId("metric-completed").textContent = run.completed;
   byId("metric-verified").textContent = run.summary.verified || 0; byId("metric-catchall").textContent = run.summary.catch_all || 0;
-  byId("profile-copy").textContent = run.profile_patterns.length ? `本次使用已学习格式：${run.profile_patterns.join("、")}` : "当前域名没有已学习格式，已使用受控的默认候选排序。";
+  const selectedPattern = run.requested_pattern ? `已优先使用你提供的规则：${run.requested_pattern}。` : "未提供邮箱规则，已按国家姓名库生成候选。";
+  const learnedPattern = run.profile_patterns.length ? ` 已学习规则：${run.profile_patterns.join("、")}。` : "";
+  byId("profile-copy").textContent = `${selectedPattern}${learnedPattern}`;
   byId("run-error").textContent = run.error || "";
   renderResults(run);
 }
@@ -76,7 +78,7 @@ byId("run-form").addEventListener("submit", async (event) => {
   event.preventDefault(); clearTimeout(state.timer); byId("form-error").textContent = "";
   const button = byId("submit"); button.disabled = true;
   try {
-    const run = await api("/api/prospecting-beta/runs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ domain: byId("domain").value }) });
+    const run = await api("/api/prospecting-beta/runs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ domain: byId("domain").value, country: byId("country").value, email_pattern: byId("email-pattern").value || null }) });
     renderRun(run); poll();
   } catch (error) { byId("form-error").textContent = error.message; }
   finally { button.disabled = false; }

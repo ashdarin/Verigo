@@ -5,6 +5,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, field_validator
 
 from app.config import settings
+from app.core.prospecting import normalize_country, normalize_person_pattern
 
 
 class CreateJobRequest(BaseModel):
@@ -83,11 +84,25 @@ class DiscoveryResponse(BaseModel):
 
 class ProspectingRunRequest(BaseModel):
     domain: str = Field(min_length=3, max_length=253)
+    country: str = Field(min_length=2, max_length=8)
+    email_pattern: str | None = Field(default=None, max_length=32)
+
+    @field_validator("country")
+    @classmethod
+    def check_country(cls, value: str) -> str:
+        return normalize_country(value)
+
+    @field_validator("email_pattern")
+    @classmethod
+    def check_email_pattern(cls, value: str | None) -> str | None:
+        return normalize_person_pattern(value)
 
 
 class ProspectingRunResponse(BaseModel):
     id: str
     domain: str
+    country: str
+    requested_pattern: str | None
     verification_job_id: str
     status: Literal["queued", "running", "completed", "failed", "stopped"]
     created_at: str

@@ -265,6 +265,7 @@ for setting in \
     'VERIGO_TENCENT_QQ_WORKER_ALLOWED_EMAILS=*' \
     'VERIGO_GMAIL_WORKER_ALLOWED_EMAILS=*' \
     'VERIGO_MAX_GUEST_EMAILS=100' \
+    'VERIGO_PROSPECTING_BETA_MAX_CANDIDATES=1000' \
     'VERIGO_FREE_SINGLE_DAILY_LIMIT=20' \
     'VERIGO_EMAIL_VERIFICATION_TRIAL_CREDITS=10' \
     'VERIGO_TRIAL_CREDIT_DAYS=7' \
@@ -287,6 +288,12 @@ if [[ ! -f "$state_dir/data/domain_type_cache.json" && -f "$state_dir/domain_typ
     install -m 600 -o verigo -g verigo "$state_dir/domain_type_cache.json" "$state_dir/data/domain_type_cache.json"
 fi
 chmod 600 /etc/verigo/verigo.env
+
+# Version 2 of private prospecting needs a materially larger statistical
+# sample. Migrate only the old shipped default, preserving operator overrides.
+if grep -q '^VERIGO_PROSPECTING_BETA_MAX_CANDIDATES=120$' /etc/verigo/verigo.env; then
+    sed -i 's/^VERIGO_PROSPECTING_BETA_MAX_CANDIDATES=120$/VERIGO_PROSPECTING_BETA_MAX_CANDIDATES=1000/' /etc/verigo/verigo.env
+fi
 
 if ! cmp -s "$previous_release/requirements.txt" "$release_path/requirements.txt"; then
     "$state_dir/.venv/bin/pip" install --disable-pip-version-check -r "$release_path/requirements.txt"

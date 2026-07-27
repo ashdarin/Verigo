@@ -839,6 +839,8 @@ def serialize_prospecting_run(run: ProspectingRun) -> ProspectingRunResponse:
     return ProspectingRunResponse(
         id=run.id,
         domain=run.domain,
+        country=run.country,
+        requested_pattern=run.requested_pattern,
         verification_job_id=run.verification_job_id,
         status=job.status,
         created_at=run.created_at.isoformat(),
@@ -865,7 +867,11 @@ def create_prospecting_run(
         domain = normalize_company_domain(payload.domain)
         learned_patterns = prospecting_store.domain_patterns(domain)
         candidates = generate_candidates(
-            domain, settings.prospecting_beta_max_candidates, learned_patterns
+            domain,
+            payload.country,
+            settings.prospecting_beta_max_candidates,
+            learned_patterns,
+            payload.email_pattern,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -880,7 +886,7 @@ def create_prospecting_run(
             job_id=uuid.uuid4().hex[:12],
         )
         run = prospecting_store.create_run(
-            user.id, domain, job.id, candidates, learned_patterns
+            user.id, domain, payload.country, payload.email_pattern, job.id, candidates, learned_patterns
         )
     except RuntimeError as exc:
         if job is not None:

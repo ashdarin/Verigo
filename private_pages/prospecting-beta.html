@@ -33,6 +33,31 @@
           <input id="domain" name="domain" type="text" autocomplete="url" placeholder="company.com" spellcheck="false" required>
           <button id="submit" class="primary" type="submit">开始发现</button>
         </div>
+        <div class="run-fields">
+          <label for="country">公司所在国家<span class="required">必填</span>
+            <select id="country" name="country" required>
+              <option value="" selected disabled>请选择国家</option>
+              <option value="US">美国</option><option value="GB">英国</option><option value="DE">德国</option>
+              <option value="FR">法国</option><option value="IT">意大利</option><option value="ES">西班牙</option>
+              <option value="CN">中国</option><option value="JP">日本</option><option value="KR">韩国</option>
+              <option value="IN">印度</option><option value="CA">加拿大</option><option value="AU">澳大利亚</option>
+              <option value="NL">荷兰</option><option value="SE">瑞典</option><option value="CH">瑞士</option>
+              <option value="BR">巴西</option><option value="MX">墨西哥</option><option value="PL">波兰</option>
+              <option value="TR">土耳其</option><option value="OTHER">其他（英文姓名库）</option>
+            </select>
+          </label>
+          <label for="email-pattern">邮箱命名规则<span class="optional">可选</span>
+            <select id="email-pattern" name="email_pattern">
+              <option value="">不知道或不确定</option>
+              <option value="first.last">first.last</option><option value="firstlast">firstlast</option>
+              <option value="first_last">first_last</option><option value="first-last">first-last</option>
+              <option value="f.last">f.last</option><option value="flast">flast</option>
+              <option value="last.first">last.first</option><option value="lastfirst">lastfirst</option>
+              <option value="last_first">last_first</option>
+            </select>
+          </label>
+        </div>
+        <p class="field-hint">已知命名规则时请选择，系统会优先验证该规则，结果准确性更高。</p>
         <p id="form-error" class="error" role="alert"></p>
       </form>
     </section>

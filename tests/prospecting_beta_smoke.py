@@ -17,12 +17,12 @@ os.environ["VERIGO_MAX_PENDING_JOBS"] = "50"
 os.environ["VERIGO_PROSPECTING_BETA_ENABLED"] = "true"
 os.environ["VERIGO_PROSPECTING_BETA_ALLOWED_EMAILS"] = "4671793@qq.com"
 os.environ["VERIGO_PROSPECTING_BETA_DAILY_RUN_LIMIT"] = "3"
-os.environ["VERIGO_PROSPECTING_BETA_MAX_CANDIDATES"] = "48"
+os.environ["VERIGO_PROSPECTING_BETA_MAX_CANDIDATES"] = "128"
 
 from fastapi.testclient import TestClient
 
 from app.config import settings
-from app.core.prospecting import generate_candidates, normalize_company_domain
+from app.core.prospecting import ROLE_LOCAL_PARTS, generate_candidates, normalize_company_domain
 from app.db.auth import auth_store
 from app.db.jobs import job_store, utc_now
 from app.db.prospecting import prospecting_store
@@ -30,7 +30,12 @@ from app.main import app
 
 
 assert normalize_company_domain("https://www.example.com/about") == "example.com"
-assert len(generate_candidates("example.com", 48)) == 48
+assert len(generate_candidates("example.com", "DE", 1_000)) == 1_000
+german_candidates = generate_candidates("example.com", "DE", 128, requested_pattern="last.first")
+assert len(german_candidates) == 128
+first_personal = german_candidates[len(ROLE_LOCAL_PARTS)]
+assert first_personal.pattern == "last.first"
+assert first_personal.source == "user_selected_pattern"
 try:
     normalize_company_domain("gmail.com")
 except ValueError:
@@ -59,15 +64,23 @@ with TestClient(app) as client:
     assert page.status_code == 200
     assert page.headers["x-robots-tag"] == "noindex, nofollow, noarchive"
 
-    created = client.post("/api/prospecting-beta/runs", json={"domain": "example.com"})
+    missing_country = client.post("/api/prospecting-beta/runs", json={"domain": "example.com"})
+    assert missing_country.status_code == 422
+    created = client.post("/api/prospecting-beta/runs", json={
+        "domain": "example.com", "country": "DE", "email_pattern": "last.first",
+    })
     assert created.status_code == 202, created.text
     run = created.json()
-    assert run["total"] == 48
+    assert run["total"] == 128
+    assert run["country"] == "DE"
+    assert run["requested_pattern"] == "last.first"
     assert run["summary"]["verified"] == 0
 
     candidates = prospecting_store.candidates(run["id"])
     assert candidates[0]["category"] == "business_entry"
     personal = next(item for item in candidates if item["category"] == "personal_candidate")
+    assert personal["pattern"] == "last.first"
+    assert personal["source"] == "user_selected_pattern"
     job = job_store.get(run["verification_job_id"])
     assert job is not None
     assert job.worker_count == settings.max_workers_per_job

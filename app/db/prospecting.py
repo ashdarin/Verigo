@@ -23,6 +23,8 @@ class ProspectingRun:
     id: str
     owner_id: str
     domain: str
+    country: str
+    requested_pattern: str | None
     verification_job_id: str
     candidate_count: int
     created_at: datetime
@@ -46,11 +48,17 @@ class ProspectingStore:
                 connection.execute("""
                     CREATE TABLE IF NOT EXISTS prospecting_runs (
                         id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, domain TEXT NOT NULL,
+                        country TEXT NOT NULL DEFAULT 'US', requested_pattern TEXT,
                         verification_job_id TEXT NOT NULL UNIQUE, candidate_count INTEGER NOT NULL,
                         profile_patterns_json TEXT NOT NULL, created_at TEXT NOT NULL,
                         profiles_recorded_at TEXT
                     )
                 """)
+                columns = {row[1] for row in connection.execute("PRAGMA table_info(prospecting_runs)")}
+                if "country" not in columns:
+                    connection.execute("ALTER TABLE prospecting_runs ADD COLUMN country TEXT NOT NULL DEFAULT 'US'")
+                if "requested_pattern" not in columns:
+                    connection.execute("ALTER TABLE prospecting_runs ADD COLUMN requested_pattern TEXT")
                 connection.execute("""
                     CREATE TABLE IF NOT EXISTS prospecting_candidates (
                         run_id TEXT NOT NULL, original_index INTEGER NOT NULL, email TEXT NOT NULL,
@@ -73,16 +81,18 @@ class ProspectingStore:
     def _run_from_row(row: tuple[Any, ...]) -> ProspectingRun:
         import json
         return ProspectingRun(
-            id=row[0], owner_id=row[1], domain=row[2], verification_job_id=row[3],
-            candidate_count=int(row[4]), created_at=datetime.fromisoformat(row[5]),
-            profile_patterns=tuple(json.loads(row[6])),
-            profiles_recorded_at=datetime.fromisoformat(row[7]) if row[7] else None,
+            id=row[0], owner_id=row[1], domain=row[2], country=row[3], requested_pattern=row[4],
+            verification_job_id=row[5], candidate_count=int(row[6]), created_at=datetime.fromisoformat(row[7]),
+            profile_patterns=tuple(json.loads(row[8])),
+            profiles_recorded_at=datetime.fromisoformat(row[9]) if row[9] else None,
         )
 
     def create_run(
         self,
         owner_id: str,
         domain: str,
+        country: str,
+        requested_pattern: str | None,
         verification_job_id: str,
         candidates: list[ProspectingCandidate],
         profile_patterns: Iterable[str],
@@ -90,7 +100,8 @@ class ProspectingStore:
         import json
         self.initialize()
         run = ProspectingRun(
-            id=uuid.uuid4().hex[:12], owner_id=owner_id, domain=domain,
+            id=uuid.uuid4().hex[:12], owner_id=owner_id, domain=domain, country=country,
+            requested_pattern=requested_pattern,
             verification_job_id=verification_job_id, candidate_count=len(candidates),
             created_at=utc_now(), profile_patterns=tuple(profile_patterns), profiles_recorded_at=None,
         )
@@ -99,11 +110,11 @@ class ProspectingStore:
             try:
                 connection.execute("""
                     INSERT INTO prospecting_runs(
-                        id, owner_id, domain, verification_job_id, candidate_count,
+                        id, owner_id, domain, country, requested_pattern, verification_job_id, candidate_count,
                         profile_patterns_json, created_at, profiles_recorded_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
                 """, (
-                    run.id, run.owner_id, run.domain, run.verification_job_id,
+                    run.id, run.owner_id, run.domain, run.country, run.requested_pattern, run.verification_job_id,
                     run.candidate_count, json.dumps(run.profile_patterns), run.created_at.isoformat(),
                 ))
                 connection.executemany("""
@@ -123,7 +134,7 @@ class ProspectingStore:
         self.initialize()
         with closing(self._connect()) as connection:
             row = connection.execute("""
-                SELECT id, owner_id, domain, verification_job_id, candidate_count, created_at,
+                SELECT id, owner_id, domain, country, requested_pattern, verification_job_id, candidate_count, created_at,
                        profile_patterns_json, profiles_recorded_at
                 FROM prospecting_runs WHERE id=? AND owner_id=?
             """, (run_id, owner_id)).fetchone()
@@ -133,7 +144,7 @@ class ProspectingStore:
         self.initialize()
         with closing(self._connect()) as connection:
             rows = connection.execute("""
-                SELECT id, owner_id, domain, verification_job_id, candidate_count, created_at,
+                SELECT id, owner_id, domain, country, requested_pattern, verification_job_id, candidate_count, created_at,
                        profile_patterns_json, profiles_recorded_at
                 FROM prospecting_runs WHERE owner_id=? ORDER BY created_at DESC LIMIT ?
             """, (owner_id, limit)).fetchall()

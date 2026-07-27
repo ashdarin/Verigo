@@ -111,7 +111,7 @@ class Settings:
         1, int(os.getenv("VERIGO_PROSPECTING_BETA_DAILY_RUN_LIMIT", "3"))
     )
     prospecting_beta_max_candidates: int = min(
-        200, max(24, int(os.getenv("VERIGO_PROSPECTING_BETA_MAX_CANDIDATES", "120")))
+        1000, max(100, int(os.getenv("VERIGO_PROSPECTING_BETA_MAX_CANDIDATES", "1000")))
     )
     metrics_salt: str = os.getenv("VERIGO_METRICS_SALT", "")
     # Restricts operational queue and worker details to the local monitor.
