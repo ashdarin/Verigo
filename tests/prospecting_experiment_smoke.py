@@ -45,6 +45,22 @@ assert report["matched_expected_emails"] == 1
 assert report["coverage"] == 1.0
 assert report["top_1_coverage"] == 1.0
 
+reversed_one = experiment.Contact(
+    domain="reverse.example",
+    first_name="Emma",
+    last_name="Reynolds",
+    expected_email="reynolds.emma@reverse.example",
+)
+reversed_two = experiment.Contact(
+    domain="reverse.example",
+    first_name="Hannah",
+    last_name="Graham",
+    expected_email="graham.hannah@reverse.example",
+)
+calibration = experiment.leave_one_out_calibration([reversed_one, reversed_two], 8)
+assert calibration["evaluated_contacts"] == 2
+assert calibration["top_1_coverage"] == 1.0
+
 with tempfile.TemporaryDirectory() as temp_dir:
     input_path = Path(temp_dir) / "contacts.csv"
     input_path.write_text(

@@ -19,7 +19,9 @@ import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections import Counter
 from dataclasses import asdict, dataclass
+from functools import lru_cache
 from pathlib import Path
 from statistics import mean, median
 from typing import Iterable
@@ -127,22 +129,24 @@ def normalize_email(value: str) -> str:
     return f"{local}@{normalize_domain(domain)}"
 
 
-def _legacy_patterns(domain: str) -> tuple[list[str], str]:
+@lru_cache(maxsize=1_024)
+def _legacy_patterns(domain: str) -> tuple[tuple[str, ...], str]:
     """Bridge the first version's domain catalogue without copying its data."""
     legacy_path = Path(__file__).with_name("name_database (1).py")
     if not legacy_path.exists():
-        return [], "generic"
+        return (), "generic"
     spec = importlib.util.spec_from_file_location("verigo_legacy_name_database", legacy_path)
     if spec is None or spec.loader is None:
-        return [], "generic"
+        return (), "generic"
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     database = module.InternationalNameDatabase()
     patterns = database.get_enterprise_patterns(domain)
-    return list(patterns), "legacy_domain_catalogue" if database.get_company_info(domain) else "country_inference"
+    return tuple(patterns), "legacy_domain_catalogue" if database.get_company_info(domain) else "country_inference"
 
 
-def ranked_patterns(domain: str) -> tuple[list[str], str]:
+@lru_cache(maxsize=1_024)
+def ranked_patterns(domain: str) -> tuple[tuple[str, ...], str]:
     raw_patterns, source = _legacy_patterns(domain)
     canonical = [PATTERN_ALIASES.get(pattern.lower(), pattern.lower()) for pattern in raw_patterns]
     ordered = list(dict.fromkeys([*canonical, *DEFAULT_PATTERNS]))
@@ -154,7 +158,7 @@ def ranked_patterns(domain: str) -> tuple[list[str], str]:
             "last.first", "lastfirst", "last_first", "first", "last",
         }
     ]
-    return supported, source
+    return tuple(supported), source
 
 
 def render_local_part(pattern: str, first: str, last: str) -> str:
@@ -174,7 +178,11 @@ def render_local_part(pattern: str, first: str, last: str) -> str:
     return values[pattern]
 
 
-def candidates_for_contact(contact: Contact, limit: int) -> list[Candidate]:
+def candidates_for_contact(
+    contact: Contact,
+    limit: int,
+    preferred_patterns: Iterable[str] = (),
+) -> list[Candidate]:
     if limit < 1:
         raise ValueError("limit must be at least 1")
     domain = normalize_domain(contact.domain)
@@ -182,6 +190,9 @@ def candidates_for_contact(contact: Contact, limit: int) -> list[Candidate]:
     last = normalize_name_part(contact.last_name)
     expected_email = normalize_email(contact.expected_email)
     patterns, source = ranked_patterns(domain)
+    patterns = list(dict.fromkeys([*preferred_patterns, *patterns]))
+    if preferred_patterns:
+        source = f"{source}+calibrated"
     candidates: list[Candidate] = []
     seen: set[str] = set()
     for pattern in patterns:
@@ -203,6 +214,69 @@ def candidates_for_contact(contact: Contact, limit: int) -> list[Candidate]:
         if len(candidates) == limit:
             break
     return candidates
+
+
+@lru_cache(maxsize=16_384)
+def expected_pattern(contact: Contact) -> str | None:
+    """Return the supported pattern that generated a labeled email, if any."""
+    expected_email = normalize_email(contact.expected_email)
+    if not expected_email:
+        return None
+    for candidate in candidates_for_contact(contact, limit=64):
+        if candidate.email == expected_email:
+            return candidate.pattern
+    return None
+
+
+def leave_one_out_calibration(
+    contacts: Iterable[Contact],
+    limit_per_contact: int,
+) -> dict[str, object]:
+    """Test domain-pattern learning without training on the evaluated contact."""
+    contact_list = list(contacts)
+    labeled = [contact for contact in contact_list if contact.expected_email.strip()]
+    ranks: list[int] = []
+    domains: set[str] = set()
+    eligible_contacts = 0
+
+    for target in labeled:
+        target_domain = normalize_domain(target.domain)
+        evidence = [
+            expected_pattern(contact)
+            for contact in labeled
+            if normalize_domain(contact.domain) == target_domain
+            and contact.expected_email != target.expected_email
+        ]
+        pattern_counts = Counter(pattern for pattern in evidence if pattern)
+        if not pattern_counts:
+            continue
+        eligible_contacts += 1
+        default_order, _ = ranked_patterns(target_domain)
+        preferred = [
+            pattern for pattern, _ in sorted(
+                pattern_counts.items(),
+                key=lambda item: (-item[1], default_order.index(item[0])),
+            )
+        ]
+        candidates = candidates_for_contact(target, limit_per_contact, preferred)
+        expected_email = normalize_email(target.expected_email)
+        rank = next((item.rank for item in candidates if item.email == expected_email), None)
+        if rank is not None:
+            ranks.append(rank)
+        domains.add(target_domain)
+
+    return {
+        "evaluated_contacts": len(ranks),
+        "eligible_contacts": eligible_contacts,
+        "domains_with_other_labeled_contacts": len(domains),
+        "coverage": round(len(ranks) / eligible_contacts, 4) if eligible_contacts else None,
+        "top_1_coverage": round(sum(rank == 1 for rank in ranks) / len(ranks), 4) if ranks else None,
+        "mean_rank_when_matched": round(mean(ranks), 2) if ranks else None,
+        "note": (
+            "Each contact is ranked using only labels from other contacts on the same domain. "
+            "Domains with one labeled contact are excluded from this calibration result."
+        ),
+    }
 
 
 def read_contacts(path: Path) -> list[Contact]:
@@ -269,6 +343,7 @@ def coverage_report(contacts: Iterable[Contact], manifest: Iterable[Candidate]) 
         "mean_rank_when_matched": round(mean(hits), 2) if hits else None,
         "mean_candidates_per_contact": round(mean(candidate_counts), 2),
         "median_candidates_per_contact": median(candidate_counts),
+        "leave_one_out_domain_calibration": leave_one_out_calibration(contact_list, max(candidate_counts)),
         "note": (
             "Coverage measures only whether an independently known email appears in the candidate list. "
             "It does not claim identity precision or SMTP verification accuracy."
