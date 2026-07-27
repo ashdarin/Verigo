@@ -1372,10 +1372,27 @@ class JobStore:
             ).fetchone()
         return self._runtime_from_row(target, row)
 
-    def record_worker_seen(self, target: str, worker_id: str) -> None:
+    def record_worker_seen(
+        self, target: str, worker_id: str, capacity: int | None = None
+    ) -> None:
+        """Record a remote heartbeat in the canonical node registry."""
         self.initialize()
         now = utc_now().isoformat()
         with closing(self._connect()) as connection:
+            existing = connection.execute(
+                "SELECT capacity FROM worker_nodes WHERE target=? AND worker_id=?",
+                (target, worker_id),
+            ).fetchone()
+            node_capacity = max(1, capacity if capacity is not None else (
+                int(existing[0]) if existing else 1
+            ))
+            connection.execute(
+                """INSERT INTO worker_nodes(target, worker_id, capacity, health, last_seen_at)
+                VALUES (?, ?, ?, 'healthy', ?)
+                ON CONFLICT(target, worker_id) DO UPDATE SET
+                    capacity=excluded.capacity, health='healthy', last_seen_at=excluded.last_seen_at""",
+                (target, worker_id, node_capacity, now),
+            )
             connection.execute(
                 """
                 INSERT INTO worker_heartbeats(target, worker_id, last_seen_at)

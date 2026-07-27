@@ -498,22 +498,20 @@ async def claim_tencent_qq_job(
     worker_target: str,
     token: Annotated[str | None, Header(alias="X-Verigo-Worker-Token")] = None,
     worker_id: Annotated[str | None, Header(alias="X-Verigo-Worker-Id")] = None,
+    worker_capacity: Annotated[int, Header(alias="X-Verigo-Worker-Capacity")] = 1,
     wait_seconds: int = Query(default=20, ge=0, le=25),
 ) -> dict[str, object]:
     execution_target = require_remote_worker(worker_target, token)
     worker_name = (worker_id or "").strip()
     if not worker_name or len(worker_name) > 128:
         raise HTTPException(status_code=422, detail="腾讯 QQ 验证节点标识无效")
-    if execution_target == "tencent_qq":
-        worker_lifecycle.record_worker_seen(worker_name)
-    elif execution_target == DOMESTIC_CLOUDSTUDIO_TARGET:
-        domestic_worker_lifecycle.record_worker_seen(worker_name)
-    else:
-        cloudshell_lifecycle.record_worker_seen(worker_name)
+    if not 1 <= worker_capacity <= 128:
+        raise HTTPException(status_code=422, detail="Remote worker capacity is invalid")
+    job_store.record_worker_seen(execution_target, worker_name, worker_capacity)
     deadline = time.monotonic() + wait_seconds
     while True:
         job = job_store.claim_remote_lease(
-            worker_name, execution_target, capacity=1,
+            worker_name, execution_target, capacity=worker_capacity,
             shard_size=min(100, settings.remote_worker_max_emails_per_job),
         )
         if job is not None:

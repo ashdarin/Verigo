@@ -28,6 +28,7 @@ WORKER_ID = os.getenv(
 )
 POLL_SECONDS = max(0.1, float(os.getenv("VERIGO_TENCENT_QQ_POLL_SECONDS", "0.25")))
 RETRY_SECONDS = max(1.0, float(os.getenv("VERIGO_TENCENT_QQ_RETRY_SECONDS", "5")))
+WORKER_CAPACITY = max(1, int(os.getenv("VERIGO_REMOTE_WORKER_CAPACITY", "1")))
 
 
 class WorkerRequestError(RuntimeError):
@@ -49,6 +50,7 @@ def request_json(path: str, payload: dict[str, object] | None = None) -> dict[st
         "-H", "Content-Type: application/json",
         "-H", f"X-Verigo-Worker-Token: {TOKEN}",
         "-H", f"X-Verigo-Worker-Id: {WORKER_ID}",
+        "-H", f"X-Verigo-Worker-Capacity: {WORKER_CAPACITY}",
     ]
     request_body = None
     if payload is not None:
