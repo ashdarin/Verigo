@@ -2,8 +2,9 @@
 set -Eeuo pipefail
 
 release_dir=${VERIGO_RELEASE_DIR:-/tmp/verigo-release}
-app_dir=/opt/verigo
-backup_dir=/opt/verigo-release-rollback
+state_dir=/opt/verigo
+releases_dir="$state_dir/releases"
+current_link="$state_dir/current"
 release_version_file="$release_dir/.verigo-release"
 
 test -f "$release_dir/app/main.py"
@@ -16,95 +17,104 @@ if [[ ! "$release_version" =~ ^[0-9a-f]{7,40}$ ]]; then
     exit 1
 fi
 
-set_application_owner() {
-    chown -R verigo:verigo "$app_dir/app" "$app_dir/static" "$app_dir/deploy"
-    chown verigo:verigo "$app_dir/requirements.txt" "$app_dir/验证8.py"
+activate_release() {
+    local target=$1
+    local pending_link="$state_dir/.current-${release_version:0:12}-$$"
+    ln -s "$target" "$pending_link"
+    mv -Tf "$pending_link" "$current_link"
+}
+
+ensure_legacy_release() {
+    if [[ -L "$current_link" ]]; then
+        return
+    fi
+    local legacy_version
+    legacy_version=$(tr -d '\r\n' < "$state_dir/RELEASE_VERSION" 2>/dev/null || true)
+    [[ "$legacy_version" =~ ^[0-9a-f]{7,40}$ ]] || legacy_version="legacy-$(date -u +%Y%m%dT%H%M%SZ)"
+    local legacy_release="$releases_dir/$legacy_version"
+    if [[ ! -d "$legacy_release" ]]; then
+        local incoming
+        incoming=$(mktemp -d "$releases_dir/.incoming-legacy.XXXXXX")
+        rsync -a --delete --exclude='__pycache__' "$state_dir/app/" "$incoming/app/"
+        rsync -a --delete "$state_dir/static/" "$incoming/static/"
+        rsync -a --delete "$state_dir/deploy/" "$incoming/deploy/"
+        cp "$state_dir/requirements.txt" "$incoming/requirements.txt"
+        cp "$state_dir/验证8.py" "$incoming/验证8.py"
+        printf '%s\n' "$legacy_version" > "$incoming/RELEASE_VERSION"
+        chown -R verigo:verigo "$incoming"
+        mv "$incoming" "$legacy_release"
+    fi
+    activate_release "$legacy_release"
 }
 
 rollback() {
-    status=$?
+    local status=$?
     trap - ERR
-    echo "Release failed; restoring previous application files" >&2
-    rsync -a --delete "$backup_dir/app/" "$app_dir/app/"
-    rsync -a --delete "$backup_dir/static/" "$app_dir/static/"
-    rsync -a --delete "$backup_dir/deploy/" "$app_dir/deploy/"
-    cp "$backup_dir/requirements.txt" "$app_dir/requirements.txt"
-    cp "$backup_dir/验证8.py" "$app_dir/验证8.py"
-    if [[ -f "$backup_dir/RELEASE_VERSION" ]]; then
-        cp "$backup_dir/RELEASE_VERSION" "$app_dir/RELEASE_VERSION"
-    else
-        rm -f "$app_dir/RELEASE_VERSION"
+    if [[ -n "${previous_release:-}" ]]; then
+        echo "Release failed; switching back to $previous_release" >&2
+        activate_release "$previous_release"
+        systemctl restart verigo || true
+        systemctl restart verigo-supervisor || true
     fi
-    set_application_owner
-    systemctl restart verigo || true
     exit "$status"
 }
 
-# A restart is not a drain. Refuse to deploy across active verification leases
-# unless an operator has explicitly placed the service in maintenance mode.
-if [[ "${VERIGO_DEPLOY_MAINTENANCE:-false}" != "true" && -f "$app_dir/data/verigo.db" ]]; then
-    active_jobs=$("$app_dir/.venv/bin/python" -c "import sqlite3; print(sqlite3.connect('$app_dir/data/verigo.db').execute(\"SELECT COUNT(*) FROM jobs WHERE status IN ('queued', 'running')\").fetchone()[0])" 2>/dev/null || printf 'unknown')
+mkdir -p "$releases_dir"
+ensure_legacy_release
+previous_release=$(readlink -f "$current_link")
+
+# A restart is not a drain. Until the formal drain controller is enabled,
+# preserve the existing safety boundary and never restart over active work.
+if [[ "${VERIGO_DEPLOY_MAINTENANCE:-false}" != "true" && -f "$state_dir/data/verigo.db" ]]; then
+    active_jobs=$("$state_dir/.venv/bin/python" -c "import sqlite3; print(sqlite3.connect('$state_dir/data/verigo.db').execute(\"SELECT COUNT(*) FROM jobs WHERE status IN ('queued', 'running')\").fetchone()[0])" 2>/dev/null || printf 'unknown')
     if [[ "$active_jobs" != "0" ]]; then
         echo "Refusing release: $active_jobs active verification jobs. Drain them or set VERIGO_DEPLOY_MAINTENANCE=true." >&2
         exit 2
     fi
 fi
 
+release_path="$releases_dir/$release_version"
+if [[ ! -d "$release_path" ]]; then
+    incoming=$(mktemp -d "$releases_dir/.incoming-${release_version:0:12}.XXXXXX")
+    rsync -a --delete --exclude='__pycache__' --exclude='.verigo-release' --exclude='release.tar.gz' "$release_dir/" "$incoming/"
+    printf '%s\n' "$release_version" > "$incoming/RELEASE_VERSION"
+    chown -R verigo:verigo "$incoming"
+    mv "$incoming" "$release_path"
+fi
+
+test -f "$release_path/app/main.py"
+test -f "$release_path/RELEASE_VERSION"
+
 if ! command -v aws >/dev/null && grep -q '^VERIGO_BACKUP_S3_BUCKET=.' /etc/verigo/backup.env 2>/dev/null; then
     apt-get update
     DEBIAN_FRONTEND=noninteractive apt-get install -y awscli
 fi
-# Backups are independent of a code release.  Do not block availability on a
-# remote backup provider or package installation.
-systemctl start --no-block verigo-backup.service
-mkdir -p "$backup_dir"
-rsync -a --delete "$app_dir/app/" "$backup_dir/app/"
-rsync -a --delete "$app_dir/static/" "$backup_dir/static/"
-rsync -a --delete "$app_dir/deploy/" "$backup_dir/deploy/"
-cp "$app_dir/requirements.txt" "$backup_dir/requirements.txt"
-cp "$app_dir/验证8.py" "$backup_dir/验证8.py"
-if [[ -f "$app_dir/RELEASE_VERSION" ]]; then
-    cp "$app_dir/RELEASE_VERSION" "$backup_dir/RELEASE_VERSION"
-else
-    rm -f "$backup_dir/RELEASE_VERSION"
-fi
 
-trap rollback ERR
-
-rsync -a --delete --exclude='__pycache__' "$release_dir/app/" "$app_dir/app/"
-rsync -a --delete "$release_dir/static/" "$app_dir/static/"
-rsync -a --delete "$release_dir/deploy/" "$app_dir/deploy/"
-cp "$release_dir/requirements.txt" "$app_dir/requirements.txt"
-cp "$release_dir/验证8.py" "$app_dir/验证8.py"
-printf '%s\n' "$release_version" > "$app_dir/RELEASE_VERSION"
-
-install -m 700 "$app_dir/deploy/verigo-backup.sh" /usr/local/sbin/verigo-backup
-install -m 644 "$app_dir/deploy/verigo-backup.service" /etc/systemd/system/verigo-backup.service
-install -m 644 "$app_dir/deploy/verigo-backup.timer" /etc/systemd/system/verigo-backup.timer
-install -m 700 "$app_dir/deploy/verigo-monitor.sh" /usr/local/sbin/verigo-monitor
-install -m 644 "$app_dir/deploy/verigo-monitor.service" /etc/systemd/system/verigo-monitor.service
-install -m 644 "$app_dir/deploy/verigo-monitor.timer" /etc/systemd/system/verigo-monitor.timer
-install -m 700 "$app_dir/deploy/verigo-retention.sh" /usr/local/sbin/verigo-retention
-install -m 644 "$app_dir/deploy/verigo-retention.service" /etc/systemd/system/verigo-retention.service
-install -m 644 "$app_dir/deploy/verigo-retention.timer" /etc/systemd/system/verigo-retention.timer
-install -m 644 "$app_dir/deploy/verigo-supervisor.service" /etc/systemd/system/verigo-supervisor.service
+install -m 700 "$release_path/deploy/verigo-backup.sh" /usr/local/sbin/verigo-backup
+install -m 644 "$release_path/deploy/verigo-backup.service" /etc/systemd/system/verigo-backup.service
+install -m 644 "$release_path/deploy/verigo-backup.timer" /etc/systemd/system/verigo-backup.timer
+install -m 700 "$release_path/deploy/verigo-monitor.sh" /usr/local/sbin/verigo-monitor
+install -m 644 "$release_path/deploy/verigo-monitor.service" /etc/systemd/system/verigo-monitor.service
+install -m 644 "$release_path/deploy/verigo-monitor.timer" /etc/systemd/system/verigo-monitor.timer
+install -m 700 "$release_path/deploy/verigo-retention.sh" /usr/local/sbin/verigo-retention
+install -m 644 "$release_path/deploy/verigo-retention.service" /etc/systemd/system/verigo-retention.service
+install -m 644 "$release_path/deploy/verigo-retention.timer" /etc/systemd/system/verigo-retention.timer
+install -m 644 "$release_path/deploy/verigo.service" /etc/systemd/system/verigo.service
+install -m 644 "$release_path/deploy/verigo-supervisor.service" /etc/systemd/system/verigo-supervisor.service
 if [[ ! -f /etc/verigo/backup.env ]]; then
-    install -m 600 "$app_dir/deploy/verigo-backup.env.example" /etc/verigo/backup.env
+    install -m 600 "$release_path/deploy/verigo-backup.env.example" /etc/verigo/backup.env
 fi
 if [[ ! -f /etc/verigo/monitor.env ]]; then
-    install -m 600 "$app_dir/deploy/verigo-monitor.env.example" /etc/verigo/monitor.env
+    install -m 600 "$release_path/deploy/verigo-monitor.env.example" /etc/verigo/monitor.env
 fi
 if [[ ! -f /etc/verigo/retention.env ]]; then
-    install -m 600 "$app_dir/deploy/verigo-retention.env.example" /etc/verigo/retention.env
-fi
-systemctl daemon-reload
-systemctl enable --now verigo-backup.timer verigo-monitor.timer verigo-retention.timer
-
-if ! cmp -s "$backup_dir/requirements.txt" "$app_dir/requirements.txt"; then
-    "$app_dir/.venv/bin/pip" install --disable-pip-version-check -r "$app_dir/requirements.txt"
+    install -m 600 "$release_path/deploy/verigo-retention.env.example" /etc/verigo/retention.env
 fi
 
 for setting in \
+    'VERIGO_DATABASE_PATH=/opt/verigo/data/verigo.db' \
+    'VERIGO_RESULTS_DIR=/opt/verigo/data/results' \
+    'VERIGO_SMTP_LIMITER_PATH=/opt/verigo/data/smtp_limiter.db' \
     'VERIGO_MAX_EMAILS=0' \
     'VERIGO_MAX_WORKERS=8' \
     'VERIGO_REMOTE_WORKER_MAX_EMAILS=5000' \
@@ -130,25 +140,31 @@ do
         printf '%s\n' "$setting" >> /etc/verigo/verigo.env
     fi
 done
-
 if ! grep -q '^VERIGO_METRICS_SALT=' /etc/verigo/verigo.env; then
     printf 'VERIGO_METRICS_SALT=%s\n' "$(openssl rand -hex 32)" >> /etc/verigo/verigo.env
 fi
-
-set_application_owner
 chmod 600 /etc/verigo/verigo.env
-# Migrate legacy snapshots before the restart. This is explicit and
-# idempotent, unlike the old startup reconciliation pass.
+
+if ! cmp -s "$previous_release/requirements.txt" "$release_path/requirements.txt"; then
+    "$state_dir/.venv/bin/pip" install --disable-pip-version-check -r "$release_path/requirements.txt"
+fi
+
+systemctl daemon-reload
+systemctl enable --now verigo-backup.timer verigo-monitor.timer verigo-retention.timer
+# Keep release backup independent from a remote provider's latency.
+systemctl start --no-block verigo-backup.service
+
+trap rollback ERR
 set -a
 . /etc/verigo/verigo.env
 set +a
-PYTHONPATH="$app_dir" runuser -u verigo --preserve-environment -- \
-    "$app_dir/.venv/bin/python" -m app.maintenance migrate-results
-systemctl restart verigo
+PYTHONPATH="$release_path" runuser -u verigo --preserve-environment -- \
+    "$state_dir/.venv/bin/python" -m app.maintenance migrate-results
 
+activate_release "$release_path"
+systemctl restart verigo
 for _ in {1..20}; do
     if curl -fsS http://127.0.0.1:8000/api/health >/dev/null; then
-        systemctl enable verigo-supervisor.service
         systemctl restart verigo-supervisor.service
         trap - ERR
         printf 'Verigo release %s health check passed\n' "$release_version"

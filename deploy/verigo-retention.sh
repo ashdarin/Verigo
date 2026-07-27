@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-cd /opt/verigo
+cd /opt/verigo/current
 config=/etc/verigo/retention.env
 if [[ -r "$config" ]]; then
     # shellcheck disable=SC1090

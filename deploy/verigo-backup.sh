@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-app_dir=/opt/verigo
+state_dir=/opt/verigo
+app_dir="$state_dir/current"
 backup_root=/var/backups/verigo
 backup_config=/etc/verigo/backup.env
 
