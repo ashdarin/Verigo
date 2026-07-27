@@ -6,6 +6,7 @@ import re
 import unicodedata
 from dataclasses import replace
 from dataclasses import dataclass
+from itertools import zip_longest
 from typing import Iterable
 from urllib.parse import urlsplit
 
@@ -40,6 +41,8 @@ class CountryProfile:
     code: str
     given_names: tuple[str, ...]
     surnames: tuple[str, ...]
+    compound_given_names: tuple[str, ...] = ()
+    compound_surnames: tuple[str, ...] = ()
 
 
 ENGLISH_GIVEN = (
@@ -102,10 +105,44 @@ SPANISH_SURNAMES = (
     "gomez", "martin", "jimenez", "ruiz", "hernandez", "diaz", "moreno", "munoz", "alvarez",
     "romero", "alonso", "gutierrez", "navarro", "torres", "dominguez", "vazquez",
 )
+SPANISH_COMPOUND_SURNAMES = (
+    "garcia lopez", "rodriguez martinez", "gonzalez fernandez", "lopez garcia", "martinez sanchez", "sanchez perez",
+    "perez gomez", "gomez martin", "martin jimenez", "jimenez ruiz", "ruiz hernandez", "hernandez diaz",
+    "diaz moreno", "moreno munoz", "munoz alvarez", "alvarez romero", "romero alonso", "alonso gutierrez",
+    "gutierrez navarro", "navarro torres", "torres dominguez", "dominguez vazquez", "vazquez ramos", "ramos gil",
+)
+PORTUGUESE_SURNAMES = (
+    "silva", "santos", "oliveira", "souza", "rodrigues", "ferreira", "alves", "pereira", "lima", "gomes",
+    "costa", "ribeiro", "martins", "carvalho", "almeida", "lopes", "soares", "fernandes", "vieira", "barbosa",
+    "rocha", "dias", "monteiro", "cardoso",
+)
+PORTUGUESE_COMPOUND_SURNAMES = (
+    "silva santos", "santos oliveira", "oliveira souza", "souza rodrigues", "rodrigues ferreira", "ferreira alves",
+    "alves pereira", "pereira lima", "lima gomes", "gomes costa", "costa ribeiro", "ribeiro martins",
+    "martins carvalho", "carvalho almeida", "almeida lopes", "lopes soares", "soares fernandes", "fernandes vieira",
+    "vieira barbosa", "barbosa rocha", "rocha dias", "dias monteiro", "monteiro cardoso", "cardoso correia",
+)
+NETHERLANDS_COMPOUND_SURNAMES = (
+    "van der berg", "van den berg", "van dijk", "van der meer", "de jong", "de vries", "van der heijden",
+    "van der laan", "van der wal", "van der pol", "van den bosch", "van der velde", "van der ploeg", "van der steen",
+    "van der graaf", "van der veen", "van der hoef", "van der linden", "van der beek", "de groot", "de witte",
+    "van leeuwen", "van der zand", "van der heide",
+)
 CHINESE_GIVEN = (
     "wei", "ming", "jun", "lei", "qiang", "jian", "tao", "yang", "bin", "bo", "hao",
     "lin", "jing", "yan", "fang", "li", "na", "mei", "xiao", "yu", "hui", "ying",
-    "chen", "fei", "ning", "xuan", "rui", "yue",
+    "chen", "fei", "ning", "xuan", "rui", "yue", "chao", "peng", "hua", "wen", "gang",
+    "feng", "long", "jie", "yong", "zhi", "guo", "qin", "xin", "yi", "jia", "han",
+    "tian", "zhen", "lan", "ping", "dong", "hong", "ling", "juan", "qiao", "shan", "song",
+    "qiu", "chun", "xia",
+)
+CHINESE_COMPOUND_GIVEN = (
+    "zihao", "yuchen", "haoran", "zixuan", "yifan", "zihan", "yutong", "junhao", "mingyuan", "haoyu",
+    "yuxuan", "chenxi", "zeyu", "tianyu", "jiahui", "xinyi", "yuting", "shihan", "wenjing", "xiaoyu",
+    "jingyi", "mengyao", "ruoxi", "yuexin", "yihan", "jiayi", "wenhao", "zhiyuan", "haoxuan", "yuxin",
+    "zeyuan", "xinyu", "yichen", "ziyang", "junjie", "wenbo", "haotian", "yiming", "yuxi", "xinyan",
+    "jingwen", "jianning", "wenyu", "haolin", "yuehua", "xinyue", "jinghao", "yutian", "ziran", "wenxin",
+    "haojun", "yutao", "yueying", "jingru", "zixia", "haichao", "zhiyu", "xiulan",
 )
 CHINESE_SURNAMES = (
     "wang", "li", "zhang", "liu", "chen", "yang", "huang", "zhao", "wu", "zhou", "xu",
@@ -150,14 +187,14 @@ COUNTRY_PROFILES = {
     "DE": CountryProfile("DE", GERMAN_GIVEN, GERMAN_SURNAMES),
     "FR": CountryProfile("FR", FRENCH_GIVEN, FRENCH_SURNAMES),
     "IT": CountryProfile("IT", ITALIAN_GIVEN, ITALIAN_SURNAMES),
-    "ES": CountryProfile("ES", SPANISH_GIVEN, SPANISH_SURNAMES),
-    "BR": CountryProfile("BR", SPANISH_GIVEN, SPANISH_SURNAMES),
-    "MX": CountryProfile("MX", SPANISH_GIVEN, SPANISH_SURNAMES),
-    "CN": CountryProfile("CN", CHINESE_GIVEN, CHINESE_SURNAMES),
+    "ES": CountryProfile("ES", SPANISH_GIVEN, SPANISH_SURNAMES, compound_surnames=SPANISH_COMPOUND_SURNAMES),
+    "BR": CountryProfile("BR", SPANISH_GIVEN, PORTUGUESE_SURNAMES, compound_surnames=PORTUGUESE_COMPOUND_SURNAMES),
+    "MX": CountryProfile("MX", SPANISH_GIVEN, SPANISH_SURNAMES, compound_surnames=SPANISH_COMPOUND_SURNAMES),
+    "CN": CountryProfile("CN", CHINESE_GIVEN, CHINESE_SURNAMES, compound_given_names=CHINESE_COMPOUND_GIVEN),
     "JP": CountryProfile("JP", JAPANESE_GIVEN, JAPANESE_SURNAMES),
     "KR": CountryProfile("KR", KOREAN_GIVEN, KOREAN_SURNAMES),
     "IN": CountryProfile("IN", INDIAN_GIVEN, INDIAN_SURNAMES),
-    "NL": CountryProfile("NL", ENGLISH_GIVEN, ENGLISH_SURNAMES),
+    "NL": CountryProfile("NL", ENGLISH_GIVEN, ENGLISH_SURNAMES, compound_surnames=NETHERLANDS_COMPOUND_SURNAMES),
     "SE": CountryProfile("SE", ENGLISH_GIVEN, ENGLISH_SURNAMES),
     "CH": CountryProfile("CH", GERMAN_GIVEN, GERMAN_SURNAMES),
     "PL": CountryProfile("PL", ENGLISH_GIVEN, ENGLISH_SURNAMES),
@@ -246,17 +283,28 @@ def infer_email_pattern(domain: str, first_name: str, last_name: str, email: str
 
 def _ranked_name_pairs(domain: str, country: str) -> list[tuple[str, str]]:
     profile = COUNTRY_PROFILES[country]
-    pairs = [
-        (first, last.replace(" ", ""))
-        for first in profile.given_names
-        for last in profile.surnames
+    name_groups = [(profile.given_names, profile.surnames)]
+    if profile.compound_given_names:
+        name_groups.append((profile.compound_given_names, profile.surnames))
+    if profile.compound_surnames:
+        name_groups.append((profile.given_names, profile.compound_surnames))
+
+    ranked_groups = [
+        sorted(
+            [(first, last.replace(" ", "")) for first in given_names for last in surnames],
+            key=lambda pair: hashlib.blake2s(
+                f"{domain}:{country}:{pair[0]}:{pair[1]}".encode("ascii"), digest_size=8
+            ).digest(),
+        )
+        for given_names, surnames in name_groups
     ]
-    return sorted(
-        pairs,
-        key=lambda pair: hashlib.blake2s(
-            f"{domain}:{country}:{pair[0]}:{pair[1]}".encode("ascii"), digest_size=8
-        ).digest(),
-    )
+    # Change which equally weighted name shape appears first per domain while
+    # keeping each domain's catalogue deterministic across successive runs.
+    if len(ranked_groups) > 1 and hashlib.blake2s(
+        f"{domain}:{country}:name-shape".encode("ascii"), digest_size=1
+    ).digest()[0] % 2:
+        ranked_groups.reverse()
+    return [pair for batch in zip_longest(*ranked_groups) for pair in batch if pair is not None]
 
 
 def generate_candidates(

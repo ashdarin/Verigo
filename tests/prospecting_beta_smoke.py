@@ -45,6 +45,26 @@ assert first_personal.source == "user_selected_pattern"
 assert {candidate.pattern for candidate in german_candidates[len(ROLE_LOCAL_PARTS):]} == {"last.first"}
 first_last_candidates = generate_candidates("basf.com", "DE", 1_000, requested_pattern="first.last")
 assert {candidate.pattern for candidate in first_last_candidates[len(ROLE_LOCAL_PARTS):]} == {"first.last"}
+chinese_candidates = generate_candidates("example.cn", "CN", 1_000, requested_pattern="first.last")
+chinese_given_names = [
+    candidate.email.split("@", 1)[0].split(".", 1)[0]
+    for candidate in chinese_candidates[len(ROLE_LOCAL_PARTS):]
+]
+chinese_profile = COUNTRY_PROFILES["CN"]
+single_character_count = sum(name in chinese_profile.given_names for name in chinese_given_names)
+compound_character_count = sum(name in chinese_profile.compound_given_names for name in chinese_given_names)
+assert single_character_count + compound_character_count == len(chinese_given_names)
+assert abs(single_character_count - compound_character_count) <= 1
+spanish_candidates = generate_candidates("example.es", "ES", 1_000, requested_pattern="first.last")
+spanish_surnames = [
+    candidate.email.split("@", 1)[0].split(".", 1)[1]
+    for candidate in spanish_candidates[len(ROLE_LOCAL_PARTS):]
+]
+spanish_profile = COUNTRY_PROFILES["ES"]
+single_surname_count = sum(name in spanish_profile.surnames for name in spanish_surnames)
+compound_surnames = {name.replace(" ", "") for name in spanish_profile.compound_surnames}
+compound_surname_count = sum(name in compound_surnames for name in spanish_surnames)
+assert abs(single_surname_count - compound_surname_count) <= 1
 learned_first_last = generate_candidates("basf.com", "DE", 1_000, learned_patterns=("first.last", "firstlast"))
 assert {candidate.pattern for candidate in learned_first_last[len(ROLE_LOCAL_PARTS):]} == {"first.last"}
 german_pair_count = len(COUNTRY_PROFILES["DE"].given_names) * len(COUNTRY_PROFILES["DE"].surnames)
