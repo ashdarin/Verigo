@@ -44,6 +44,21 @@ class Settings:
     scheduler_gmail_concurrency: int = max(1, int(os.getenv("VERIGO_SCHEDULER_GMAIL_CONCURRENCY", "25")))
     scheduler_microsoft_concurrency: int = max(1, int(os.getenv("VERIGO_SCHEDULER_MICROSOFT_CONCURRENCY", "64")))
     scheduler_default_domain_concurrency: int = max(1, int(os.getenv("VERIGO_SCHEDULER_DEFAULT_DOMAIN_CONCURRENCY", "4")))
+    scheduler_domain_max_concurrency: int = max(
+        1, int(os.getenv("VERIGO_SCHEDULER_DOMAIN_MAX_CONCURRENCY", "16"))
+    )
+    scheduler_remote_shard_size: int = max(
+        1, int(os.getenv("VERIGO_SCHEDULER_REMOTE_SHARD_SIZE", "25"))
+    )
+    scheduler_claim_scan_limit: int = max(
+        1, int(os.getenv("VERIGO_SCHEDULER_CLAIM_SCAN_LIMIT", "64"))
+    )
+    scheduler_successes_per_step: int = max(
+        1, int(os.getenv("VERIGO_SCHEDULER_SUCCESSES_PER_STEP", "20"))
+    )
+    scheduler_cooldown_seconds: int = max(
+        1, int(os.getenv("VERIGO_SCHEDULER_COOLDOWN_SECONDS", "120"))
+    )
     max_guest_emails: int = int(os.getenv("VERIGO_MAX_GUEST_EMAILS", "100"))
     free_single_daily_limit: int = int(
         os.getenv("VERIGO_FREE_SINGLE_DAILY_LIMIT", "20")

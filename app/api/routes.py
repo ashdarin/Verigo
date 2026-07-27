@@ -508,7 +508,10 @@ async def claim_tencent_qq_job(
     while True:
         job = job_store.claim_remote_lease(
             worker_name, execution_target, capacity=worker_capacity,
-            shard_size=min(100, settings.remote_worker_max_emails_per_job),
+            shard_size=min(
+                settings.scheduler_remote_shard_size,
+                settings.remote_worker_max_emails_per_job,
+            ),
         )
         if job is not None:
             sync_parent_job(job)
