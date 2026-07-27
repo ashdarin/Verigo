@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from app.config import settings
-from app.db.sqlite import connect as connect_sqlite
+from app.db.sqlite import begin_immediate, connect as connect_sqlite
 
 
 def utc_now() -> datetime:
@@ -737,7 +737,7 @@ class JobStore:
             email = str(result.get("email") or "")
             rows.append(self._result_row(job_id, index, result, now))
         with self._lock, closing(self._connect()) as connection:
-            connection.execute("BEGIN IMMEDIATE")
+            begin_immediate(connection)
             connection.executemany("""
                 INSERT INTO job_results(job_id, original_index, email, progress_state, result_json, updated_at,
                     deliverability, is_valid, is_skipped, is_catch_all, retry_at, retry_updated, query_fields_ready)
@@ -896,7 +896,7 @@ class JobStore:
         now = utc_now()
         stale_before = now - timedelta(seconds=settings.worker_lease_seconds)
         with self._lock, closing(self._connect()) as connection:
-            connection.execute("BEGIN IMMEDIATE")
+            begin_immediate(connection)
             connection.execute(
                 """
                 UPDATE jobs SET status = 'queued', worker_id = NULL, heartbeat_at = NULL,
@@ -955,7 +955,7 @@ class JobStore:
         now = utc_now()
         stale = now - timedelta(seconds=settings.worker_lease_seconds)
         with self._lock, closing(self._connect()) as connection:
-            connection.execute("BEGIN IMMEDIATE")
+            begin_immediate(connection)
             expired = connection.execute("""
                 SELECT id, job_id, indices_json FROM job_leases
                 WHERE completed_at IS NULL AND heartbeat_at < ?
@@ -1133,7 +1133,7 @@ class JobStore:
         """Return only a failed worker's unfinished shard to the queue."""
         self.initialize()
         with self._lock, closing(self._connect()) as connection:
-            connection.execute("BEGIN IMMEDIATE")
+            begin_immediate(connection)
             row = connection.execute("""
                 SELECT indices_json FROM job_leases
                 WHERE id=? AND job_id=? AND worker_id=? AND completed_at IS NULL

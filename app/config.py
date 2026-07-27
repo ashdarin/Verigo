@@ -223,6 +223,12 @@ class Settings:
     sqlite_busy_timeout_ms: int = max(
         1_000, int(os.getenv("VERIGO_SQLITE_BUSY_TIMEOUT_MS", "30000"))
     )
+    sqlite_write_retry_attempts: int = max(
+        1, int(os.getenv("VERIGO_SQLITE_WRITE_RETRY_ATTEMPTS", "3"))
+    )
+    sqlite_write_retry_delay_ms: int = max(
+        10, int(os.getenv("VERIGO_SQLITE_WRITE_RETRY_DELAY_MS", "100"))
+    )
     node_stale_seconds: int = max(
         30, int(os.getenv("VERIGO_NODE_STALE_SECONDS", "180"))
     )

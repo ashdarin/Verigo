@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 import sys
 import tempfile
 from datetime import timedelta
@@ -13,10 +14,28 @@ os.environ["VERIGO_DATABASE_PATH"] = str(temp_dir / "verigo.db")
 os.environ["VERIGO_RESULTS_DIR"] = str(temp_dir / "results")
 
 from app.db.jobs import Job, JobStore, utc_now
+from app.db.sqlite import begin_immediate
 
 
 store = JobStore()
 store.initialize()
+
+
+class LockThenAcquire:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def execute(self, statement: str) -> None:
+        assert statement == "BEGIN IMMEDIATE"
+        self.calls += 1
+        if self.calls < 3:
+            raise sqlite3.OperationalError("database is locked")
+
+
+lock_then_acquire = LockThenAcquire()
+begin_immediate(lock_then_acquire)  # type: ignore[arg-type]
+assert lock_then_acquire.calls == 3
+
 assert store.service_mode() == "active"
 store.set_service_mode("draining")
 assert store.service_mode() == "draining"

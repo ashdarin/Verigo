@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Iterator
 
 from app.config import settings
-from app.db.sqlite import connect as connect_sqlite
+from app.db.sqlite import begin_immediate, connect as connect_sqlite
 
 
 class SMTPDeliveryLimiter:
@@ -58,7 +58,7 @@ class SMTPDeliveryLimiter:
             now = time.time()
             retry_after = 0.2
             with closing(self._connect()) as connection:
-                connection.execute("BEGIN IMMEDIATE")
+                begin_immediate(connection)
                 connection.execute("DELETE FROM smtp_leases WHERE expires_at <= ?", (now,))
                 backoff = connection.execute(
                     "SELECT blocked_until FROM smtp_backoff WHERE mx_host = ?", (host,)
@@ -93,7 +93,7 @@ class SMTPDeliveryLimiter:
         host = mx_host.lower().rstrip(".")
         now = time.time()
         with closing(self._connect()) as connection:
-            connection.execute("BEGIN IMMEDIATE")
+            begin_immediate(connection)
             row = connection.execute(
                 "SELECT failures FROM smtp_backoff WHERE mx_host = ?", (host,)
             ).fetchone()
