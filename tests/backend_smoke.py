@@ -1166,8 +1166,26 @@ with TestClient(app) as deletion_account:
         json={"email": "delete-me@example.com", "password": "correct-horse-2026"},
     )
     assert registered.status_code == 201, registered.text
+    deleted_user_id = registered.json()["id"]
+    deleted_job = Job(
+        id="delete-account-results",
+        emails=["delete-result@example.com"],
+        worker_count=1,
+        status="completed",
+        owner_id=deleted_user_id,
+        results=[{"email": "delete-result@example.com", "deliverable": True}],
+    )
+    job_store.add(deleted_job)
+    with auth_store._connect() as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM job_results WHERE job_id=?", (deleted_job.id,)
+        ).fetchone()[0] == 1
     assert deletion_account.delete("/api/auth/account").status_code == 204
     assert deletion_account.get("/api/auth/me").json() is None
+    with auth_store._connect() as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM job_results WHERE job_id=?", (deleted_job.id,)
+        ).fetchone()[0] == 0
 
 
 legacy = load_legacy_module()

@@ -1188,6 +1188,30 @@ class AuthStore:
             job_ids = [str(job_id) for job_id, _ in jobs]
             if job_ids:
                 placeholders = ", ".join("?" for _ in job_ids)
+                lease_ids = [
+                    str(row[0])
+                    for row in connection.execute(
+                        f"SELECT id FROM job_leases WHERE job_id IN ({placeholders})",
+                        job_ids,
+                    ).fetchall()
+                ]
+                if lease_ids:
+                    lease_placeholders = ", ".join("?" for _ in lease_ids)
+                    connection.execute(
+                        f"DELETE FROM mx_scheduler_leases WHERE lease_id IN ({lease_placeholders})",
+                        lease_ids,
+                    )
+                connection.execute(
+                    f"DELETE FROM job_result_links WHERE child_job_id IN ({placeholders}) "
+                    f"OR parent_job_id IN ({placeholders})",
+                    (*job_ids, *job_ids),
+                )
+                connection.execute(
+                    f"DELETE FROM job_results WHERE job_id IN ({placeholders})", job_ids
+                )
+                connection.execute(
+                    f"DELETE FROM job_leases WHERE job_id IN ({placeholders})", job_ids
+                )
                 connection.execute(
                     f"DELETE FROM catch_all_emails WHERE job_id IN ({placeholders})", job_ids
                 )
