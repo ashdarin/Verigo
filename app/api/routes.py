@@ -607,6 +607,18 @@ def report_tencent_qq_results(
     # A callback is acknowledged only after its result rows are durable. The
     # upsert is idempotent, so workers can safely retry after a network error.
     merge_worker_results(job, worker_name, payload.lease_id or "", payload.results)
+    refreshed = job_store.get(job.id)
+    if refreshed is None:
+        raise HTTPException(status_code=404, detail="Verification job no longer exists")
+    protected = apply_prospecting_receiver_protection(refreshed)
+    if protected is not None:
+        sync_parent_job(protected)
+        return {
+            "status": protected.status,
+            "stop_requested": True,
+            "accepted": len(payload.results),
+            "persisted": len(payload.results),
+        }
     if payload.results:
         sync_parent_job(job)
     if not payload.lease_id or not job_store.heartbeat_lease(job.id, worker_name, payload.lease_id):

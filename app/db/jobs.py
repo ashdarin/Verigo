@@ -1995,13 +1995,27 @@ class JobStore:
         """Release pending work until a receiver's cooling period ends."""
         self.initialize()
         with self._lock, closing(self._connect()) as connection:
+            begin_immediate(connection)
             changed = connection.execute(
                 """UPDATE jobs SET status='queued', worker_id=NULL, heartbeat_at=NULL,
                     deferred_retry_at=?, error=? WHERE id=? AND status IN ('queued', 'running')""",
                 (until.isoformat(), reason[:500], job_id),
             ).rowcount
             if not changed:
+                connection.rollback()
                 return None
+            lease_ids = [item[0] for item in connection.execute(
+                "SELECT id FROM job_leases WHERE job_id=? AND completed_at IS NULL", (job_id,)
+            )]
+            connection.execute(
+                "UPDATE job_leases SET completed_at=? WHERE job_id=? AND completed_at IS NULL",
+                (utc_now().isoformat(), job_id),
+            )
+            if lease_ids:
+                connection.executemany(
+                    "DELETE FROM mx_scheduler_leases WHERE lease_id=?", [(lease_id,) for lease_id in lease_ids]
+                )
+            connection.commit()
         return self.get(job_id)
 
     def resume(self, job_id: str) -> tuple[Job | None, list[Job]]:

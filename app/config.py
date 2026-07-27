@@ -126,6 +126,9 @@ class Settings:
     prospecting_protection_max_pressure_events: int = max(
         2, int(os.getenv("VERIGO_PROSPECTING_PROTECTION_MAX_PRESSURE_EVENTS", "4"))
     )
+    prospecting_protection_generic_550_threshold: int = max(
+        3, int(os.getenv("VERIGO_PROSPECTING_PROTECTION_GENERIC_550_THRESHOLD", "6"))
+    )
     metrics_salt: str = os.getenv("VERIGO_METRICS_SALT", "")
     # Restricts operational queue and worker details to the local monitor.
     monitor_token: str = os.getenv("VERIGO_MONITOR_TOKEN", "")

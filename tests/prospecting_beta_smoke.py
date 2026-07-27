@@ -32,6 +32,7 @@ from app.core.prospecting import (
 from app.db.auth import auth_store
 from app.db.jobs import job_store, utc_now
 from app.db.prospecting import prospecting_store
+from app.tasks.verification import normalize_result
 from app.main import app
 
 
@@ -220,5 +221,23 @@ with TestClient(app) as client:
         "domain": "example.com", "country": "DE", "email_pattern": "last.first",
     })
     assert protected.status_code == 429
+
+    generic = client.post("/api/prospecting-beta/runs", json={
+        "domain": "generic550.example", "country": "DE", "email_pattern": "last.first",
+    })
+    assert generic.status_code == 202, generic.text
+    generic_policy = prospecting_store.apply_protection_outcomes(
+        generic.json()["verification_job_id"],
+        [{"original_index": index, "smtp_result": "550", "deliverable": False} for index in range(6)],
+    )
+    assert generic_policy is not None and generic_policy["action"] == "stop"
+
+    normalized_550 = normalize_result({
+        "smtp_result": "550 recipient verification is not permitted",
+        "deliverable": False,
+        "valid": False,
+    })
+    assert normalized_550["smtp_code"] == "550"
+    assert normalized_550["smtp_raw_result"] == "550 recipient verification is not permitted"
 
 print("prospecting beta smoke: ok")

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import threading
 import uuid
@@ -392,6 +393,37 @@ class ProspectingStore:
             return "wait", "The receiving mail system requested a cooldown before more checks"
         return None
 
+    @staticmethod
+    def _generic_550_wall(results: list[dict[str, Any]]) -> int | None:
+        """Identify uniform, non-specific 550 refusals before a large probe is sent."""
+        observed: list[tuple[int, str]] = []
+        for fallback_index, result in enumerate(results):
+            if result.get("progress_state") not in {None, "completed"} or result.get("skipped"):
+                continue
+            detail = str(result.get("smtp_raw_result") or result.get("smtp_result") or result.get("message") or "")
+            code = str(result.get("smtp_code") or "")
+            if not code:
+                match = re.search(r"\b([245]\d{2})\b", detail)
+                code = match.group(1) if match else ""
+            if result.get("deliverable") is True or code != "550":
+                return None
+            normalized = detail.lower().strip()
+            recipient_specific = (
+                "5.1.1", "user unknown", "unknown user", "no such user", "mailbox unavailable",
+                "recipient address rejected", "invalid recipient", "does not exist",
+            )
+            if any(marker in normalized for marker in recipient_specific):
+                return None
+            observed.append((int(result.get("original_index", fallback_index)), normalized))
+        threshold = settings.prospecting_protection_generic_550_threshold
+        if len(observed) < threshold:
+            return None
+        # A receiver returning the same generic refusal to every probe is not
+        # evidence that every generated mailbox is invalid; stop conservatively.
+        if len({detail for _, detail in observed}) == 1:
+            return observed[threshold - 1][0]
+        return None
+
     def _protection_status(self, domain: str, now: datetime | None = None) -> dict[str, Any]:
         self.initialize()
         now = now or utc_now()
@@ -435,12 +467,20 @@ class ProspectingStore:
         run = self.get_by_job_id(verification_job_id)
         if run is None:
             return None
-        self.save_confirmed_contacts(run, results)
+        if any(result.get("deliverable") is True and result.get("domain_type") != "catch-all" for result in results):
+            self.save_confirmed_contacts(run, results)
         signals: list[tuple[int, str, str]] = []
         for fallback_index, raw in enumerate(results):
             signal = self._protection_signal(raw)
             if signal is not None:
                 signals.append((int(raw.get("original_index", fallback_index)), *signal))
+        generic_550_index = self._generic_550_wall(results)
+        if generic_550_index is not None:
+            signals.append((
+                generic_550_index,
+                "stop",
+                "The receiving mail system returned repeated non-specific 550 refusals",
+            ))
         if not signals:
             return None
 

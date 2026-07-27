@@ -97,11 +97,11 @@ def stopped(job_id: str, state: dict[str, object]) -> bool:
     return bool(state["stopped"])
 
 
-def report_result(job_id: str, result: dict[str, Any], lease_id: str | None = None) -> None:
+def report_result(job_id: str, result: dict[str, Any], lease_id: str | None = None) -> dict[str, Any]:
     payload: dict[str, object] = {"results": [result]}
     if lease_id:
         payload["lease_id"] = lease_id
-    request_json(f"/api/workers/{WORKER_TARGET}/jobs/{job_id}/results", payload)
+    return request_json(f"/api/workers/{WORKER_TARGET}/jobs/{job_id}/results", payload)
 
 
 def complete_job(job_id: str, lease_id: str | None = None) -> None:
@@ -166,7 +166,8 @@ def _verify_job(job: dict[str, object], control: dict[str, object]) -> None:
                 ).isoformat(),
             })
         # The first visible 4xx result must already include its retry schedule.
-        report_result(job_id, result, lease_id)
+        response = report_result(job_id, result, lease_id)
+        control["stopped"] = bool(response.get("stop_requested"))
 
     if bool(job.get("stop_on_deliverable")):
         verifier = create_verifier(1)
@@ -182,7 +183,10 @@ def _verify_job(job: dict[str, object], control: dict[str, object]) -> None:
                 continue
             result = dict(batch[0])
             result["original_index"] = original_indices[index]
-            report_result(job_id, result, lease_id)
+            response = report_result(job_id, result, lease_id)
+            control["stopped"] = bool(response.get("stop_requested"))
+            if control["stopped"]:
+                return
             if result.get("deliverable") is True:
                 for remaining_index, remaining_email in enumerate(
                     emails[index + 1 :], index + 1

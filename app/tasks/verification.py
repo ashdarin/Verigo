@@ -69,6 +69,8 @@ def normalize_result(result: dict[str, Any]) -> dict[str, Any]:
     detail_lower = detail.lower()
     match = re.search(r"\b([245]\d{2})\b", detail)
     code = match.group(1) if match else None
+    if code:
+        result["smtp_code"] = code
     if result.get("failure_reason") == "domain_nxdomain":
         display_detail = "域名不存在"
     elif result.get("failure_reason") == "mx_missing":
@@ -102,6 +104,7 @@ def normalize_result(result: dict[str, Any]) -> dict[str, Any]:
             checks["smtp"] = False
         display_detail = detail
     elif smtp_permanent_status({"smtp_result": detail}):
+        result["smtp_raw_result"] = detail
         result["deliverable"] = False
         result["valid"] = False
         checks = result.get("checks")
@@ -732,7 +735,7 @@ def requeue_recent_single_temporary_jobs() -> int:
 
 
 def apply_prospecting_receiver_protection(job: Job) -> Job | None:
-    """Apply the prospecting-only safety policy after a completed worker lease."""
+    """Apply the prospecting-only safety policy as receiver feedback arrives."""
     from app.db.prospecting import prospecting_store
 
     decision = prospecting_store.apply_protection_outcomes(job.id, job.results)
@@ -800,10 +803,11 @@ def run_job(job: Job) -> None:
             verifier = create_verifier(job.worker_count)
             job.verifier = verifier
             last_persist = 0.0
+            receiver_protection_applied = False
 
             def on_result(result: dict[str, Any]) -> None:
-                nonlocal last_persist
-                if job_store.is_stopped(job.id):
+                nonlocal job, last_persist, receiver_protection_applied
+                if receiver_protection_applied or job_store.is_stopped(job.id):
                     return
                 result = dict(result)
                 relative_index = int(result.get("original_index", 0))
@@ -820,19 +824,30 @@ def run_job(job: Job) -> None:
                         "retry_at": retry_at.isoformat(),
                     })
                 now = time.monotonic()
-                if len(by_index) % 5 == 0 or now - last_persist >= 1.0:
+                safety_checkpoint = len(by_index) >= settings.prospecting_protection_generic_550_threshold and (
+                    len(by_index) == settings.prospecting_protection_generic_550_threshold
+                    or len(by_index) % 5 == 0
+                )
+                if len(by_index) % 5 == 0 or now - last_persist >= 1.0 or safety_checkpoint:
                     job.results = [by_index[index] for index in sorted(by_index)]
                     job_store.persist(job)
                     job_store.heartbeat(job)
                     last_persist = now
+                    if safety_checkpoint:
+                        refreshed = job_store.get(job.id)
+                        if refreshed is not None:
+                            protected = apply_prospecting_receiver_protection(refreshed)
+                            if protected is not None:
+                                job = protected
+                                receiver_protection_applied = True
 
             final_results = verifier.verify_batch_distributed(
                 missing_emails,
                 num_processes=job.worker_count,
                 result_callback=on_result,
-                should_stop=lambda: job_store.is_stopped(job.id),
+                should_stop=lambda: receiver_protection_applied or job_store.is_stopped(job.id),
             )
-            if job_store.is_stopped(job.id):
+            if receiver_protection_applied or job_store.is_stopped(job.id):
                 return
             for result in final_results:
                 result = dict(result)
