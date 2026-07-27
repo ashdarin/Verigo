@@ -301,4 +301,24 @@ connection.close()
 state = store.reconcile_worker_nodes()
 assert state["offline"] == 1
 
+# Queue admission counts user-visible tasks, not their internal child shards or
+# background retry jobs. A configured limit is therefore predictable to users.
+original_database_path = settings.database_path
+object.__setattr__(settings, "database_path", temp_dir / "quota.db")
+quota_store = JobStore()
+quota_parent = Job(id="quota-parent", emails=["parent@quota.test"], worker_count=1)
+quota_child = Job(
+    id="quota-child", emails=["child@quota.test"], worker_count=1,
+    parent_id=quota_parent.id,
+)
+quota_store.add(quota_parent, max_active=1)
+quota_store.add(quota_child)
+try:
+    quota_store.add(Job(id="quota-next", emails=["next@quota.test"], worker_count=1), max_active=1)
+except RuntimeError:
+    pass
+else:
+    raise AssertionError("queue limit must reject a second visible task")
+object.__setattr__(settings, "database_path", original_database_path)
+
 print("job store refactor smoke: ok")

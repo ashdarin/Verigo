@@ -624,7 +624,9 @@ class JobStore:
         with self._lock, closing(self._connect()) as connection:
             begin_immediate(connection)
             active = connection.execute(
-                "SELECT COUNT(*) FROM jobs WHERE status IN ('queued', 'running')"
+                """SELECT COUNT(*) FROM jobs
+                WHERE status IN ('queued', 'running')
+                    AND parent_id IS NULL AND retry_parent_id IS NULL"""
             ).fetchone()[0]
             if max_active is not None and active >= max_active:
                 connection.rollback()
