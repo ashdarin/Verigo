@@ -600,50 +600,6 @@ def verify_until_deliverable(
     return by_index
 
 
-def retry_temporary_smtp_results(job: Job, by_index: dict[int, dict[str, Any]]) -> None:
-    """Retry short-lived SMTP failures with the same policy for every provider."""
-    for attempt in range(settings.temporary_smtp_immediate_retries):
-        retry_items = [
-            (index, job.emails[index])
-            for index, result in by_index.items()
-            if is_retryable_smtp_result(result) and not is_smtp_greylisted(result)
-        ]
-        if not retry_items or job_store.is_stopped(job.id):
-            return
-
-        delay = settings.temporary_smtp_retry_seconds
-        logger.info(
-            "Retrying %s temporary SMTP results for job %s after %.1fs",
-            len(retry_items), job.id, delay,
-        )
-        retry_at = utc_now() + timedelta(seconds=delay)
-        for index, _ in retry_items:
-            by_index[index]["retry_at"] = retry_at.isoformat()
-            by_index[index]["retry_state"] = "scheduled"
-            by_index[index]["retry_attempt"] = attempt + 1
-            by_index[index]["retry_max_attempts"] = settings.temporary_smtp_immediate_retries
-        job.results = [by_index[index] for index in sorted(by_index)]
-        job.error = f"SMTP temporary response; retry {attempt + 1}/{settings.temporary_smtp_immediate_retries} is scheduled"
-        job_store.persist(job)
-        job_store.heartbeat(job)
-        time.sleep(delay)
-        verifier = create_verifier(1)
-        retry_results = verifier.verify_batch_distributed(
-            [email for _, email in retry_items],
-            num_processes=1,
-            should_stop=lambda: job_store.is_stopped(job.id),
-        )
-        if job_store.is_stopped(job.id):
-            return
-        for retry_result in retry_results:
-            result = dict(retry_result)
-            relative_index = int(result.get("original_index", 0))
-            if 0 <= relative_index < len(retry_items):
-                original_index = retry_items[relative_index][0]
-                result["original_index"] = original_index
-                by_index[original_index] = normalize_result(result)
-
-
 def finalize_temporary_smtp_results(results: list[dict[str, Any]]) -> None:
     """Finalize exhausted transient outcomes without turning DNS failures into false negatives."""
     for result in results:
@@ -807,9 +763,12 @@ def run_job(job: Job) -> None:
             if str(result.get("email", "")).lower() in known_emails
             and result.get("progress_state") not in {"pending", "verifying"}
         }
+        leased_indices = set(job.pending_indices) if job.lease_id else None
         missing_emails: list[str] = []
         missing_indices: list[int] = []
         for index, email in enumerate(job.emails):
+            if leased_indices is not None and index not in leased_indices:
+                continue
             if index in by_index:
                 continue
             cached = cached_by_email.get(email.lower())
@@ -870,6 +829,20 @@ def run_job(job: Job) -> None:
                 by_index[result["original_index"]] = normalize_result(result)
 
         job.results = [by_index[index] for index in sorted(by_index)]
+        if job.lease_id:
+            job_store.persist(job)
+            if not job_store.complete_lease(
+                job.id, job.worker_id or "", job.lease_id
+            ):
+                return
+            refreshed = job_store.get(job.id)
+            if refreshed is None or job_store.is_stopped(job.id):
+                return
+            overview = job_store.result_overview(job.id)
+            if overview.settled < overview.total:
+                job = refreshed
+                return
+            job = refreshed
         if job.retry_parent_id:
             job.finished_at = utc_now()
             job.error = None
@@ -880,6 +853,12 @@ def run_job(job: Job) -> None:
             finish_initial_job(job)
     except Exception as exc:
         logger.exception("Verification job %s failed", job.id)
+        if job.lease_id:
+            job_store.abandon_lease(job.id, job.worker_id or "", job.lease_id)
+            refreshed = job_store.get(job.id)
+            if refreshed is not None:
+                job = refreshed
+            return
         job.error = "任务执行失败，请稍后重新提交"
         job.status = "failed"
         job.finished_at = utc_now()

@@ -428,25 +428,23 @@ class EmailVerifier:
                 ) as acquired:
                     yield acquired
             return
-        with self.smtp_limiter.permit(mx_host, smtp_gate_capacity(mx_host)) as acquired:
-            yield acquired
+        # Normal domains are scheduled before this legacy verifier is invoked.
+        # The shared job scheduler owns both capacity and backoff, so a second
+        # process-local exponential limiter would fight that feedback loop.
+        yield True
 
     def record_smtp_response(self, mx_host, code):
         host = str(mx_host).lower().rstrip('.')
+        if not (host.endswith('.qq.com') or host.endswith('.foxmail.com')):
+            return
         if 200 <= code < 400:
             self.smtp_limiter.record_success(mx_host)
-            if host.endswith('.qq.com') or host.endswith('.foxmail.com'):
-                self.smtp_limiter.record_success('qq-smtp-global')
-        elif 400 <= code < 500:
-            if not (host.endswith('.qq.com') or host.endswith('.foxmail.com')):
-                self.smtp_limiter.record_temporary_failure(mx_host)
+            self.smtp_limiter.record_success('qq-smtp-global')
 
     def record_smtp_failure(self, mx_host):
         host = str(mx_host).lower().rstrip('.')
         if host.endswith('.qq.com') or host.endswith('.foxmail.com'):
             self.record_qq_policy_failure(mx_host)
-            return
-        self.smtp_limiter.record_temporary_failure(mx_host)
 
     def record_qq_policy_failure(self, mx_host):
         for host in (mx_host, 'qq-smtp-global'):

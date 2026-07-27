@@ -986,7 +986,13 @@ class JobStore:
         self.persist(parent)
         return self.get(parent_id, include_results=False)
 
-    def claim_next(self, worker_id: str, execution_target: str = "local") -> Job | None:
+    def claim_next(
+        self,
+        worker_id: str,
+        execution_target: str = "local",
+        *,
+        stop_on_deliverable_only: bool = False,
+    ) -> Job | None:
         """Atomically claim the next task; expired worker leases are returned to the queue."""
         self.initialize()
         now = utc_now()
@@ -1004,9 +1010,10 @@ class JobStore:
             row = connection.execute(
                 f"""SELECT {self._select_columns()} FROM jobs
                 WHERE status = 'queued' AND execution_target = ?
+                    AND (? = 0 OR stop_on_deliverable = 1)
                     AND (deferred_retry_at IS NULL OR deferred_retry_at <= ?)
                 ORDER BY created_at LIMIT 1""",
-                (execution_target, now.isoformat()),
+                (execution_target, int(stop_on_deliverable_only), now.isoformat()),
             ).fetchone()
             if row is None:
                 connection.commit()
@@ -1090,6 +1097,7 @@ class JobStore:
                 LEFT JOIN scheduler_owner_turns turn ON turn.target=?
                     AND turn.owner_key=COALESCE(parent.owner_id, j.owner_id, j.id)
                 WHERE j.status IN ('queued', 'running') AND j.execution_target=?
+                    AND j.stop_on_deliverable=0
                     AND (j.deferred_retry_at IS NULL OR j.deferred_retry_at <= ?)
                     AND EXISTS (SELECT 1 FROM job_results r WHERE r.job_id=j.id
                         AND r.progress_state='pending')

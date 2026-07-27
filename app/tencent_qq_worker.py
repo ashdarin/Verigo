@@ -126,55 +126,6 @@ def skipped_result(email: str, index: int) -> dict[str, object]:
     }
 
 
-def retry_temporary_smtp_results(
-    job_id: str,
-    emails: list[str],
-    original_indices: list[int],
-    results: list[dict[str, Any]],
-    control: dict[str, object],
-) -> list[dict[str, Any]]:
-    by_index = {int(result.get("original_index", index)): dict(result) for index, result in enumerate(results)}
-    for attempt in range(settings.temporary_smtp_immediate_retries):
-        retry_items = [
-            (index, emails[original_indices.index(index)])
-            for index, result in by_index.items()
-            if (
-                0 <= index < len(emails)
-                and is_retryable_smtp_result(result)
-                and not is_smtp_greylisted(result)
-            )
-        ]
-        if not retry_items or stopped(job_id, control):
-            return [by_index[index] for index in sorted(by_index)]
-
-        delay = settings.temporary_smtp_retry_seconds
-        print(
-            f"Retrying {len(retry_items)} temporary SMTP results for {job_id} after {delay:.1f}s",
-            flush=True,
-        )
-        time.sleep(delay)
-        verifier = create_verifier(1)
-        retry_results = verifier.verify_batch_distributed(
-            [email for _, email in retry_items],
-            num_processes=1,
-            should_stop=lambda: stopped(job_id, control),
-        )
-        if stopped(job_id, control):
-            return [by_index[index] for index in sorted(by_index)]
-        for retry_result in retry_results:
-            result = dict(retry_result)
-            relative_index = int(result.get("original_index", 0))
-            if 0 <= relative_index < len(retry_items):
-                original_index = retry_items[relative_index][0]
-                result["original_index"] = original_index
-                by_index[original_index] = result
-                report_result(job_id, result, str(control.get("lease_id") or "") or None)
-    for result in by_index.values():
-        if is_retryable_smtp_result(result) and not is_smtp_greylisted(result):
-            result["temporary_smtp_retry_count"] = settings.temporary_smtp_immediate_retries
-    return [by_index[index] for index in sorted(by_index)]
-
-
 def _verify_job(job: dict[str, object], control: dict[str, object]) -> None:
     job_id = str(job["id"])
     items = job.get("items")
