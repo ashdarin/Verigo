@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import json
 import re
 import sqlite3
 import threading
@@ -252,10 +251,14 @@ class MetricsStore:
                 """,
                 (today_start,),
             ).fetchone()
-            result_rows = connection.execute(
-                "SELECT results_json FROM jobs WHERE status='completed' AND finished_at >= ?",
+            result_totals = connection.execute(
+                """SELECT COUNT(*), COALESCE(SUM(result.deliverability=1), 0)
+                FROM job_results AS result
+                JOIN jobs AS job ON job.id=result.job_id
+                WHERE job.status='completed' AND job.finished_at >= ?
+                    AND job.parent_id IS NULL AND job.retry_parent_id IS NULL""",
                 (today_start,),
-            ).fetchall()
+            ).fetchone()
             credits_today = connection.execute(
                 """
                 SELECT COALESCE(SUM(-delta), 0) FROM credit_ledger
@@ -310,15 +313,8 @@ class MetricsStore:
             traffic["average_engagement_seconds"] = round(traffic["engagement_seconds"] / traffic["engaged_sessions"]) if traffic["engaged_sessions"] else 0
             daily_by_day[day].update(traffic)
         today_traffic = daily_by_day[today]
-        deliverable = 0
-        results_total = 0
-        for (results_json,) in result_rows:
-            try:
-                results = json.loads(results_json)
-            except (TypeError, json.JSONDecodeError):
-                continue
-            results_total += len(results)
-            deliverable += sum(item.get("deliverable") is True for item in results)
+        results_total = int(result_totals[0])
+        deliverable = int(result_totals[1])
         completed_today = int(today_job_health[1])
         failed_today = int(today_job_health[2])
         settled_today = completed_today + failed_today

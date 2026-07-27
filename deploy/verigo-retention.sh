@@ -43,6 +43,12 @@ with sqlite3.connect(database) as connection:
         connection.execute(
             "UPDATE jobs SET results_json='[]', csv_path=NULL WHERE id=?", (job_id,)
         )
+        connection.execute('DELETE FROM job_results WHERE job_id=?', (job_id,))
+        connection.execute(
+            'DELETE FROM job_result_links WHERE child_job_id=? OR parent_job_id=?',
+            (job_id, job_id),
+        )
+        connection.execute('DELETE FROM catch_all_emails WHERE job_id=?', (job_id,))
 
     expired_jobs = connection.execute(
         """SELECT id, csv_path FROM jobs
@@ -55,6 +61,12 @@ with sqlite3.connect(database) as connection:
             if candidate.is_relative_to(results_root):
                 candidate.unlink(missing_ok=True)
         connection.execute('DELETE FROM catch_all_emails WHERE job_id=?', (job_id,))
+        connection.execute('DELETE FROM job_results WHERE job_id=?', (job_id,))
+        connection.execute(
+            'DELETE FROM job_result_links WHERE child_job_id=? OR parent_job_id=?',
+            (job_id, job_id),
+        )
+        connection.execute('DELETE FROM job_leases WHERE job_id=?', (job_id,))
         connection.execute('DELETE FROM jobs WHERE id=?', (job_id,))
     connection.execute('DELETE FROM verification_cache WHERE expires_at <= ?', (now.isoformat(),))
 PY

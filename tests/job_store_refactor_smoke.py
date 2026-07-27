@@ -35,6 +35,33 @@ store.upsert_results(child.id, [{
 }])
 assert store.get(parent.id).results[1]["deliverable"] is True
 
+page_job = Job(
+    id="page", emails=["valid@example.com", "invalid@example.com", "unknown@example.com"],
+    worker_count=1, status="running",
+)
+store.add(page_job)
+store.upsert_results(page_job.id, [
+    {"email": "valid@example.com", "original_index": 0, "valid": True,
+     "deliverable": True, "progress_state": "completed"},
+    {"email": "invalid@example.com", "original_index": 1, "valid": True,
+     "deliverable": False, "progress_state": "completed"},
+    {"email": "unknown@example.com", "original_index": 2, "valid": True,
+     "deliverable": None, "progress_state": "completed", "retry_updated": True},
+])
+available, results = store.result_page(page_job.id, offset=0, limit=1, deliverability="undeliverable")
+assert available == 1 and [result["email"] for result in results] == ["invalid@example.com"]
+available, results = store.result_page(page_job.id, offset=1, limit=1, search="example")
+assert available == 3 and [result["email"] for result in results] == ["invalid@example.com"]
+overview = store.result_overview(page_job.id)
+assert (overview.total, overview.settled, overview.deliverable, overview.undeliverable, overview.unknown) == (3, 3, 1, 1, 1)
+assert overview.review_updated is True
+
+connection = store._connect()
+connection.execute("UPDATE job_results SET query_fields_ready=0 WHERE job_id=?", (page_job.id,))
+connection.close()
+assert store.migrate_legacy_results()["result_query_fields"] >= 3
+assert store.result_overview(page_job.id).deliverable == 1
+
 # A terminal row may receive metadata updates, but it cannot be moved back to
 # a waiting state by an old callback.
 store.upsert_results(child.id, [{

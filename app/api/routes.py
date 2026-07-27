@@ -6,7 +6,6 @@ import json
 import threading
 import time
 import uuid
-from datetime import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Body, Depends, File, Header, HTTPException, Query, Request, UploadFile
@@ -409,27 +408,32 @@ def require_job_access(job: Job, user: User | None, guest_token: str | None) -> 
 
 
 def serialize_job(job: Job) -> JobResponse:
-    completed, total, progress = job_progress(job)
+    overview = job_store.result_overview(job.id)
+    total = len(job.emails)
+    if overview.total or not job.results:
+        completed = total if job.status == "completed" else min(overview.settled, total)
+        progress = round((completed / total * 100) if total else 0, 1)
+        summary = {
+            "total": overview.total,
+            "valid": overview.valid,
+            "deliverable": overview.deliverable,
+            "undeliverable": overview.undeliverable,
+            "unknown": overview.unknown,
+            "catch_all": overview.catch_all,
+        }
+    else:
+        # Allows callers that are building a new, not-yet-persisted job to use
+        # the same response serializer without depending on database state.
+        completed, total, progress = job_progress(job)
+        summary = summarize([normalize_result(result) for result in job.results])
     is_done = job.status in {"completed", "stopped"}
-    normalized_results = [normalize_result(result) for result in job.results]
     retry_at = job.deferred_retry_at
-    result_retries = []
-    for result in job.results:
-        if result.get("retry_state") != "scheduled" or not result.get("retry_at"):
-            continue
-        try:
-            result_retries.append(datetime.fromisoformat(str(result["retry_at"])))
-        except ValueError:
-            continue
-    if result_retries:
-        retry_at = min([retry_at, *result_retries] if retry_at else result_retries)
+    if overview.retry_at:
+        retry_at = min([retry_at, overview.retry_at] if retry_at else [overview.retry_at])
     if job.execution_target == "aggregate":
-        child_retries = [
-            child.deferred_retry_at for child in job_store.children(job.id)
-            if child.deferred_retry_at is not None
-        ]
-        if child_retries:
-            retry_at = min(child_retries)
+        child_retry = job_store.earliest_child_retry(job.id)
+        if child_retry:
+            retry_at = min([retry_at, child_retry] if retry_at else [child_retry])
     return JobResponse(
         id=job.id,
         status=job.status,
@@ -441,14 +445,14 @@ def serialize_job(job: Job) -> JobResponse:
         started_at=job.started_at.isoformat() if job.started_at else None,
         finished_at=job.finished_at.isoformat() if job.finished_at else None,
         error=job.error,
-        summary=summarize(normalized_results),
+        summary=summary,
         download_url=f"/api/jobs/{job.id}/download" if is_done else None,
         download_name=verification_filename(job) if is_done else None,
         queue_position=job_store.queue_position(job.id),
         retry_at=retry_at.isoformat() if retry_at else None,
         stop_on_deliverable=job.stop_on_deliverable,
         qq_slow=any(is_qq_email(email) for email in job.emails),
-        review_updated=any(result.get("retry_updated") for result in job.results),
+        review_updated=overview.review_updated,
         access_token=job.guest_token,
     )
 
@@ -871,7 +875,7 @@ def get_job(
     user: Annotated[User | None, Depends(optional_user)],
     guest_token: Annotated[str | None, Header(alias="X-Job-Token")] = None,
 ) -> JobResponse:
-    return serialize_job(require_job_access(require_job(job_id), user, guest_token))
+    return serialize_job(require_job_access(require_job(job_id, include_results=False), user, guest_token))
 
 
 @router.post("/jobs/{job_id}/reviewed", status_code=204)
@@ -930,25 +934,20 @@ def get_results(
     search: str = Query(default="", max_length=256),
     deliverability: str = Query(default="all", pattern="^(all|deliverable|undeliverable|unknown)$"),
 ) -> ResultsResponse:
-    job = require_job_access(require_job(job_id), user, guest_token)
-    query = search.strip().lower()
-    filtered_results = [
-        normalize_result(result)
-        for result in job.results
-        if (not query or query in str(result.get("email", "")).lower())
-        and (
-            deliverability == "all"
-            or (deliverability == "deliverable" and result.get("deliverable") is True)
-            or (deliverability == "undeliverable" and result.get("deliverable") is False)
-            or (deliverability == "unknown" and result.get("deliverable") is None and not result.get("skipped"))
-        )
-    ]
-    return ResultsResponse(
-        total=len(job.emails),
-        available=len(filtered_results),
+    job = require_job_access(require_job(job_id, include_results=False), user, guest_token)
+    available, page = job_store.result_page(
+        job.id,
         offset=offset,
         limit=limit,
-        items=filtered_results[offset : offset + limit],
+        search=search.strip(),
+        deliverability=deliverability,
+    )
+    return ResultsResponse(
+        total=len(job.emails),
+        available=available,
+        offset=offset,
+        limit=limit,
+        items=[normalize_result(result) for result in page],
     )
 
 
@@ -958,7 +957,7 @@ def download_results(
     user: Annotated[User | None, Depends(optional_user)],
     guest_token: Annotated[str | None, Header(alias="X-Job-Token")] = None,
 ) -> FileResponse:
-    job = require_job_access(require_job(job_id), user, guest_token)
+    job = require_job_access(require_job(job_id, include_results=False), user, guest_token)
     if job.status not in {"completed", "stopped"} or job.csv_path is None or not job.csv_path.exists():
         raise HTTPException(status_code=409, detail="结果文件尚未生成")
     return FileResponse(

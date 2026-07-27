@@ -60,6 +60,19 @@ class WorkerRuntime:
     last_stop_error: str | None = None
 
 
+@dataclass(frozen=True)
+class ResultOverview:
+    settled: int
+    total: int
+    valid: int
+    deliverable: int
+    undeliverable: int
+    unknown: int
+    catch_all: int
+    retry_at: datetime | None
+    review_updated: bool
+
+
 class JobStore:
     """SQLite-backed queue, history store, result cache, and Catch-all archive."""
 
@@ -158,10 +171,28 @@ class JobStore:
                     CREATE TABLE IF NOT EXISTS job_results (
                         job_id TEXT NOT NULL, original_index INTEGER NOT NULL, email TEXT NOT NULL,
                         progress_state TEXT NOT NULL DEFAULT 'pending', result_json TEXT NOT NULL,
-                        updated_at TEXT NOT NULL, PRIMARY KEY (job_id, original_index)
+                        updated_at TEXT NOT NULL, deliverability INTEGER, is_valid INTEGER NOT NULL DEFAULT 0,
+                        is_skipped INTEGER NOT NULL DEFAULT 0, is_catch_all INTEGER NOT NULL DEFAULT 0,
+                        retry_at TEXT, retry_updated INTEGER NOT NULL DEFAULT 0,
+                        query_fields_ready INTEGER NOT NULL DEFAULT 0,
+                        PRIMARY KEY (job_id, original_index)
                     )
                 """)
+                result_columns = {row[1] for row in connection.execute("PRAGMA table_info(job_results)")}
+                for name, kind in (
+                    ("deliverability", "INTEGER"),
+                    ("is_valid", "INTEGER NOT NULL DEFAULT 0"),
+                    ("is_skipped", "INTEGER NOT NULL DEFAULT 0"),
+                    ("is_catch_all", "INTEGER NOT NULL DEFAULT 0"),
+                    ("retry_at", "TEXT"),
+                    ("retry_updated", "INTEGER NOT NULL DEFAULT 0"),
+                    ("query_fields_ready", "INTEGER NOT NULL DEFAULT 0"),
+                ):
+                    if name not in result_columns:
+                        connection.execute(f"ALTER TABLE job_results ADD COLUMN {name} {kind}")
                 connection.execute("CREATE INDEX IF NOT EXISTS idx_job_results_pending ON job_results(job_id, progress_state, original_index)")
+                connection.execute("CREATE INDEX IF NOT EXISTS idx_job_results_filter ON job_results(job_id, deliverability, is_skipped, original_index)")
+                connection.execute("CREATE INDEX IF NOT EXISTS idx_job_results_email ON job_results(job_id, email COLLATE NOCASE, original_index)")
                 connection.execute("""
                     CREATE TABLE IF NOT EXISTS job_result_links (
                         child_job_id TEXT NOT NULL, child_index INTEGER NOT NULL,
@@ -273,6 +304,53 @@ class JobStore:
             return state
         return "completed"
 
+    @classmethod
+    def _result_row(cls, job_id: str, index: int, result: dict[str, Any], now: str) -> tuple[Any, ...]:
+        """Return one durable result row, including fields needed by list queries."""
+        payload = dict(result)
+        payload["original_index"] = index
+        deliverable = payload.get("deliverable")
+        return (
+            job_id,
+            index,
+            str(payload.get("email") or ""),
+            cls._result_state(payload),
+            json.dumps(payload, ensure_ascii=False, default=str),
+            now,
+            1 if deliverable is True else 0 if deliverable is False else None,
+            int(payload.get("valid") is True),
+            int(payload.get("skipped") is True),
+            int(payload.get("domain_type") == "catch-all"),
+            str(payload.get("retry_at") or "") or None,
+            int(payload.get("retry_updated") is True),
+            1,
+        )
+
+    def _backfill_result_query_fields(self, connection: sqlite3.Connection) -> int:
+        """Populate query columns from legacy JSON without changing result payloads."""
+        rows = connection.execute(
+            """SELECT job_id, original_index, result_json, updated_at FROM job_results
+            WHERE query_fields_ready=0"""
+        ).fetchall()
+        updates: list[tuple[Any, ...]] = []
+        for job_id, index, payload, updated_at in rows:
+            try:
+                result = json.loads(payload)
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if not isinstance(result, dict):
+                continue
+            row = self._result_row(str(job_id), int(index), result, str(updated_at))
+            updates.append((*row[6:], str(job_id), int(index)))
+        if not updates:
+            return 0
+        connection.executemany(
+            """UPDATE job_results SET deliverability=?, is_valid=?, is_skipped=?, is_catch_all=?,
+            retry_at=?, retry_updated=?, query_fields_ready=? WHERE job_id=? AND original_index=?""",
+            updates,
+        )
+        return len(updates)
+
     def _backfill_result_rows(self, connection: sqlite3.Connection) -> None:
         """Migrate legacy JSON snapshots once, without overwriting newer result rows."""
         if connection.execute("SELECT 1 FROM job_results LIMIT 1").fetchone() is not None:
@@ -290,11 +368,13 @@ class JobStore:
             for index, email in enumerate(emails):
                 result = dict(indexed.get(index, {"email": email, "original_index": index, "progress_state": "pending"}))
                 result["email"], result["original_index"] = str(result.get("email") or email), index
-                rows.append((job_id, index, result["email"], self._result_state(result), json.dumps(result, ensure_ascii=False, default=str), now))
+                rows.append(self._result_row(job_id, index, result, now))
             if rows:
                 connection.executemany("""
-                    INSERT INTO job_results(job_id, original_index, email, progress_state, result_json, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(job_id, original_index) DO NOTHING
+                    INSERT INTO job_results(job_id, original_index, email, progress_state, result_json, updated_at,
+                        deliverability, is_valid, is_skipped, is_catch_all, retry_at, retry_updated, query_fields_ready)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(job_id, original_index) DO NOTHING
                 """, rows)
 
     def migrate_legacy_results(self) -> dict[str, int]:
@@ -324,12 +404,13 @@ class JobStore:
                     }))
                     result["email"] = str(result.get("email") or email)
                     result["original_index"] = index
-                    rows.append((job_id, index, result["email"], self._result_state(result),
-                                 json.dumps(result, ensure_ascii=False, default=str), now))
+                    rows.append(self._result_row(job_id, index, result, now))
                 before = connection.total_changes
                 connection.executemany("""
-                    INSERT INTO job_results(job_id, original_index, email, progress_state, result_json, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(job_id, original_index) DO NOTHING
+                    INSERT INTO job_results(job_id, original_index, email, progress_state, result_json, updated_at,
+                        deliverability, is_valid, is_skipped, is_catch_all, retry_at, retry_updated, query_fields_ready)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(job_id, original_index) DO NOTHING
                 """, rows)
                 migrated_rows += connection.total_changes - before
 
@@ -370,8 +451,13 @@ class JobStore:
                 "INSERT OR REPLACE INTO schema_migrations(name, applied_at) VALUES ('legacy_result_rows_v1', ?)",
                 (now,),
             )
+            query_fields = self._backfill_result_query_fields(connection)
             connection.commit()
-        return {"result_rows": migrated_rows, "result_links": linked_rows}
+        return {
+            "result_rows": migrated_rows,
+            "result_links": linked_rows,
+            "result_query_fields": query_fields,
+        }
 
     def release_legacy_deferred_retries(self) -> int:
         """Release only tasks queued by the retired multi-minute retry policy."""
@@ -490,15 +576,20 @@ class JobStore:
             return
         now = utc_now().isoformat()
         rows = [
-            (job.id, index, email, "pending", json.dumps({
-                "email": email, "original_index": index, "progress_state": "pending"
-            }, ensure_ascii=False), now)
+            self._result_row(
+                job.id,
+                index,
+                {"email": email, "original_index": index, "progress_state": "pending"},
+                now,
+            )
             for index, email in enumerate(job.emails)
         ]
         with self._lock, closing(self._connect()) as connection:
             connection.executemany("""
-                INSERT INTO job_results(job_id, original_index, email, progress_state, result_json, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(job_id, original_index) DO NOTHING
+                INSERT INTO job_results(job_id, original_index, email, progress_state, result_json, updated_at,
+                    deliverability, is_valid, is_skipped, is_catch_all, retry_at, retry_updated, query_fields_ready)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(job_id, original_index) DO NOTHING
             """, rows)
 
     def link_child_results(self, child_job_id: str, parent_job_id: str, parent_indices: list[int]) -> None:
@@ -531,6 +622,85 @@ class JobStore:
             results.append(result)
         return results
 
+    def result_page(
+        self,
+        job_id: str,
+        *,
+        offset: int,
+        limit: int,
+        search: str = "",
+        deliverability: str = "all",
+    ) -> tuple[int, list[dict[str, Any]]]:
+        """Fetch one visible result page without hydrating the whole task."""
+        self.initialize()
+        clauses = ["job_id=?"]
+        parameters: list[Any] = [job_id]
+        if search:
+            clauses.append("email LIKE ? COLLATE NOCASE")
+            parameters.append(f"%{search}%")
+        if deliverability == "deliverable":
+            clauses.append("deliverability=1")
+        elif deliverability == "undeliverable":
+            clauses.append("deliverability=0")
+        elif deliverability == "unknown":
+            clauses.append("deliverability IS NULL AND is_skipped=0")
+        where = " AND ".join(clauses)
+        with closing(self._connect()) as connection:
+            available = int(connection.execute(
+                f"SELECT COUNT(*) FROM job_results WHERE {where}", parameters
+            ).fetchone()[0])
+            rows = connection.execute(
+                f"""SELECT progress_state, result_json FROM job_results WHERE {where}
+                ORDER BY original_index LIMIT ? OFFSET ?""",
+                [*parameters, limit, offset],
+            ).fetchall()
+        results = []
+        for state, raw in rows:
+            result = json.loads(raw)
+            result["progress_state"] = state
+            results.append(result)
+        return available, results
+
+    def result_overview(self, job_id: str) -> ResultOverview:
+        """Return the task counters used by status polling without loading result JSON."""
+        self.initialize()
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                """SELECT
+                    COUNT(*),
+                    COALESCE(SUM(progress_state NOT IN ('pending', 'verifying')), 0),
+                    COALESCE(SUM(is_valid), 0),
+                    COALESCE(SUM(deliverability=1), 0),
+                    COALESCE(SUM(deliverability=0), 0),
+                    COALESCE(SUM(deliverability IS NULL AND is_skipped=0), 0),
+                    COALESCE(SUM(is_catch_all), 0),
+                    MIN(retry_at),
+                    COALESCE(MAX(retry_updated), 0)
+                FROM job_results WHERE job_id=?""",
+                (job_id,),
+            ).fetchone()
+        retry_at = None
+        if row[7]:
+            try:
+                retry_at = datetime.fromisoformat(str(row[7]))
+            except ValueError:
+                pass
+        return ResultOverview(
+            settled=int(row[1]), total=int(row[0]), valid=int(row[2]),
+            deliverable=int(row[3]), undeliverable=int(row[4]), unknown=int(row[5]),
+            catch_all=int(row[6]), retry_at=retry_at, review_updated=bool(row[8]),
+        )
+
+    def earliest_child_retry(self, parent_id: str) -> datetime | None:
+        self.initialize()
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                """SELECT MIN(deferred_retry_at) FROM jobs
+                WHERE parent_id=? AND deferred_retry_at IS NOT NULL""",
+                (parent_id,),
+            ).fetchone()
+        return datetime.fromisoformat(row[0]) if row and row[0] else None
+
     def upsert_results(self, job_id: str, results: list[dict[str, Any]]) -> None:
         """Write result deltas in one transaction; terminal rows cannot regress."""
         if not results:
@@ -543,15 +713,20 @@ class JobStore:
             index = int(result.get("original_index", fallback_index))
             result["original_index"] = index
             email = str(result.get("email") or "")
-            rows.append((job_id, index, email, self._result_state(result), json.dumps(result, ensure_ascii=False, default=str), now))
+            rows.append(self._result_row(job_id, index, result, now))
         with self._lock, closing(self._connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
             connection.executemany("""
-                INSERT INTO job_results(job_id, original_index, email, progress_state, result_json, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO job_results(job_id, original_index, email, progress_state, result_json, updated_at,
+                    deliverability, is_valid, is_skipped, is_catch_all, retry_at, retry_updated, query_fields_ready)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(job_id, original_index) DO UPDATE SET
                     email=excluded.email, progress_state=excluded.progress_state,
-                    result_json=excluded.result_json, updated_at=excluded.updated_at
+                    result_json=excluded.result_json, updated_at=excluded.updated_at,
+                    deliverability=excluded.deliverability, is_valid=excluded.is_valid,
+                    is_skipped=excluded.is_skipped, is_catch_all=excluded.is_catch_all,
+                    retry_at=excluded.retry_at, retry_updated=excluded.retry_updated,
+                    query_fields_ready=excluded.query_fields_ready
                 WHERE job_results.progress_state IN ('pending', 'verifying')
                     OR job_results.progress_state = excluded.progress_state
             """, rows)
@@ -560,7 +735,7 @@ class JobStore:
                 WHERE child_job_id=?
             """, (job_id,)).fetchall()
             if links:
-                source = {int(index): (email, state, payload) for _, index, email, state, payload, _ in rows}
+                source = {int(row[1]): (row[2], row[3], row[4]) for row in rows}
                 parent_rows = []
                 for child_index, parent_id, parent_index in links:
                     item = source.get(int(child_index))
@@ -569,14 +744,18 @@ class JobStore:
                     email, state, payload = item
                     result = json.loads(payload)
                     result["original_index"] = int(parent_index)
-                    parent_rows.append((parent_id, int(parent_index), email, state,
-                                        json.dumps(result, ensure_ascii=False, default=str), now))
+                    parent_rows.append(self._result_row(parent_id, int(parent_index), result, now))
                 connection.executemany("""
-                    INSERT INTO job_results(job_id, original_index, email, progress_state, result_json, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    INSERT INTO job_results(job_id, original_index, email, progress_state, result_json, updated_at,
+                        deliverability, is_valid, is_skipped, is_catch_all, retry_at, retry_updated, query_fields_ready)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(job_id, original_index) DO UPDATE SET
                         email=excluded.email, progress_state=excluded.progress_state,
-                        result_json=excluded.result_json, updated_at=excluded.updated_at
+                        result_json=excluded.result_json, updated_at=excluded.updated_at,
+                        deliverability=excluded.deliverability, is_valid=excluded.is_valid,
+                        is_skipped=excluded.is_skipped, is_catch_all=excluded.is_catch_all,
+                        retry_at=excluded.retry_at, retry_updated=excluded.retry_updated,
+                        query_fields_ready=excluded.query_fields_ready
                     WHERE job_results.progress_state IN ('pending', 'verifying')
                         OR job_results.progress_state = excluded.progress_state
                 """, parent_rows)
@@ -597,14 +776,17 @@ class JobStore:
         job = self._job_from_row(row)
         return self._hydrate_results(job) if include_results else job
 
-    def list_recent(self, owner_id: str, limit: int = 20) -> list[Job]:
+    def list_recent(
+        self, owner_id: str, limit: int = 20, *, include_results: bool = False
+    ) -> list[Job]:
         self.initialize()
         with closing(self._connect()) as connection:
             rows = connection.execute(
                 f"SELECT {self._select_columns()} FROM jobs WHERE owner_id = ? AND parent_id IS NULL AND retry_parent_id IS NULL ORDER BY created_at DESC LIMIT ?",
                 (owner_id, limit),
             ).fetchall()
-        return [self._hydrate_results(self._job_from_row(row)) for row in rows]
+        jobs = [self._job_from_row(row) for row in rows]
+        return [self._hydrate_results(job) for job in jobs] if include_results else jobs
 
     def recent_completed_single_jobs(self, since: datetime) -> list[Job]:
         """Return standalone single-address jobs eligible for a narrow repair pass."""
