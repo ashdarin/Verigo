@@ -59,4 +59,11 @@ with patch.object(
         else:
             raise AssertionError("HTTP 502 must be treated as a transient worker outage")
 
+with patch.object(worker, "request_json", return_value={}) as request:
+    worker.complete_job("completion-smoke", "lease-token")
+    assert request.call_args.args == (
+        f"/api/workers/{worker.WORKER_TARGET}/jobs/completion-smoke/complete",
+        {"results": [], "lease_id": "lease-token"},
+    )
+
 print("remote worker smoke: ok")

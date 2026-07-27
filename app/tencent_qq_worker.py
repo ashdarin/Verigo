@@ -104,6 +104,14 @@ def report_result(job_id: str, result: dict[str, Any], lease_id: str | None = No
     request_json(f"/api/workers/{WORKER_TARGET}/jobs/{job_id}/results", payload)
 
 
+def complete_job(job_id: str, lease_id: str | None = None) -> None:
+    """Complete a lease after every result callback has been durably acknowledged."""
+    payload: dict[str, object] = {"results": []}
+    if lease_id:
+        payload["lease_id"] = lease_id
+    request_json(f"/api/workers/{WORKER_TARGET}/jobs/{job_id}/complete", payload)
+
+
 def skipped_result(email: str, index: int) -> dict[str, object]:
     return {
         "email": email,
@@ -185,7 +193,6 @@ def _verify_job(job: dict[str, object], control: dict[str, object]) -> None:
     worker_count = max(1, min(int(job.get("worker_count", 1)), remote_limit))
     if any(is_qq_email(email) for email in emails):
         worker_count = 1
-    results: list[dict[str, Any]] = []
     def on_result(raw_result: dict[str, Any]) -> None:
         if stopped(job_id, control):
             return
@@ -207,7 +214,6 @@ def _verify_job(job: dict[str, object], control: dict[str, object]) -> None:
                     retry_at, __import__("datetime").timezone.utc
                 ).isoformat(),
             })
-        results.append(result)
         # The first visible 4xx result must already include its retry schedule.
         report_result(job_id, result, lease_id)
 
@@ -225,19 +231,17 @@ def _verify_job(job: dict[str, object], control: dict[str, object]) -> None:
                 continue
             result = dict(batch[0])
             result["original_index"] = original_indices[index]
-            results.append(result)
             report_result(job_id, result, lease_id)
             if result.get("deliverable") is True:
                 for remaining_index, remaining_email in enumerate(
                     emails[index + 1 :], index + 1
                 ):
                     skipped = skipped_result(remaining_email, original_indices[remaining_index])
-                    results.append(skipped)
                     report_result(job_id, skipped, lease_id)
                 break
     else:
         verifier = create_verifier(worker_count)
-        raw_results = verifier.verify_batch_distributed(
+        verifier.verify_batch_distributed(
             emails,
             num_processes=worker_count,
             result_callback=on_result,
@@ -245,22 +249,8 @@ def _verify_job(job: dict[str, object], control: dict[str, object]) -> None:
         )
         if stopped(job_id, control):
             return
-        # The verifier returns indexes relative to the leased shard. Result
-        # callbacks already map them, and the completion payload must do the
-        # same before the API validates the lease's global indexes.
-        results = []
-        for raw_result in raw_results:
-            result = dict(raw_result)
-            relative_index = int(result.get("original_index", 0))
-            if 0 <= relative_index < len(original_indices):
-                result["original_index"] = original_indices[relative_index]
-            results.append(result)
-
     if not stopped(job_id, control):
-        payload: dict[str, object] = {"results": results}
-        if lease_id:
-            payload["lease_id"] = lease_id
-        request_json(f"/api/workers/{WORKER_TARGET}/jobs/{job_id}/complete", payload)
+        complete_job(job_id, lease_id)
 
 
 def verify_job(job: dict[str, object]) -> None:
