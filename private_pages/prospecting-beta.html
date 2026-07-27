@@ -58,6 +58,15 @@
           </label>
         </div>
         <p class="field-hint">已知命名规则时请选择，系统会优先验证该规则，结果准确性更高。</p>
+        <details class="known-contact">
+          <summary>我有一位已知员工的姓名和公司邮箱</summary>
+          <p>系统会从这个样本自动识别邮箱规则，并在本域名的后续任务中优先使用。</p>
+          <div class="known-contact-fields">
+            <label>名字<input id="known-first-name" autocomplete="given-name" placeholder="John"></label>
+            <label>姓氏<input id="known-last-name" autocomplete="family-name" placeholder="Smith"></label>
+            <label>公司邮箱<input id="known-email" type="email" autocomplete="email" placeholder="john.smith@company.com"></label>
+          </div>
+        </details>
         <p id="form-error" class="error" role="alert"></p>
       </form>
     </section>
@@ -85,6 +94,17 @@
         <table>
           <thead><tr><th>邮箱</th><th>类别</th><th>生成依据</th><th>状态</th><th>验证详情</th></tr></thead>
           <tbody id="results-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="saved-contacts-panel" class="results" aria-labelledby="saved-contacts-title">
+      <div class="results-heading"><div><p class="eyebrow">我的联系人</p><h2 id="saved-contacts-title">已保存的有效邮箱</h2></div><span id="saved-contact-count" class="limit">0</span></div>
+      <p class="profile-copy">非 catch-all 的有效结果会自动保存到当前账号，后续登录仍可查看。</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>邮箱</th><th>公司域名</th><th>邮箱规则</th><th>保存时间</th></tr></thead>
+          <tbody id="saved-contacts-body"></tbody>
         </table>
       </div>
     </section>

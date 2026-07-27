@@ -107,12 +107,12 @@ class Settings:
         for email in os.getenv("VERIGO_PROSPECTING_BETA_ALLOWED_EMAILS", "").split(",")
         if email.strip()
     )
-    prospecting_beta_daily_run_limit: int = max(
-        1, int(os.getenv("VERIGO_PROSPECTING_BETA_DAILY_RUN_LIMIT", "3"))
-    )
     prospecting_beta_max_candidates: int = min(
         1000, max(100, int(os.getenv("VERIGO_PROSPECTING_BETA_MAX_CANDIDATES", "1000")))
     )
+    # The per-run budget protects the verification queue. There is no daily
+    # prospecting-run cap; fresh candidates are reserved per account and domain.
+    prospecting_beta_catalogue_candidates: int = 10_000
     metrics_salt: str = os.getenv("VERIGO_METRICS_SALT", "")
     # Restricts operational queue and worker details to the local monitor.
     monitor_token: str = os.getenv("VERIGO_MONITOR_TOKEN", "")

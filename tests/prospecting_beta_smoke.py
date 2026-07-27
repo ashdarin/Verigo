@@ -16,13 +16,12 @@ os.environ["VERIGO_SECURE_COOKIES"] = "false"
 os.environ["VERIGO_MAX_PENDING_JOBS"] = "50"
 os.environ["VERIGO_PROSPECTING_BETA_ENABLED"] = "true"
 os.environ["VERIGO_PROSPECTING_BETA_ALLOWED_EMAILS"] = "4671793@qq.com"
-os.environ["VERIGO_PROSPECTING_BETA_DAILY_RUN_LIMIT"] = "3"
 os.environ["VERIGO_PROSPECTING_BETA_MAX_CANDIDATES"] = "128"
 
 from fastapi.testclient import TestClient
 
 from app.config import settings
-from app.core.prospecting import ROLE_LOCAL_PARTS, generate_candidates, normalize_company_domain
+from app.core.prospecting import ROLE_LOCAL_PARTS, generate_candidates, infer_email_pattern, normalize_company_domain
 from app.db.auth import auth_store
 from app.db.jobs import job_store, utc_now
 from app.db.prospecting import prospecting_store
@@ -36,6 +35,7 @@ assert len(german_candidates) == 128
 first_personal = german_candidates[len(ROLE_LOCAL_PARTS)]
 assert first_personal.pattern == "last.first"
 assert first_personal.source == "user_selected_pattern"
+assert infer_email_pattern("example.com", "John", "Smith", "smith.john@example.com") == "last.first"
 try:
     normalize_company_domain("gmail.com")
 except ValueError:
@@ -103,6 +103,25 @@ with TestClient(app) as client:
     assert payload["summary"]["catch_all"] == 1
     assert any(item["result_type"] == "catch_all" for item in payload["results"])
     assert prospecting_store.domain_patterns("example.com") == [personal["pattern"]]
+    saved = client.get("/api/prospecting-beta/saved-contacts")
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["total"] == 2
+    assert {item["email"] for item in saved.json()["items"]} == {
+        candidates[0]["email"], personal["email"],
+    }
+
+    second = client.post("/api/prospecting-beta/runs", json={
+        "domain": "example.com", "country": "DE",
+        "known_first_name": "John", "known_last_name": "Smith",
+        "known_email": "smith.john@example.com",
+    })
+    assert second.status_code == 202, second.text
+    second_run = second.json()
+    assert second_run["requested_pattern"] == "last.first"
+    second_candidates = prospecting_store.candidates(second_run["id"])
+    assert {item["email"] for item in candidates}.isdisjoint(
+        {item["email"] for item in second_candidates}
+    )
 
     stopped = client.post(f"/api/prospecting-beta/runs/{run['id']}/stop")
     assert stopped.status_code == 200

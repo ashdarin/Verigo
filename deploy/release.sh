@@ -294,6 +294,9 @@ chmod 600 /etc/verigo/verigo.env
 if grep -q '^VERIGO_PROSPECTING_BETA_MAX_CANDIDATES=120$' /etc/verigo/verigo.env; then
     sed -i 's/^VERIGO_PROSPECTING_BETA_MAX_CANDIDATES=120$/VERIGO_PROSPECTING_BETA_MAX_CANDIDATES=1000/' /etc/verigo/verigo.env
 fi
+# The private beta no longer has a daily-run quota. Its per-run size remains
+# bounded while each account receives a fresh, non-repeating candidate set.
+sed -i '/^VERIGO_PROSPECTING_BETA_DAILY_RUN_LIMIT=/d' /etc/verigo/verigo.env
 
 if ! cmp -s "$previous_release/requirements.txt" "$release_path/requirements.txt"; then
     "$state_dir/.venv/bin/pip" install --disable-pip-version-check -r "$release_path/requirements.txt"

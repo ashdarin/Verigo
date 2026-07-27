@@ -73,8 +73,18 @@ class ProspectingStore:
                         last_confirmed_at TEXT NOT NULL, PRIMARY KEY(domain, pattern)
                     )
                 """)
+                connection.execute("""
+                    CREATE TABLE IF NOT EXISTS prospecting_saved_contacts (
+                        owner_id TEXT NOT NULL, email TEXT NOT NULL, domain TEXT NOT NULL,
+                        category TEXT NOT NULL, pattern TEXT NOT NULL, source TEXT NOT NULL,
+                        run_id TEXT NOT NULL, saved_at TEXT NOT NULL,
+                        PRIMARY KEY(owner_id, email),
+                        FOREIGN KEY(run_id) REFERENCES prospecting_runs(id) ON DELETE CASCADE
+                    )
+                """)
                 connection.execute("CREATE INDEX IF NOT EXISTS idx_prospecting_runs_owner ON prospecting_runs(owner_id, created_at DESC)")
                 connection.execute("CREATE INDEX IF NOT EXISTS idx_prospecting_candidates_run ON prospecting_candidates(run_id, original_index)")
+                connection.execute("CREATE INDEX IF NOT EXISTS idx_prospecting_saved_contacts_owner ON prospecting_saved_contacts(owner_id, saved_at DESC)")
             self._initialized = True
 
     @staticmethod
@@ -150,13 +160,16 @@ class ProspectingStore:
             """, (owner_id, limit)).fetchall()
         return [self._run_from_row(row) for row in rows]
 
-    def count_runs_since(self, owner_id: str, start: datetime) -> int:
+    def issued_emails(self, owner_id: str, domain: str) -> set[str]:
         self.initialize()
         with closing(self._connect()) as connection:
-            return int(connection.execute(
-                "SELECT COUNT(*) FROM prospecting_runs WHERE owner_id=? AND created_at>=?",
-                (owner_id, start.isoformat()),
-            ).fetchone()[0])
+            rows = connection.execute("""
+                SELECT candidate.email
+                FROM prospecting_candidates AS candidate
+                JOIN prospecting_runs AS run ON run.id=candidate.run_id
+                WHERE run.owner_id=? AND run.domain=?
+            """, (owner_id, domain)).fetchall()
+        return {str(row[0]) for row in rows}
 
     def candidates(self, run_id: str) -> list[dict[str, Any]]:
         self.initialize()
@@ -179,6 +192,78 @@ class ProspectingStore:
                 ORDER BY confirmed_count DESC, last_confirmed_at DESC LIMIT 3
             """, (domain,)).fetchall()
         return [str(row[0]) for row in rows]
+
+    def record_provided_pattern(self, domain: str, pattern: str) -> None:
+        """Retain a user-supplied known-contact pattern for future runs."""
+        self.initialize()
+        with closing(self._connect()) as connection:
+            begin_immediate(connection)
+            try:
+                connection.execute("""
+                    INSERT INTO prospecting_domain_profiles(domain, pattern, confirmed_count, last_confirmed_at)
+                    VALUES (?, ?, 1, ?)
+                    ON CONFLICT(domain, pattern) DO UPDATE SET
+                        confirmed_count=confirmed_count + 1, last_confirmed_at=excluded.last_confirmed_at
+                """, (domain, pattern, utc_now().isoformat()))
+                connection.execute("COMMIT")
+            except Exception:
+                connection.execute("ROLLBACK")
+                raise
+
+    def save_confirmed_contacts(self, run: ProspectingRun, results: list[dict[str, Any]]) -> int:
+        """Persist user-owned, non-catch-all confirmed contacts idempotently."""
+        candidate_by_index = {item["original_index"]: item for item in self.candidates(run.id)}
+        saved_at = utc_now().isoformat()
+        rows = []
+        for result in results:
+            if result.get("deliverable") is not True or result.get("domain_type") == "catch-all":
+                continue
+            candidate = candidate_by_index.get(int(result.get("original_index", -1)))
+            if candidate is None:
+                continue
+            rows.append((
+                run.owner_id, candidate["email"], run.domain, candidate["category"],
+                candidate["pattern"], candidate["source"], run.id, saved_at,
+            ))
+        if not rows:
+            return 0
+        with closing(self._connect()) as connection:
+            begin_immediate(connection)
+            try:
+                before = connection.total_changes
+                connection.executemany("""
+                    INSERT INTO prospecting_saved_contacts(
+                        owner_id, email, domain, category, pattern, source, run_id, saved_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(owner_id, email) DO NOTHING
+                """, rows)
+                inserted = connection.total_changes - before
+                connection.execute("COMMIT")
+            except Exception:
+                connection.execute("ROLLBACK")
+                raise
+        return inserted
+
+    def saved_contacts(self, owner_id: str, limit: int = 200) -> list[dict[str, Any]]:
+        self.initialize()
+        with closing(self._connect()) as connection:
+            rows = connection.execute("""
+                SELECT email, domain, category, pattern, source, run_id, saved_at
+                FROM prospecting_saved_contacts WHERE owner_id=?
+                ORDER BY saved_at DESC, email ASC LIMIT ?
+            """, (owner_id, limit)).fetchall()
+        return [
+            {"email": row[0], "domain": row[1], "category": row[2], "pattern": row[3],
+             "source": row[4], "run_id": row[5], "saved_at": row[6]}
+            for row in rows
+        ]
+
+    def saved_contact_count(self, owner_id: str) -> int:
+        self.initialize()
+        with closing(self._connect()) as connection:
+            return int(connection.execute(
+                "SELECT COUNT(*) FROM prospecting_saved_contacts WHERE owner_id=?", (owner_id,)
+            ).fetchone()[0])
 
     def record_confirmed_patterns(self, run: ProspectingRun, results: list[dict[str, Any]]) -> bool:
         """Record only non-catch-all personal confirmations, exactly once per run."""

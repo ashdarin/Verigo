@@ -17,6 +17,28 @@ function categoryLabel(category) {
   return category === "business_entry" ? "业务入口" : "个人格式候选";
 }
 
+function renderSavedContacts(payload) {
+  const body = byId("saved-contacts-body");
+  body.replaceChildren();
+  byId("saved-contact-count").textContent = `${payload.total} 条`;
+  if (!payload.items.length) {
+    const row = document.createElement("tr"); row.className = "empty";
+    const cell = document.createElement("td"); cell.colSpan = 4; cell.textContent = "暂未保存有效联系人";
+    row.append(cell); body.append(row); return;
+  }
+  payload.items.forEach((item) => {
+    const row = document.createElement("tr");
+    [item.email, item.domain, item.pattern, new Date(item.saved_at).toLocaleString()].forEach((value) => {
+      const cell = document.createElement("td"); cell.textContent = value; row.append(cell);
+    });
+    body.append(row);
+  });
+}
+
+async function refreshSavedContacts() {
+  renderSavedContacts(await api("/api/prospecting-beta/saved-contacts"));
+}
+
 function renderResults(run) {
   const body = byId("results-body");
   body.replaceChildren();
@@ -64,6 +86,7 @@ function renderRun(run) {
   byId("profile-copy").textContent = `${selectedPattern}${learnedPattern}`;
   byId("run-error").textContent = run.error || "";
   renderResults(run);
+  refreshSavedContacts().catch((error) => { byId("run-error").textContent = error.message; });
 }
 
 async function poll() {
@@ -78,7 +101,7 @@ byId("run-form").addEventListener("submit", async (event) => {
   event.preventDefault(); clearTimeout(state.timer); byId("form-error").textContent = "";
   const button = byId("submit"); button.disabled = true;
   try {
-    const run = await api("/api/prospecting-beta/runs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ domain: byId("domain").value, country: byId("country").value, email_pattern: byId("email-pattern").value || null }) });
+    const run = await api("/api/prospecting-beta/runs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ domain: byId("domain").value, country: byId("country").value, email_pattern: byId("email-pattern").value || null, known_first_name: byId("known-first-name").value || null, known_last_name: byId("known-last-name").value || null, known_email: byId("known-email").value || null }) });
     renderRun(run); poll();
   } catch (error) { byId("form-error").textContent = error.message; }
   finally { button.disabled = false; }
@@ -93,6 +116,6 @@ byId("stop").addEventListener("click", async () => {
 });
 
 (async () => {
-  try { const runs = await api("/api/prospecting-beta/runs"); if (runs.length) { renderRun(runs[0]); if (["queued", "running"].includes(runs[0].status)) poll(); } }
+  try { await refreshSavedContacts(); const runs = await api("/api/prospecting-beta/runs"); if (runs.length) { renderRun(runs[0]); if (["queued", "running"].includes(runs[0].status)) poll(); } }
   catch (error) { byId("form-error").textContent = error.message; }
 })();

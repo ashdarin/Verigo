@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import hashlib
 import re
+import unicodedata
+from dataclasses import replace
 from dataclasses import dataclass
 from typing import Iterable
 from urllib.parse import urlsplit
@@ -30,6 +32,7 @@ SUPPORTED_PERSON_PATTERNS = frozenset({
     "last.first", "lastfirst", "last_first",
 })
 DEFAULT_PERSON_PATTERNS = ("first.last", "f.last", "firstlast")
+ALL_PERSON_PATTERNS = tuple(sorted(SUPPORTED_PERSON_PATTERNS))
 
 
 @dataclass(frozen=True)
@@ -194,6 +197,15 @@ def normalize_person_pattern(value: str | None) -> str | None:
     return pattern
 
 
+def normalize_name_for_email(value: str) -> str:
+    normalized = unicodedata.normalize("NFKD", value.strip().lower())
+    ascii_value = "".join(char for char in normalized if not unicodedata.combining(char))
+    result = re.sub(r"[^a-z0-9]", "", ascii_value)
+    if not result:
+        raise ValueError("Known contact names must use an email-ready Latin spelling")
+    return result
+
+
 def _render_personal(pattern: str, first: str, last: str) -> str:
     values = {
         "first.last": f"{first}.{last}",
@@ -207,6 +219,21 @@ def _render_personal(pattern: str, first: str, last: str) -> str:
         "last_first": f"{last}_{first}",
     }
     return values[pattern]
+
+
+def infer_email_pattern(domain: str, first_name: str, last_name: str, email: str) -> str:
+    """Infer a supported pattern from one known employee email address."""
+    normalized_domain = normalize_company_domain(domain)
+    first = normalize_name_for_email(first_name)
+    last = normalize_name_for_email(last_name)
+    sample = email.strip().lower()
+    local, separator, email_domain = sample.partition("@")
+    if not separator or email_domain != normalized_domain:
+        raise ValueError("Known contact email must belong to the submitted company domain")
+    for pattern in ALL_PERSON_PATTERNS:
+        if _render_personal(pattern, first, last) == local:
+            return pattern
+    raise ValueError("The known contact does not match a supported email naming rule")
 
 
 def _ranked_name_pairs(domain: str, country: str) -> list[tuple[str, str]]:
@@ -243,7 +270,8 @@ def generate_candidates(
         if pattern in SUPPORTED_PERSON_PATTERNS and pattern != selected_pattern
     ]
     personal_patterns = list(dict.fromkeys([
-        *([selected_pattern] if selected_pattern else []), *learned, *DEFAULT_PERSON_PATTERNS,
+        *([selected_pattern] if selected_pattern else []), *learned,
+        *DEFAULT_PERSON_PATTERNS, *ALL_PERSON_PATTERNS,
     ]))
     candidates: list[ProspectingCandidate] = []
     seen: set[str] = set()
@@ -275,3 +303,8 @@ def generate_candidates(
             if len(candidates) >= max_candidates:
                 return candidates
     return candidates
+
+
+def rerank_candidates(candidates: Iterable[ProspectingCandidate]) -> list[ProspectingCandidate]:
+    """Return a contiguous rank sequence after previously emitted rows are removed."""
+    return [replace(candidate, rank=index) for index, candidate in enumerate(candidates, start=1)]

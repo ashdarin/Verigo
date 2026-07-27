@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.config import settings
 from app.core.prospecting import normalize_country, normalize_person_pattern
@@ -86,6 +86,9 @@ class ProspectingRunRequest(BaseModel):
     domain: str = Field(min_length=3, max_length=253)
     country: str = Field(min_length=2, max_length=8)
     email_pattern: str | None = Field(default=None, max_length=32)
+    known_first_name: str | None = Field(default=None, max_length=64)
+    known_last_name: str | None = Field(default=None, max_length=64)
+    known_email: str | None = Field(default=None, max_length=254)
 
     @field_validator("country")
     @classmethod
@@ -96,6 +99,15 @@ class ProspectingRunRequest(BaseModel):
     @classmethod
     def check_email_pattern(cls, value: str | None) -> str | None:
         return normalize_person_pattern(value)
+
+    @model_validator(mode="after")
+    def check_known_contact(self) -> "ProspectingRunRequest":
+        values = (self.known_first_name, self.known_last_name, self.known_email)
+        if any(value is not None and value.strip() for value in values) and not all(
+            value is not None and value.strip() for value in values
+        ):
+            raise ValueError("Provide the known contact's first name, last name, and email together")
+        return self
 
 
 class ProspectingRunResponse(BaseModel):
@@ -113,6 +125,12 @@ class ProspectingRunResponse(BaseModel):
     profile_patterns: list[str]
     summary: dict[str, int]
     results: list[dict[str, Any]]
+    saved_count: int
+
+
+class SavedProspectingContactsResponse(BaseModel):
+    total: int
+    items: list[dict[str, Any]]
 
 
 class PaymentOrderRequest(BaseModel):

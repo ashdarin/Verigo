@@ -24,6 +24,7 @@ from app.api.schemas import (
     PaymentOrderResponse,
     ProspectingRunRequest,
     ProspectingRunResponse,
+    SavedProspectingContactsResponse,
     ResultsResponse,
     SingleVerificationRequest,
     WorkerFailureRequest,
@@ -32,7 +33,12 @@ from app.api.schemas import (
 from app.config import settings
 from app.core.imports import extract_emails
 from app.core.discovery import candidate_emails
-from app.core.prospecting import generate_candidates, normalize_company_domain
+from app.core.prospecting import (
+    generate_candidates,
+    infer_email_pattern,
+    normalize_company_domain,
+    rerank_candidates,
+)
 from app.core.security import token_hash
 from app.core.worker_lifecycle import (
     DOMESTIC_CLOUDSTUDIO_TARGET,
@@ -814,6 +820,7 @@ def _prospecting_result_type(result: dict[str, object]) -> str:
 
 def serialize_prospecting_run(run: ProspectingRun) -> ProspectingRunResponse:
     job = require_job(run.verification_job_id)
+    prospecting_store.save_confirmed_contacts(run, job.results)
     if job.status == "completed":
         prospecting_store.record_confirmed_patterns(run, job.results)
         refreshed = prospecting_store.get(run.id, run.owner_id)
@@ -851,6 +858,7 @@ def serialize_prospecting_run(run: ProspectingRun) -> ProspectingRunResponse:
         profile_patterns=list(run.profile_patterns),
         summary=summary,
         results=results,
+        saved_count=prospecting_store.saved_contact_count(run.owner_id),
     )
 
 
@@ -860,19 +868,31 @@ def create_prospecting_run(
     user: Annotated[User, Depends(require_prospecting_beta)],
 ) -> ProspectingRunResponse:
     require_verification_submission_open()
-    day_start = utc_now().replace(hour=0, minute=0, second=0, microsecond=0)
-    if prospecting_store.count_runs_since(user.id, day_start) >= settings.prospecting_beta_daily_run_limit:
-        raise HTTPException(status_code=429, detail="今日内测域名额度已用完，请明日继续")
     try:
         domain = normalize_company_domain(payload.domain)
+        known_pattern = None
+        known_email = None
+        if payload.known_email:
+            known_pattern = infer_email_pattern(
+                domain, payload.known_first_name or "", payload.known_last_name or "", payload.known_email
+            )
+            known_email = payload.known_email.strip().lower()
+            prospecting_store.record_provided_pattern(domain, known_pattern)
         learned_patterns = prospecting_store.domain_patterns(domain)
-        candidates = generate_candidates(
+        catalogue = generate_candidates(
             domain,
             payload.country,
-            settings.prospecting_beta_max_candidates,
+            settings.prospecting_beta_catalogue_candidates,
             learned_patterns,
-            payload.email_pattern,
+            known_pattern or payload.email_pattern,
         )
+        issued = prospecting_store.issued_emails(user.id, domain)
+        candidates = rerank_candidates(
+            candidate for candidate in catalogue
+            if candidate.email not in issued and candidate.email != known_email
+        )[:settings.prospecting_beta_max_candidates]
+        if not candidates:
+            raise ValueError("All available unique candidates for this account and domain have already been checked")
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     job: Job | None = None
@@ -886,7 +906,7 @@ def create_prospecting_run(
             job_id=uuid.uuid4().hex[:12],
         )
         run = prospecting_store.create_run(
-            user.id, domain, payload.country, payload.email_pattern, job.id, candidates, learned_patterns
+            user.id, domain, payload.country, known_pattern or payload.email_pattern, job.id, candidates, learned_patterns
         )
     except RuntimeError as exc:
         if job is not None:
@@ -897,6 +917,16 @@ def create_prospecting_run(
             job_store.stop(job.id)
         raise
     return serialize_prospecting_run(run)
+
+
+@router.get("/prospecting-beta/saved-contacts", response_model=SavedProspectingContactsResponse)
+def list_saved_prospecting_contacts(
+    user: Annotated[User, Depends(require_prospecting_beta)],
+) -> SavedProspectingContactsResponse:
+    return SavedProspectingContactsResponse(
+        total=prospecting_store.saved_contact_count(user.id),
+        items=prospecting_store.saved_contacts(user.id),
+    )
 
 
 @router.get("/prospecting-beta/runs", response_model=list[ProspectingRunResponse])
