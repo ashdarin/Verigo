@@ -102,10 +102,11 @@ assert third is not None and third.lease_id
 assert store.abandon_lease(remote.id, "worker-c", third.lease_id)
 assert store.get(remote.id).results[0]["progress_state"] == "pending"
 
-# Capacity is consumed by actual email slots, per outbound worker identity;
-# one 100-item lease cannot bypass a provider's configured limit.
-assert store._scheduler_mx_key("person@gmail.com", "node-a") != store._scheduler_mx_key(
-    "person@gmail.com", "node-b"
-)
+# Provider/domain capacity is global. Adding a node must not multiply the
+# configured Gmail or Microsoft concurrency budget.
+assert store._scheduler_mx_key("person@gmail.com") == "gmail"
+assert store._scheduler_mx_key("person@googlemail.com") == "gmail"
+assert store._scheduler_mx_key("person@outlook.com") == "microsoft"
+assert store._scheduler_mx_key("person@example.com") == "domain:example.com"
 
 print("job store refactor smoke: ok")

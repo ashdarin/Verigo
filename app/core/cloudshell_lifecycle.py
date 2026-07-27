@@ -247,13 +247,13 @@ class CloudShellLifecycle:
             source_root = Path(__file__).resolve().parents[2]
             archive = subprocess.run(["tar", "-C", str(source_root), "-czf", "-", "app", "验证8.py"], check=True, capture_output=True).stdout
             subprocess.run(base + ["mkdir -p ~/verigo-worker && tar -xzf - -C ~/verigo-worker"], input=archive, check=True, timeout=90)
-            release_version = Path("/opt/verigo/RELEASE_VERSION").read_text().strip()
+            release_version = Path("/opt/verigo/current/RELEASE_VERSION").read_text().strip()
             environment_file = "\n".join((
                 "VERIGO_REMOTE_WORKER_TARGET=gmail",
                 "VERIGO_REMOTE_WORKER_SERVER=https://verigo.site",
                 f"VERIGO_REMOTE_WORKER_TOKEN={settings.gmail_worker_token}",
                 f"VERIGO_TENCENT_QQ_WORKER_ID={self._worker_id}",
-                f"VERIGO_CLOUDSHELL_MAX_WORKERS={settings.cloudshell_worker_max_workers}",
+                f"VERIGO_REMOTE_WORKER_CAPACITY={settings.cloudshell_worker_max_workers}",
                 f"VERIGO_REMOTE_WORKER_RELEASE={release_version}",
             )) + "\n"
             subprocess.run(base + ["cat > ~/verigo-worker/.worker.env && chmod 600 ~/verigo-worker/.worker.env"], input=environment_file.encode(), check=True, timeout=30)

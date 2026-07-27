@@ -1026,7 +1026,7 @@ class JobStore:
                 SELECT original_index, email FROM job_results WHERE job_id=?
                     AND progress_state='pending' ORDER BY original_index
             """, (job.id,)):
-                mx_key = self._scheduler_mx_key(str(email), worker_id)
+                mx_key = self._scheduler_mx_key(str(email))
                 if index in leased or active_by_key.get(mx_key, 0) >= self._scheduler_mx_capacity(mx_key):
                     continue
                 indices.append(int(index))
@@ -1064,13 +1064,14 @@ class JobStore:
         return job
 
     @staticmethod
-    def _scheduler_mx_key(email: str, worker_id: str) -> str:
+    def _scheduler_mx_key(email: str) -> str:
+        """Return a scheduler-wide provider/domain bucket, never a node-local key."""
         domain = email.rsplit("@", 1)[-1].lower()
         if domain in {"gmail.com", "googlemail.com"}:
-            return f"gmail:{worker_id}"
+            return "gmail"
         if domain in {"outlook.com", "hotmail.com", "live.com", "msn.com"}:
-            return f"microsoft:{worker_id}"
-        return f"domain:{domain}:{worker_id}"
+            return "microsoft"
+        return f"domain:{domain}"
 
     @staticmethod
     def _scheduler_mx_capacity(mx_key: str) -> int:
