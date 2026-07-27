@@ -220,6 +220,12 @@ class Settings:
     )
     worker_poll_seconds: float = float(os.getenv("VERIGO_WORKER_POLL_SECONDS", "1"))
     worker_lease_seconds: int = int(os.getenv("VERIGO_WORKER_LEASE_SECONDS", "180"))
+    node_stale_seconds: int = max(
+        30, int(os.getenv("VERIGO_NODE_STALE_SECONDS", "180"))
+    )
+    node_offline_seconds: int = max(
+        60, int(os.getenv("VERIGO_NODE_OFFLINE_SECONDS", "540"))
+    )
     temporary_smtp_immediate_retries: int = 3
     temporary_smtp_retry_seconds: float = 60.0
     smtp_greylist_retry_seconds: int = 300

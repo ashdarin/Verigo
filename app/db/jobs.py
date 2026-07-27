@@ -1418,6 +1418,26 @@ class JobStore:
                 (target, worker_id, now),
             )
 
+    def reconcile_worker_nodes(self, now: datetime | None = None) -> dict[str, int]:
+        """Derive stale/offline node state from durable heartbeats."""
+        self.initialize()
+        now = now or utc_now()
+        stale_before = (now - timedelta(seconds=settings.node_stale_seconds)).isoformat()
+        offline_seconds = max(settings.node_stale_seconds + 1, settings.node_offline_seconds)
+        offline_before = (now - timedelta(seconds=offline_seconds)).isoformat()
+        with self._lock, closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            offline = connection.execute(
+                "UPDATE worker_nodes SET health='offline' WHERE health!='offline' AND last_seen_at < ?",
+                (offline_before,),
+            ).rowcount
+            stale = connection.execute(
+                "UPDATE worker_nodes SET health='stale' WHERE health='healthy' AND last_seen_at < ?",
+                (stale_before,),
+            ).rowcount
+            connection.commit()
+        return {"stale": int(stale), "offline": int(offline)}
+
     def worker_heartbeats(self, target: str) -> dict[str, datetime]:
         """Return the last heartbeat for every registered worker on a target."""
         self.initialize()

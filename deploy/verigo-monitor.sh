@@ -40,6 +40,26 @@ if (( queued >= queue_limit )); then
     issues+=("queued jobs: ${queued}")
 fi
 
+unhealthy_targets=$(/opt/verigo/.venv/bin/python - <<'PY'
+import sqlite3
+
+connection = sqlite3.connect('/opt/verigo/data/verigo.db')
+targets = connection.execute("""
+    SELECT DISTINCT execution_target FROM jobs
+    WHERE status IN ('queued', 'running') AND execution_target NOT IN ('local', 'aggregate')
+""").fetchall()
+for (target,) in targets:
+    healthy = connection.execute(
+        "SELECT COUNT(*) FROM worker_nodes WHERE target=? AND health='healthy'", (target,)
+    ).fetchone()[0]
+    if not healthy:
+        print(target)
+PY
+)
+if [[ -n "$unhealthy_targets" ]]; then
+    issues+=("remote targets without healthy nodes: ${unhealthy_targets//$'\n'/,}")
+fi
+
 status=ok
 message="Verigo monitor: all checks passed"
 if ((${#issues[@]})); then

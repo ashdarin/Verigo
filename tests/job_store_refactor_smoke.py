@@ -109,4 +109,25 @@ assert store._scheduler_mx_key("person@googlemail.com") == "gmail"
 assert store._scheduler_mx_key("person@outlook.com") == "microsoft"
 assert store._scheduler_mx_key("person@example.com") == "domain:example.com"
 
+store.record_worker_seen("health-test", "fresh-node", capacity=3)
+connection = store._connect()
+connection.execute(
+    "UPDATE worker_nodes SET last_seen_at=? WHERE target=? AND worker_id=?",
+    ((utc_now() - timedelta(seconds=240)).isoformat(), "health-test", "fresh-node"),
+)
+connection.close()
+state = store.reconcile_worker_nodes()
+assert state["stale"] == 1
+connection = store._connect()
+assert connection.execute(
+    "SELECT health FROM worker_nodes WHERE target=? AND worker_id=?", ("health-test", "fresh-node")
+).fetchone()[0] == "stale"
+connection.execute(
+    "UPDATE worker_nodes SET last_seen_at=? WHERE target=? AND worker_id=?",
+    ((utc_now() - timedelta(seconds=600)).isoformat(), "health-test", "fresh-node"),
+)
+connection.close()
+state = store.reconcile_worker_nodes()
+assert state["offline"] == 1
+
 print("job store refactor smoke: ok")
