@@ -3,6 +3,7 @@ set -Eeuo pipefail
 
 state_dir=/opt/verigo
 app_dir="$state_dir/current"
+venv_python="$state_dir/.venv/bin/python"
 backup_root=/var/backups/verigo
 backup_config=/etc/verigo/backup.env
 
@@ -22,7 +23,7 @@ backup_dir="$backup_root/$timestamp"
 umask 077
 install -d -m 700 "$backup_dir"
 
-BACKUP_DIR="$backup_dir" "$app_dir/.venv/bin/python" - <<'PY'
+BACKUP_DIR="$backup_dir" "$venv_python" - <<'PY'
 import os
 import sqlite3
 from pathlib import Path
