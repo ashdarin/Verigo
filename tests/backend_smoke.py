@@ -1194,6 +1194,15 @@ missing = missing_domain.verify_email_comprehensive("person@missing-domain.test"
 assert missing["deliverable"] is False
 assert missing["checks"]["smtp"] is False
 
+job_store.set_service_mode("draining")
+try:
+    with TestClient(app) as draining_client:
+        response = draining_client.post("/api/verify/single", json={"email": "drain@example.com"})
+        assert response.status_code == 503
+        assert response.headers["Retry-After"] == "60"
+finally:
+    job_store.set_service_mode("active")
+
 missing_mx = legacy.EmailVerifier()
 missing_mx.check_domain_exists = lambda _domain: True
 missing_mx.get_mx_records = lambda _domain: []

@@ -142,6 +142,15 @@ def require_job(job_id: str, *, include_results: bool = True) -> Job:
     return job
 
 
+def require_verification_submission_open() -> None:
+    if job_store.service_mode() == "draining":
+        raise HTTPException(
+            status_code=503,
+            detail="Verification service is temporarily draining for maintenance. Please retry shortly.",
+            headers={"Retry-After": "60"},
+        )
+
+
 def tencent_qq_target(emails: list[str], owner_email: str | None) -> str:
     if not qq_worker_allowed(owner_email) or not emails:
         return "local"
@@ -765,6 +774,7 @@ def verify_discovery_candidates(
     request: Request,
     user: Annotated[User, Depends(require_user)],
 ) -> JobResponse:
+    require_verification_submission_open()
     if not user.email_verified:
         raise HTTPException(status_code=403, detail="请先验证注册邮箱")
     try:
@@ -791,6 +801,7 @@ def create_job(
     request: Request,
     user: Annotated[User, Depends(require_user)],
 ) -> JobResponse:
+    require_verification_submission_open()
     emails = clean_emails(payload.emails)
     if not emails:
         raise HTTPException(status_code=422, detail="邮箱包含空格、非 ASCII 或非法字符")
@@ -827,6 +838,7 @@ def verify_single_email(
     request: Request,
     user: Annotated[User | None, Depends(optional_user)],
 ) -> JobResponse:
+    require_verification_submission_open()
     emails = clean_emails([payload.email])
     if len(emails) != 1:
         raise HTTPException(status_code=422, detail="请输入有效的邮箱地址")
@@ -914,6 +926,7 @@ def resume_job(
     user: Annotated[User | None, Depends(optional_user)],
     guest_token: Annotated[str | None, Header(alias="X-Job-Token")] = None,
 ) -> JobResponse:
+    require_verification_submission_open()
     job = require_job_access(require_job(job_id), user, guest_token)
     if job.status != "stopped":
         raise HTTPException(status_code=409, detail="只有已停止的任务可以继续验证")

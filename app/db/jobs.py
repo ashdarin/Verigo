@@ -167,6 +167,10 @@ class JobStore:
                 connection.execute("CREATE INDEX IF NOT EXISTS idx_jobs_parent ON jobs(parent_id, created_at)")
                 connection.execute("CREATE INDEX IF NOT EXISTS idx_jobs_retry_parent ON jobs(retry_parent_id, created_at)")
                 connection.execute("CREATE TABLE IF NOT EXISTS schema_migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)")
+                connection.execute(
+                    """CREATE TABLE IF NOT EXISTS service_state (
+                    name TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL)"""
+                )
                 connection.execute("""
                     CREATE TABLE IF NOT EXISTS job_results (
                         job_id TEXT NOT NULL, original_index INTEGER NOT NULL, email TEXT NOT NULL,
@@ -303,6 +307,25 @@ class JobStore:
         if state in {"pending", "verifying", "completed", "failed", "stopped"}:
             return state
         return "completed"
+
+    def service_mode(self) -> str:
+        self.initialize()
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                "SELECT value FROM service_state WHERE name='verification_mode'"
+            ).fetchone()
+        return str(row[0]) if row and row[0] in {"active", "draining"} else "active"
+
+    def set_service_mode(self, mode: str) -> None:
+        if mode not in {"active", "draining"}:
+            raise ValueError("Unsupported verification service mode")
+        self.initialize()
+        with self._lock, closing(self._connect()) as connection:
+            connection.execute(
+                """INSERT INTO service_state(name, value, updated_at) VALUES ('verification_mode', ?, ?)
+                ON CONFLICT(name) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at""",
+                (mode, utc_now().isoformat()),
+            )
 
     @classmethod
     def _result_row(cls, job_id: str, index: int, result: dict[str, Any], now: str) -> tuple[Any, ...]:

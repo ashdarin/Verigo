@@ -56,21 +56,63 @@ rollback() {
         systemctl restart verigo || true
         systemctl restart verigo-supervisor || true
     fi
+    set_service_mode active || true
     exit "$status"
+}
+
+set_service_mode() {
+    local mode=$1
+    MODE="$mode" "$state_dir/.venv/bin/python" - <<'PY'
+import os
+import sqlite3
+from datetime import datetime, timezone
+
+database = '/opt/verigo/data/verigo.db'
+with sqlite3.connect(database, timeout=30) as connection:
+    connection.execute('''CREATE TABLE IF NOT EXISTS service_state (
+        name TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL)''')
+    connection.execute('''INSERT INTO service_state(name, value, updated_at)
+        VALUES ('verification_mode', ?, ?)
+        ON CONFLICT(name) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at''',
+        (os.environ['MODE'], datetime.now(timezone.utc).isoformat()))
+PY
+}
+
+active_job_count() {
+    "$state_dir/.venv/bin/python" - <<'PY'
+import sqlite3
+connection = sqlite3.connect('/opt/verigo/data/verigo.db', timeout=30)
+print(connection.execute("SELECT COUNT(*) FROM jobs WHERE status IN ('queued', 'running')").fetchone()[0])
+PY
 }
 
 mkdir -p "$releases_dir"
 ensure_legacy_release
 previous_release=$(readlink -f "$current_link")
+trap rollback ERR
 
-# A restart is not a drain. Until the formal drain controller is enabled,
-# preserve the existing safety boundary and never restart over active work.
-if [[ "${VERIGO_DEPLOY_MAINTENANCE:-false}" != "true" && -f "$state_dir/data/verigo.db" ]]; then
-    active_jobs=$("$state_dir/.venv/bin/python" -c "import sqlite3; print(sqlite3.connect('$state_dir/data/verigo.db').execute(\"SELECT COUNT(*) FROM jobs WHERE status IN ('queued', 'running')\").fetchone()[0])" 2>/dev/null || printf 'unknown')
-    if [[ "$active_jobs" != "0" ]]; then
-        echo "Refusing release: $active_jobs active verification jobs. Drain them or set VERIGO_DEPLOY_MAINTENANCE=true." >&2
-        exit 2
+# Reject new submissions first, then let existing workers settle their queue.
+# A timeout restores active mode and leaves the current release untouched.
+if [[ -f "$state_dir/data/verigo.db" ]]; then
+    drain_timeout=${VERIGO_DEPLOY_DRAIN_TIMEOUT_SECONDS:-900}
+    if ! [[ "$drain_timeout" =~ ^[1-9][0-9]*$ ]]; then
+        echo "VERIGO_DEPLOY_DRAIN_TIMEOUT_SECONDS must be a positive integer" >&2
+        exit 1
     fi
+    set_service_mode draining
+    deadline=$((SECONDS + drain_timeout))
+    while :; do
+        active_jobs=$(active_job_count)
+        if [[ "$active_jobs" == "0" ]]; then
+            break
+        fi
+        if (( SECONDS >= deadline )); then
+            echo "Release drain timed out with $active_jobs active verification jobs" >&2
+            set_service_mode active
+            exit 2
+        fi
+        sleep 5
+    done
 fi
 
 release_path="$releases_dir/$release_version"
@@ -154,7 +196,6 @@ systemctl enable --now verigo-backup.timer verigo-monitor.timer verigo-retention
 # Keep release backup independent from a remote provider's latency.
 systemctl start --no-block verigo-backup.service
 
-trap rollback ERR
 set -a
 . /etc/verigo/verigo.env
 set +a
@@ -166,6 +207,7 @@ systemctl restart verigo
 for _ in {1..20}; do
     if curl -fsS http://127.0.0.1:8000/api/health >/dev/null; then
         systemctl restart verigo-supervisor.service
+        set_service_mode active
         trap - ERR
         printf 'Verigo release %s health check passed\n' "$release_version"
         exit 0

@@ -17,6 +17,10 @@ from app.db.jobs import Job, JobStore, utc_now
 
 store = JobStore()
 store.initialize()
+assert store.service_mode() == "active"
+store.set_service_mode("draining")
+assert store.service_mode() == "draining"
+store.set_service_mode("active")
 
 parent = Job(
     id="parent", emails=["one@example.com", "two@example.com"], worker_count=1,
