@@ -209,7 +209,7 @@ _global_domain_type_cache = {}
 _global_domain_type_cache_lock = threading.Lock()
 
 # 🔧 持久化缓存文件路径
-DOMAIN_CACHE_FILE = "domain_type_cache.json"
+DOMAIN_CACHE_FILE = os.getenv("VERIGO_DOMAIN_CACHE_PATH", "domain_type_cache.json")
 DOMAIN_CACHE_TTL_DAYS = 7  # 缓存有效期7天
 
 def load_persistent_cache():

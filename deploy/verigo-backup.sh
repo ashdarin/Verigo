@@ -3,6 +3,7 @@ set -Eeuo pipefail
 
 state_dir=/opt/verigo
 app_dir="$state_dir/current"
+data_dir="$state_dir/data"
 venv_python="$state_dir/.venv/bin/python"
 backup_root=/var/backups/verigo
 backup_config=/etc/verigo/backup.env
@@ -39,7 +40,7 @@ for source_name in ("verigo.db", "smtp_limiter.db"):
             assert backup_db.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
 PY
 
-legacy_file=$(find "$app_dir" -maxdepth 1 -type f -name '*8.py' -printf '%f\n' -quit)
+legacy_file=$(find -L "$app_dir" -maxdepth 1 -type f -name '*8.py' -printf '%f\n' -quit)
 if [[ -z "$legacy_file" ]]; then
     echo "Legacy verifier source was not found" >&2
     exit 1
@@ -47,11 +48,11 @@ fi
 
 tar -C "$app_dir" --exclude='__pycache__' -czf "$backup_dir/application.tar.gz" \
     app static deploy requirements.txt "$legacy_file"
-if [[ -d "$app_dir/data/results" ]]; then
-    tar -C "$app_dir/data" -czf "$backup_dir/results.tar.gz" results
+if [[ -d "$data_dir/results" ]]; then
+    tar -C "$data_dir" -czf "$backup_dir/results.tar.gz" results
 fi
-if [[ -f "$app_dir/domain_type_cache.json" ]]; then
-    cp "$app_dir/domain_type_cache.json" "$backup_dir/"
+if [[ -f "$data_dir/domain_type_cache.json" ]]; then
+    cp "$data_dir/domain_type_cache.json" "$backup_dir/"
 fi
 
 cp /etc/verigo/verigo.env "$backup_dir/verigo.env"
