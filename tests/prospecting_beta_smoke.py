@@ -134,19 +134,29 @@ with TestClient(app) as client:
     job.status = "completed"
     job.finished_at = utc_now()
     job_store.persist(job)
+    prospecting_store.finalize_run(job.id, job.results)
 
     completed = client.get(f"/api/prospecting-beta/runs/{run['id']}")
     assert completed.status_code == 200, completed.text
     payload = completed.json()
     assert payload["summary"]["verified"] == 2
     assert payload["summary"]["catch_all"] == 1
-    assert any(item["result_type"] == "catch_all" for item in payload["results"])
-    assert prospecting_store.domain_patterns("example.com") == [personal["pattern"]]
+    assert payload["result_total"] == 3
+    page = client.get(f"/api/prospecting-beta/runs/{run['id']}/results?limit=2")
+    assert page.status_code == 200, page.text
+    assert page.json()["total"] == 3
+    assert len(page.json()["items"]) == 2
+    stored_run = prospecting_store.get_by_job_id(run["verification_job_id"])
+    assert stored_run is not None
+    assert prospecting_store.domain_patterns(stored_run.owner_id, "example.com") == [personal["pattern"]]
     saved = client.get("/api/prospecting-beta/saved-contacts")
     assert saved.status_code == 200, saved.text
+    assert saved.json()["workspace_total"] == 2
     assert saved.json()["total"] == 2
     assert saved.json()["domains"][0]["domain"] == "example.com"
     assert saved.json()["domains"][0]["contact_count"] == 2
+    assert saved.json()["domain_total"] == 1
+    assert all(item["last_verified_at"] and item["confidence"] >= 90 for item in saved.json()["items"])
     assert {item["email"] for item in saved.json()["items"]} == {
         candidates[0]["email"], personal["email"],
     }
@@ -154,6 +164,18 @@ with TestClient(app) as client:
     assert first_page.status_code == 200, first_page.text
     assert first_page.json()["total"] == 2
     assert len(first_page.json()["items"]) == 1
+    contact_email = first_page.json()["items"][0]["email"]
+    updated_contact = client.patch("/api/prospecting-beta/saved-contacts", json={
+        "email": contact_email, "favorite": True, "tags": ["follow-up", "de"]
+    })
+    assert updated_contact.status_code == 200, updated_contact.text
+    assert updated_contact.json()["favorite"] is True
+    assert updated_contact.json()["tags"] == ["follow-up", "de"]
+    company = client.get("/api/prospecting-beta/companies/example.com")
+    assert company.status_code == 200, company.text
+    assert company.json()["contact_count"] == 2
+    exported = client.get("/api/prospecting-beta/saved-contacts/export?domain=example.com")
+    assert exported.status_code == 200 and "text/csv" in exported.headers["content-type"]
 
     second = client.post("/api/prospecting-beta/runs", json={
         "domain": "example.com", "country": "DE",

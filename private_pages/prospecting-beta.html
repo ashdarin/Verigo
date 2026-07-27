@@ -97,6 +97,7 @@
           <tbody id="results-body"></tbody>
         </table>
       </div>
+      <div class="saved-pagination"><button id="result-previous" class="secondary" type="button">上一页</button><button id="result-next" class="secondary" type="button">下一页</button></div>
     </section>
 
     <section id="saved-contacts-panel" class="results" aria-labelledby="saved-contacts-title">
@@ -104,13 +105,15 @@
       <p class="profile-copy">非 catch-all 的有效结果会自动保存到当前账号，后续登录仍可查看。</p>
       <div class="saved-controls">
         <label class="saved-search"><span>搜索邮箱或域名</span><input id="saved-contact-search" type="search" autocomplete="off"></label>
-        <button id="saved-show-all" class="secondary" type="button">全部域名</button>
+        <div class="saved-actions"><button id="saved-show-all" class="secondary" type="button">全部域名</button><button id="saved-export" class="secondary" type="button">导出 CSV</button></div>
       </div>
       <div id="saved-domain-list" class="saved-domain-list" aria-label="按域名查看联系人"></div>
+      <div class="directory-pagination"><span id="saved-domain-count" class="directory-count"></span><div><button id="saved-domain-previous" class="secondary" type="button">上一页</button><button id="saved-domain-next" class="secondary" type="button">下一页</button></div></div>
+      <p id="saved-company-meta" class="profile-copy hidden"></p>
       <div class="saved-table-heading"><div><h3 id="saved-contact-view-title">全部已保存联系人</h3></div><span id="saved-contact-view-count" class="limit">0</span></div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>邮箱</th><th>公司域名</th><th>邮箱规则</th><th>保存时间</th></tr></thead>
+          <thead><tr><th>邮箱</th><th>公司域名</th><th>可信度</th><th>最后验证</th><th>标签与收藏</th></tr></thead>
           <tbody id="saved-contacts-body"></tbody>
         </table>
       </div>

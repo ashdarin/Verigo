@@ -1,6 +1,7 @@
 """Persistent metadata for the private domain prospecting beta."""
 from __future__ import annotations
 
+import json
 import sqlite3
 import threading
 import uuid
@@ -74,6 +75,13 @@ class ProspectingStore:
                     )
                 """)
                 connection.execute("""
+                    CREATE TABLE IF NOT EXISTS prospecting_owner_domain_profiles (
+                        owner_id TEXT NOT NULL, domain TEXT NOT NULL, pattern TEXT NOT NULL,
+                        confirmed_count INTEGER NOT NULL DEFAULT 0, last_confirmed_at TEXT NOT NULL,
+                        PRIMARY KEY(owner_id, domain, pattern)
+                    )
+                """)
+                connection.execute("""
                     CREATE TABLE IF NOT EXISTS prospecting_saved_contacts (
                         owner_id TEXT NOT NULL, email TEXT NOT NULL, domain TEXT NOT NULL,
                         category TEXT NOT NULL, pattern TEXT NOT NULL, source TEXT NOT NULL,
@@ -82,7 +90,37 @@ class ProspectingStore:
                         FOREIGN KEY(run_id) REFERENCES prospecting_runs(id) ON DELETE CASCADE
                     )
                 """)
+                saved_contact_columns = {
+                    row[1] for row in connection.execute("PRAGMA table_info(prospecting_saved_contacts)")
+                }
+                for name, definition in (
+                    ("last_verified_at", "TEXT"),
+                    ("verification_method", "TEXT"),
+                    ("verification_detail", "TEXT"),
+                    ("confidence", "INTEGER NOT NULL DEFAULT 0"),
+                    ("favorite", "INTEGER NOT NULL DEFAULT 0"),
+                    ("tags_json", "TEXT NOT NULL DEFAULT '[]'"),
+                ):
+                    if name not in saved_contact_columns:
+                        connection.execute(
+                            f"ALTER TABLE prospecting_saved_contacts ADD COLUMN {name} {definition}"
+                        )
+                connection.execute("""
+                    UPDATE prospecting_saved_contacts
+                    SET last_verified_at=COALESCE(last_verified_at, saved_at),
+                        confidence=CASE WHEN confidence=0 THEN 80 ELSE confidence END
+                    WHERE last_verified_at IS NULL OR confidence=0
+                """)
+                connection.execute("""
+                    CREATE TABLE IF NOT EXISTS prospecting_contact_events (
+                        owner_id TEXT NOT NULL, email TEXT NOT NULL, run_id TEXT NOT NULL,
+                        verified_at TEXT NOT NULL, verification_method TEXT, verification_detail TEXT,
+                        confidence INTEGER NOT NULL, source TEXT NOT NULL,
+                        PRIMARY KEY(owner_id, email, run_id)
+                    )
+                """)
                 connection.execute("CREATE INDEX IF NOT EXISTS idx_prospecting_runs_owner ON prospecting_runs(owner_id, created_at DESC)")
+                connection.execute("CREATE INDEX IF NOT EXISTS idx_prospecting_runs_owner_domain ON prospecting_runs(owner_id, domain)")
                 connection.execute("CREATE INDEX IF NOT EXISTS idx_prospecting_candidates_run ON prospecting_candidates(run_id, original_index)")
                 connection.execute("CREATE INDEX IF NOT EXISTS idx_prospecting_saved_contacts_owner ON prospecting_saved_contacts(owner_id, saved_at DESC)")
                 connection.execute("CREATE INDEX IF NOT EXISTS idx_prospecting_saved_contacts_owner_domain ON prospecting_saved_contacts(owner_id, domain, saved_at DESC)")
@@ -104,7 +142,6 @@ class ProspectingStore:
 
     @staticmethod
     def _run_from_row(row: tuple[Any, ...]) -> ProspectingRun:
-        import json
         return ProspectingRun(
             id=row[0], owner_id=row[1], domain=row[2], country=row[3], requested_pattern=row[4],
             verification_job_id=row[5], candidate_count=int(row[6]), created_at=datetime.fromisoformat(row[7]),
@@ -122,7 +159,6 @@ class ProspectingStore:
         candidates: list[ProspectingCandidate],
         profile_patterns: Iterable[str],
     ) -> ProspectingRun:
-        import json
         self.initialize()
         run = ProspectingRun(
             id=uuid.uuid4().hex[:12], owner_id=owner_id, domain=domain, country=country,
@@ -209,27 +245,65 @@ class ProspectingStore:
             for row in rows
         ]
 
-    def domain_patterns(self, domain: str) -> list[str]:
+    def result_count(self, run_id: str) -> int:
+        self.initialize()
+        with closing(self._connect()) as connection:
+            return int(connection.execute("""
+                SELECT COUNT(*) FROM prospecting_candidates AS candidate
+                JOIN prospecting_runs AS run ON run.id=candidate.run_id
+                JOIN job_results AS result ON result.job_id=run.verification_job_id
+                    AND result.original_index=candidate.original_index
+                WHERE candidate.run_id=? AND (result.deliverability=1 OR result.is_catch_all=1)
+            """, (run_id,)).fetchone()[0])
+
+    def result_page(
+        self, run: ProspectingRun, *, offset: int = 0, limit: int = 50,
+    ) -> tuple[int, list[dict[str, Any]]]:
+        """Return only user-visible confirmations, without hydrating every candidate."""
+        total = self.result_count(run.id)
+        with closing(self._connect()) as connection:
+            rows = connection.execute("""
+                SELECT candidate.original_index, candidate.email, candidate.category, candidate.pattern,
+                       candidate.rank, candidate.source, result.result_json
+                FROM prospecting_candidates AS candidate
+                JOIN job_results AS result ON result.job_id=?
+                    AND result.original_index=candidate.original_index
+                WHERE candidate.run_id=? AND (result.deliverability=1 OR result.is_catch_all=1)
+                ORDER BY candidate.rank LIMIT ? OFFSET ?
+            """, (run.verification_job_id, run.id, limit, offset)).fetchall()
+        items = []
+        for row in rows:
+            raw = json.loads(row[6])
+            items.append({
+                "original_index": int(row[0]), "email": row[1], "category": row[2],
+                "pattern": row[3], "rank": int(row[4]), "source": row[5],
+                "verification": raw,
+                "result_type": "catch_all" if raw.get("domain_type") == "catch-all" else "verified",
+            })
+        return total, items
+
+    def domain_patterns(self, owner_id: str, domain: str) -> list[str]:
         self.initialize()
         with closing(self._connect()) as connection:
             rows = connection.execute("""
-                SELECT pattern FROM prospecting_domain_profiles WHERE domain=?
+                SELECT pattern FROM prospecting_owner_domain_profiles WHERE owner_id=? AND domain=?
                 ORDER BY confirmed_count DESC, last_confirmed_at DESC LIMIT 3
-            """, (domain,)).fetchall()
+            """, (owner_id, domain)).fetchall()
         return [str(row[0]) for row in rows]
 
-    def record_provided_pattern(self, domain: str, pattern: str) -> None:
-        """Retain a user-supplied known-contact pattern for future runs."""
+    def record_provided_pattern(self, owner_id: str, domain: str, pattern: str) -> None:
+        """Retain a user-supplied naming rule only inside that user's workspace."""
         self.initialize()
         with closing(self._connect()) as connection:
             begin_immediate(connection)
             try:
                 connection.execute("""
-                    INSERT INTO prospecting_domain_profiles(domain, pattern, confirmed_count, last_confirmed_at)
-                    VALUES (?, ?, 1, ?)
-                    ON CONFLICT(domain, pattern) DO UPDATE SET
+                    INSERT INTO prospecting_owner_domain_profiles(
+                        owner_id, domain, pattern, confirmed_count, last_confirmed_at
+                    ) VALUES (?, ?, ?, 1, ?)
+                    ON CONFLICT(owner_id, domain, pattern) DO UPDATE SET
                         confirmed_count=confirmed_count + 1, last_confirmed_at=excluded.last_confirmed_at
-                """, (domain, pattern, utc_now().isoformat()))
+                """, (owner_id, domain, pattern, utc_now().isoformat()))
                 connection.execute("COMMIT")
             except Exception:
                 connection.execute("ROLLBACK")
@@ -238,17 +312,27 @@ class ProspectingStore:
     def save_confirmed_contacts(self, run: ProspectingRun, results: list[dict[str, Any]]) -> int:
         """Persist user-owned, non-catch-all confirmed contacts idempotently."""
         candidate_by_index = {item["original_index"]: item for item in self.candidates(run.id)}
-        saved_at = utc_now().isoformat()
+        verified_at = utc_now().isoformat()
         rows = []
+        event_rows = []
         for result in results:
             if result.get("deliverable") is not True or result.get("domain_type") == "catch-all":
                 continue
             candidate = candidate_by_index.get(int(result.get("original_index", -1)))
             if candidate is None:
                 continue
+            method = str(result.get("verification_method") or "")
+            detail = str(result.get("smtp_result") or result.get("message") or "")[:500]
+            checks = result.get("checks") if isinstance(result.get("checks"), dict) else {}
+            confidence = 100 if checks.get("smtp") is True else 90
             rows.append((
                 run.owner_id, candidate["email"], run.domain, candidate["category"],
-                candidate["pattern"], candidate["source"], run.id, saved_at,
+                candidate["pattern"], candidate["source"], run.id, verified_at,
+                verified_at, method, detail, confidence,
+            ))
+            event_rows.append((
+                run.owner_id, candidate["email"], run.id, verified_at, method, detail,
+                confidence, candidate["source"],
             ))
         if not rows:
             return 0
@@ -258,11 +342,25 @@ class ProspectingStore:
                 before = connection.total_changes
                 connection.executemany("""
                     INSERT INTO prospecting_saved_contacts(
-                        owner_id, email, domain, category, pattern, source, run_id, saved_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(owner_id, email) DO NOTHING
+                        owner_id, email, domain, category, pattern, source, run_id, saved_at,
+                        last_verified_at, verification_method, verification_detail, confidence
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(owner_id, email) DO UPDATE SET
+                        domain=excluded.domain, category=excluded.category, pattern=excluded.pattern,
+                        source=excluded.source, run_id=excluded.run_id,
+                        last_verified_at=excluded.last_verified_at,
+                        verification_method=excluded.verification_method,
+                        verification_detail=excluded.verification_detail,
+                        confidence=MAX(prospecting_saved_contacts.confidence, excluded.confidence)
                 """, rows)
                 inserted = connection.total_changes - before
+                connection.executemany("""
+                    INSERT INTO prospecting_contact_events(
+                        owner_id, email, run_id, verified_at, verification_method,
+                        verification_detail, confidence, source
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(owner_id, email, run_id) DO NOTHING
+                """, event_rows)
                 connection.execute("COMMIT")
             except Exception:
                 connection.execute("ROLLBACK")
@@ -337,6 +435,7 @@ class ProspectingStore:
         run = self.get_by_job_id(verification_job_id)
         if run is None:
             return None
+        self.save_confirmed_contacts(run, results)
         signals: list[tuple[int, str, str]] = []
         for fallback_index, raw in enumerate(results):
             signal = self._protection_signal(raw)
@@ -397,7 +496,16 @@ class ProspectingStore:
             "Discovery paused automatically to respect the receiving system's rate limit",
         }
 
-    def saved_contact_domains(self, owner_id: str, search: str = "") -> list[dict[str, Any]]:
+    def finalize_run(self, verification_job_id: str, results: list[dict[str, Any]]) -> None:
+        run = self.get_by_job_id(verification_job_id)
+        if run is None:
+            return
+        self.save_confirmed_contacts(run, results)
+        self.record_confirmed_patterns(run, results)
+
+    def saved_contact_domains(
+        self, owner_id: str, *, search: str = "", offset: int = 0, limit: int = 50,
+    ) -> tuple[int, list[dict[str, Any]]]:
         self.initialize()
         clauses = ["owner_id=?"]
         parameters: list[Any] = [owner_id]
@@ -406,12 +514,18 @@ class ProspectingStore:
             parameters.extend((f"%{search}%", f"%{search}%"))
         where = " AND ".join(clauses)
         with closing(self._connect()) as connection:
+            total = int(connection.execute(f"""
+                SELECT COUNT(*) FROM (
+                    SELECT domain FROM prospecting_saved_contacts WHERE {where} GROUP BY domain
+                )
+            """, parameters).fetchone()[0])
             rows = connection.execute(f"""
                 SELECT domain, COUNT(*) AS contact_count, MAX(saved_at) AS latest_saved_at
                 FROM prospecting_saved_contacts WHERE {where}
                 GROUP BY domain ORDER BY contact_count DESC, latest_saved_at DESC, domain ASC
-            """, parameters).fetchall()
-        return [
+                LIMIT ? OFFSET ?
+            """, [*parameters, limit, offset]).fetchall()
+        return total, [
             {"domain": row[0], "contact_count": int(row[1]), "latest_saved_at": row[2]}
             for row in rows
         ]
@@ -435,15 +549,64 @@ class ProspectingStore:
                 f"SELECT COUNT(*) FROM prospecting_saved_contacts WHERE {where}", parameters
             ).fetchone()[0])
             rows = connection.execute(f"""
-                SELECT email, domain, category, pattern, source, run_id, saved_at
+                SELECT email, domain, category, pattern, source, run_id, saved_at,
+                       last_verified_at, verification_method, verification_detail, confidence,
+                       favorite, tags_json
                 FROM prospecting_saved_contacts WHERE {where}
-                ORDER BY saved_at DESC, email ASC LIMIT ? OFFSET ?
+                ORDER BY last_verified_at DESC, saved_at DESC, email ASC LIMIT ? OFFSET ?
             """, [*parameters, limit, offset]).fetchall()
-        return total, [
-            {"email": row[0], "domain": row[1], "category": row[2], "pattern": row[3],
-             "source": row[4], "run_id": row[5], "saved_at": row[6]}
-            for row in rows
-        ]
+        return total, [self._saved_contact_from_row(row) for row in rows]
+
+    @staticmethod
+    def _saved_contact_from_row(row: tuple[Any, ...]) -> dict[str, Any]:
+        return {
+            "email": row[0], "domain": row[1], "category": row[2], "pattern": row[3],
+            "source": row[4], "run_id": row[5], "saved_at": row[6],
+            "last_verified_at": row[7], "verification_method": row[8],
+            "verification_detail": row[9], "confidence": int(row[10] or 0),
+            "favorite": bool(row[11]), "tags": json.loads(row[12] or "[]"),
+        }
+
+    def update_saved_contact(
+        self, owner_id: str, email: str, *, favorite: bool | None, tags: list[str] | None,
+    ) -> dict[str, Any] | None:
+        self.initialize()
+        assignments: list[str] = []
+        parameters: list[Any] = []
+        if favorite is not None:
+            assignments.append("favorite=?")
+            parameters.append(int(favorite))
+        if tags is not None:
+            assignments.append("tags_json=?")
+            parameters.append(json.dumps(tags, ensure_ascii=False))
+        if assignments:
+            with closing(self._connect()) as connection:
+                connection.execute(
+                    f"UPDATE prospecting_saved_contacts SET {', '.join(assignments)} "
+                    "WHERE owner_id=? AND email=?",
+                    [*parameters, owner_id, email.lower()],
+                )
+        with closing(self._connect()) as connection:
+            row = connection.execute("""
+                SELECT email, domain, category, pattern, source, run_id, saved_at,
+                       last_verified_at, verification_method, verification_detail, confidence,
+                       favorite, tags_json
+                FROM prospecting_saved_contacts WHERE owner_id=? AND email=?
+            """, (owner_id, email.lower())).fetchone()
+        return self._saved_contact_from_row(row) if row else None
+
+    def company_snapshot(self, owner_id: str, domain: str) -> dict[str, Any]:
+        self.initialize()
+        with closing(self._connect()) as connection:
+            row = connection.execute("""
+                SELECT COUNT(*), COALESCE(MAX(last_verified_at), MAX(saved_at)),
+                       COALESCE(SUM(favorite), 0)
+                FROM prospecting_saved_contacts WHERE owner_id=? AND domain=?
+            """, (owner_id, domain)).fetchone()
+        return {
+            "domain": domain, "contact_count": int(row[0]), "last_verified_at": row[1],
+            "favorite_count": int(row[2]),
+        }
 
     def saved_contact_count(self, owner_id: str) -> int:
         self.initialize()
@@ -478,11 +641,12 @@ class ProspectingStore:
                     if not pattern:
                         continue
                     connection.execute("""
-                        INSERT INTO prospecting_domain_profiles(domain, pattern, confirmed_count, last_confirmed_at)
-                        VALUES (?, ?, 1, ?)
-                        ON CONFLICT(domain, pattern) DO UPDATE SET
+                        INSERT INTO prospecting_owner_domain_profiles(
+                            owner_id, domain, pattern, confirmed_count, last_confirmed_at
+                        ) VALUES (?, ?, ?, 1, ?)
+                        ON CONFLICT(owner_id, domain, pattern) DO UPDATE SET
                             confirmed_count=confirmed_count + 1, last_confirmed_at=excluded.last_confirmed_at
-                    """, (run.domain, pattern, now))
+                    """, (run.owner_id, run.domain, pattern, now))
                 connection.execute(
                     "UPDATE prospecting_runs SET profiles_recorded_at=? WHERE id=?", (now, run.id)
                 )

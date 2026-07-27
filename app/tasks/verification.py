@@ -859,6 +859,8 @@ def run_job(job: Job) -> None:
                 job = refreshed
                 return
             job = refreshed
+            from app.db.prospecting import prospecting_store
+            prospecting_store.finalize_run(job.id, job.results)
         if job.retry_parent_id:
             job.finished_at = utc_now()
             job.error = None

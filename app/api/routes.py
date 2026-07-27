@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import csv
 import hmac
 import json
 import time
 import uuid
+from io import StringIO
 from typing import Annotated
 
 from fastapi import APIRouter, Body, Depends, File, Header, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 
 from app.api.auth import optional_user, require_admin, require_user, request_network_hash
 from app.api.schemas import (
@@ -24,6 +26,8 @@ from app.api.schemas import (
     PaymentOrderResponse,
     ProspectingRunRequest,
     ProspectingRunResponse,
+    ProspectingResultsResponse,
+    ProspectingContactUpdateRequest,
     SavedProspectingContactsResponse,
     ResultsResponse,
     SingleVerificationRequest,
@@ -70,6 +74,7 @@ from app.tasks.verification import (
     finish_background_retry,
     finish_background_retry_failure,
     finish_initial_job,
+    apply_prospecting_receiver_protection,
     summarize,
     sync_parent_job,
     verification_filename,
@@ -633,10 +638,18 @@ def complete_tencent_qq_job(
     merge_worker_results(job, worker_name, payload.lease_id or "", payload.results)
     if not payload.lease_id or not job_store.complete_lease(job.id, worker_name, payload.lease_id):
         raise HTTPException(status_code=409, detail="Remote worker lease is no longer active")
+    refreshed = job_store.get(job.id)
+    if refreshed is None:
+        raise HTTPException(status_code=404, detail="Verification job no longer exists")
+    protected = apply_prospecting_receiver_protection(refreshed)
+    if protected is not None:
+        sync_parent_job(protected)
+        return serialize_job(protected)
     if job_store.pending_count(job.id):
         sync_parent_job(job)
-        return serialize_job(job_store.get(job.id) or job)
-    job = job_store.get(job.id) or job
+        return serialize_job(refreshed)
+    job = refreshed
+    prospecting_store.finalize_run(job.id, job.results)
     if job.retry_parent_id:
         job.finished_at = utc_now()
         job.error = None
@@ -810,41 +823,21 @@ def verify_discovery_candidates(
     return serialize_job(job)
 
 
-def _prospecting_result_type(result: dict[str, object]) -> str:
-    if result.get("domain_type") == "catch-all":
-        return "catch_all"
-    if result.get("deliverable") is True:
-        return "verified"
-    if result.get("deliverable") is False:
-        return "undeliverable"
-    return "unknown"
-
-
 def serialize_prospecting_run(run: ProspectingRun) -> ProspectingRunResponse:
-    job = require_job(run.verification_job_id)
-    prospecting_store.save_confirmed_contacts(run, job.results)
-    if job.status == "completed":
-        prospecting_store.record_confirmed_patterns(run, job.results)
-        refreshed = prospecting_store.get(run.id, run.owner_id)
-        if refreshed is not None:
-            run = refreshed
-    completed, total, progress = job_progress(job)
-    source_candidates = prospecting_store.candidates(run.id)
-    raw_by_index = {
-        int(result.get("original_index", index)): normalize_result(dict(result))
-        for index, result in enumerate(job.results)
+    job = require_job(run.verification_job_id, include_results=False)
+    overview = job_store.result_overview(job.id)
+    total = len(job.emails)
+    completed = total if job.status == "completed" else min(overview.settled, total)
+    progress = round((completed / total * 100) if total else 0, 1)
+    summary = {
+        "total": overview.total,
+        "valid": overview.valid,
+        "deliverable": overview.deliverable,
+        "undeliverable": overview.undeliverable,
+        "unknown": overview.unknown,
+        "verified": overview.deliverable - overview.catch_all,
+        "catch_all": overview.catch_all,
     }
-    results: list[dict[str, object]] = []
-    for candidate in source_candidates:
-        raw = raw_by_index.get(int(candidate["original_index"]), {})
-        results.append({
-            **candidate,
-            "verification": raw,
-            "result_type": _prospecting_result_type(raw),
-        })
-    summary = summarize(job.results)
-    summary["verified"] = sum(item["result_type"] == "verified" for item in results)
-    summary["catch_all"] = sum(item["result_type"] == "catch_all" for item in results)
     return ProspectingRunResponse(
         id=run.id,
         domain=run.domain,
@@ -859,7 +852,7 @@ def serialize_prospecting_run(run: ProspectingRun) -> ProspectingRunResponse:
         error=job.error,
         profile_patterns=list(run.profile_patterns),
         summary=summary,
-        results=results,
+        result_total=prospecting_store.result_count(run.id),
         saved_count=prospecting_store.saved_contact_count(run.owner_id),
         protection=prospecting_store.protection_status(run.domain),
     )
@@ -886,8 +879,8 @@ def create_prospecting_run(
                 domain, payload.known_first_name or "", payload.known_last_name or "", payload.known_email
             )
             known_email = payload.known_email.strip().lower()
-            prospecting_store.record_provided_pattern(domain, known_pattern)
-        learned_patterns = prospecting_store.domain_patterns(domain)
+            prospecting_store.record_provided_pattern(user.id, domain, known_pattern)
+        learned_patterns = prospecting_store.domain_patterns(user.id, domain)
         issued = prospecting_store.issued_emails(user.id, domain)
         # Keep enough catalogue entries beyond prior runs that filtering cannot
         # prematurely exhaust an otherwise still-available naming convention.
@@ -934,6 +927,20 @@ def create_prospecting_run(
     return serialize_prospecting_run(run)
 
 
+@router.get("/prospecting-beta/runs/{run_id}/results", response_model=ProspectingResultsResponse)
+def list_prospecting_run_results(
+    run_id: str,
+    user: Annotated[User, Depends(require_prospecting_beta)],
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=50, ge=1, le=100),
+) -> ProspectingResultsResponse:
+    run = prospecting_store.get(run_id, user.id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Prospecting run does not exist")
+    total, items = prospecting_store.result_page(run, offset=offset, limit=limit)
+    return ProspectingResultsResponse(total=total, offset=offset, limit=limit, items=items)
+
+
 @router.get("/prospecting-beta/saved-contacts", response_model=SavedProspectingContactsResponse)
 def list_saved_prospecting_contacts(
     user: Annotated[User, Depends(require_prospecting_beta)],
@@ -941,6 +948,8 @@ def list_saved_prospecting_contacts(
     search: str = Query(default="", max_length=128),
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=100),
+    domain_offset: int = Query(default=0, ge=0),
+    domain_limit: int = Query(default=50, ge=1, le=100),
 ) -> SavedProspectingContactsResponse:
     try:
         normalized_domain = normalize_company_domain(domain) if domain else None
@@ -949,15 +958,83 @@ def list_saved_prospecting_contacts(
     total, items = prospecting_store.saved_contacts(
         user.id, domain=normalized_domain, search=search.strip(), offset=offset, limit=limit,
     )
+    domain_total, domains = prospecting_store.saved_contact_domains(
+        user.id, search=search.strip(), offset=domain_offset, limit=domain_limit,
+    )
     return SavedProspectingContactsResponse(
+        workspace_total=prospecting_store.saved_contact_count(user.id),
         total=total,
         items=items,
-        domains=prospecting_store.saved_contact_domains(user.id, search.strip()),
+        domains=domains,
         offset=offset,
         limit=limit,
+        domain_total=domain_total,
+        domain_offset=domain_offset,
+        domain_limit=domain_limit,
     )
 
 
+@router.patch("/prospecting-beta/saved-contacts")
+def update_saved_prospecting_contact(
+    payload: ProspectingContactUpdateRequest,
+    user: Annotated[User, Depends(require_prospecting_beta)],
+) -> dict[str, Any]:
+    contact = prospecting_store.update_saved_contact(
+        user.id, payload.email, favorite=payload.favorite, tags=payload.tags,
+    )
+    if contact is None:
+        raise HTTPException(status_code=404, detail="Saved contact does not exist")
+    return contact
+
+
+@router.get("/prospecting-beta/companies/{domain}")
+def get_prospecting_company(
+    domain: str,
+    user: Annotated[User, Depends(require_prospecting_beta)],
+) -> dict[str, Any]:
+    try:
+        normalized_domain = normalize_company_domain(domain)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    snapshot = prospecting_store.company_snapshot(user.id, normalized_domain)
+    if not snapshot["contact_count"]:
+        raise HTTPException(status_code=404, detail="No saved contacts for this domain")
+    return snapshot
+
+
+@router.get("/prospecting-beta/saved-contacts/export")
+def export_saved_prospecting_contacts(
+    user: Annotated[User, Depends(require_prospecting_beta)],
+    domain: str | None = Query(default=None, min_length=3, max_length=253),
+    search: str = Query(default="", max_length=128),
+) -> Response:
+    try:
+        normalized_domain = normalize_company_domain(domain) if domain else None
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    total, contacts = prospecting_store.saved_contacts(
+        user.id, domain=normalized_domain, search=search.strip(), offset=0, limit=100000,
+    )
+    output = StringIO()
+    writer = csv.DictWriter(output, fieldnames=(
+        "email", "domain", "category", "pattern", "source", "last_verified_at",
+        "verification_method", "confidence", "favorite", "tags",
+    ))
+    writer.writeheader()
+    for contact in contacts:
+        writer.writerow({
+            "email": contact["email"], "domain": contact["domain"],
+            "category": contact["category"], "pattern": contact["pattern"],
+            "source": contact["source"], "last_verified_at": contact["last_verified_at"],
+            "verification_method": contact["verification_method"],
+            "confidence": contact["confidence"], "favorite": contact["favorite"],
+            "tags": ",".join(contact["tags"]),
+        })
+    filename = f"verigo-contacts-{normalized_domain or 'all'}-{total}.csv"
+    return Response(
+        output.getvalue().encode("utf-8-sig"), media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 @router.get("/prospecting-beta/runs", response_model=list[ProspectingRunResponse])
 def list_prospecting_runs(
     user: Annotated[User, Depends(require_prospecting_beta)],

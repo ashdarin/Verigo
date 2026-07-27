@@ -1,6 +1,7 @@
 const state = {
   run: null, timer: null, pollGeneration: 0,
-  contacts: { domain: null, search: "", offset: 0, limit: 50, payload: null },
+  contacts: { domain: null, search: "", offset: 0, limit: 50, domainOffset: 0, domainLimit: 50, payload: null },
+  results: { runId: null, offset: 0, limit: 50, payload: null },
 };
 const byId = (id) => document.getElementById(id);
 const labels = { queued: "排队中", running: "验证中", completed: "已完成", failed: "失败", stopped: "已停止" };
@@ -24,12 +25,14 @@ function renderSavedContacts(payload) {
   state.contacts.payload = payload;
   const body = byId("saved-contacts-body");
   body.replaceChildren();
-  const allContacts = payload.domains.reduce((total, item) => total + item.contact_count, 0);
-  byId("saved-contact-count").textContent = `${allContacts} 条`;
   byId("saved-contact-view-title").textContent = state.contacts.domain || "全部已保存联系人";
   byId("saved-contact-view-count").textContent = `${payload.total} 条`;
   byId("saved-previous").disabled = payload.offset === 0;
+  byId("saved-contact-count").textContent = `${payload.workspace_total} 条`;
   byId("saved-next").disabled = payload.offset + payload.items.length >= payload.total;
+  byId("saved-domain-count").textContent = `${payload.domain_total} 个域名`;
+  byId("saved-domain-previous").disabled = payload.domain_offset === 0;
+  byId("saved-domain-next").disabled = payload.domain_offset + payload.domains.length >= payload.domain_total;
 
   const domains = byId("saved-domain-list");
   domains.replaceChildren();
@@ -41,7 +44,7 @@ function renderSavedContacts(payload) {
     const meta = document.createElement("span"); meta.textContent = `${item.contact_count} 个已确认联系人`;
     button.append(name, meta);
     button.addEventListener("click", () => {
-      state.contacts.domain = item.domain; state.contacts.offset = 0; refreshSavedContacts();
+      state.contacts.domain = item.domain; state.contacts.offset = 0; refreshSavedContacts(); refreshCompany(item.domain).catch((error) => { byId("form-error").textContent = error.message; });
     });
     domains.append(button);
   });
@@ -52,34 +55,62 @@ function renderSavedContacts(payload) {
   }
   payload.items.forEach((item) => {
     const row = document.createElement("tr");
-    [item.email, item.domain, item.pattern, new Date(item.saved_at).toLocaleString()].forEach((value) => {
+    [item.email, item.domain, `${item.confidence || 0}%`, item.last_verified_at ? new Date(item.last_verified_at).toLocaleString() : "-"].forEach((value) => {
       const cell = document.createElement("td"); cell.textContent = value; row.append(cell);
     });
+    const tools = document.createElement("td"); tools.className = "contact-tools";
+    const favorite = document.createElement("button"); favorite.type = "button";
+    favorite.className = `favorite ${item.favorite ? "active" : ""}`;
+    favorite.title = item.favorite ? "取消收藏" : "收藏";
+    favorite.textContent = item.favorite ? "\u2605" : "\u2606";
+    favorite.addEventListener("click", async () => {
+      await api("/api/prospecting-beta/saved-contacts", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email: item.email, favorite: !item.favorite }) });
+      refreshSavedContacts();
+    });
+    const tag = document.createElement("input"); tag.className = "tag-input"; tag.value = item.tags.join(", "); tag.placeholder = "标签";
+    tag.setAttribute("aria-label", `${item.email} 标签`);
+    tag.addEventListener("change", async () => {
+      const tags = tag.value.split(",").map((value) => value.trim()).filter(Boolean);
+      await api("/api/prospecting-beta/saved-contacts", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email: item.email, tags }) });
+      refreshSavedContacts();
+    });
+    tools.append(favorite, tag); row.append(tools);
     body.append(row);
   });
+}
+
+async function refreshCompany(domain) {
+  const company = await api(`/api/prospecting-beta/companies/${encodeURIComponent(domain)}`);
+  if (state.contacts.domain !== domain) return;
+  const meta = byId("saved-company-meta");
+  meta.textContent = `${company.contact_count} 个已确认联系人，${company.favorite_count} 个已收藏，最近验证：${company.last_verified_at ? new Date(company.last_verified_at).toLocaleString() : "-"}`;
+  meta.classList.remove("hidden");
 }
 
 async function refreshSavedContacts() {
   const query = new URLSearchParams({
     offset: String(state.contacts.offset), limit: String(state.contacts.limit),
+    domain_offset: String(state.contacts.domainOffset), domain_limit: String(state.contacts.domainLimit),
   });
   if (state.contacts.domain) query.set("domain", state.contacts.domain);
   if (state.contacts.search) query.set("search", state.contacts.search);
   renderSavedContacts(await api(`/api/prospecting-beta/saved-contacts?${query}`));
 }
 
-function renderResults(run) {
+function renderResults(payload, status) {
+  state.results.payload = payload;
   const body = byId("results-body");
   body.replaceChildren();
-  const visible = run.results.filter((item) => item.result_type === "verified" || item.result_type === "catch_all");
-  byId("result-count").textContent = `${visible.length} 条`;
-  if (!visible.length) {
+  byId("result-count").textContent = `${payload.total} 条`;
+  byId("result-previous").disabled = payload.offset === 0;
+  byId("result-next").disabled = payload.offset + payload.items.length >= payload.total;
+  if (!payload.items.length) {
     const row = document.createElement("tr"); row.className = "empty";
     const cell = document.createElement("td"); cell.colSpan = 5;
-    cell.textContent = run.status === "completed" ? "未找到可确认的非 catch-all 企业联系地址" : "正在等待可确认的结果";
+    cell.textContent = status === "completed" ? "未找到可确认的非 catch-all 企业联系地址" : "正在等待可确认的结果";
     row.append(cell); body.append(row); return;
   }
-  visible.forEach((item) => {
+  payload.items.forEach((item) => {
     const row = document.createElement("tr");
     const verification = item.verification || {};
     const values = [
@@ -99,7 +130,15 @@ function renderResults(run) {
   });
 }
 
+async function refreshRunResults(run) {
+  const payload = await api(`/api/prospecting-beta/runs/${run.id}/results?offset=${state.results.offset}&limit=${state.results.limit}`);
+  if (state.run?.id === run.id) renderResults(payload, run.status);
+}
+
 function renderRun(run) {
+  if (state.run?.id !== run.id) {
+    state.results = { runId: run.id, offset: 0, limit: 50, payload: null };
+  }
   state.run = run;
   byId("run-panel").classList.remove("hidden"); byId("results-panel").classList.remove("hidden");
   byId("run-domain").textContent = `${run.domain} (${run.country})`;
@@ -122,7 +161,7 @@ function renderRun(run) {
   byId("run-protection").textContent = protectionCopy || protection.message || "";
   byId("run-protection").classList.toggle("hidden", !protectionCopy && !protection.message);
   byId("run-error").textContent = run.error || "";
-  renderResults(run);
+  refreshRunResults(run).catch((error) => { byId("run-error").textContent = error.message; });
   refreshSavedContacts().catch((error) => { byId("run-error").textContent = error.message; });
 }
 
@@ -164,11 +203,17 @@ let savedSearchTimer = null;
 byId("saved-contact-search").addEventListener("input", (event) => {
   clearTimeout(savedSearchTimer);
   savedSearchTimer = setTimeout(() => {
-    state.contacts.search = event.target.value.trim(); state.contacts.offset = 0; refreshSavedContacts();
+    state.contacts.search = event.target.value.trim(); state.contacts.offset = 0; state.contacts.domainOffset = 0; refreshSavedContacts();
   }, 250);
 });
 byId("saved-show-all").addEventListener("click", () => {
-  state.contacts.domain = null; state.contacts.offset = 0; refreshSavedContacts();
+  state.contacts.domain = null; state.contacts.offset = 0; byId("saved-company-meta").classList.add("hidden"); refreshSavedContacts();
+});
+byId("saved-export").addEventListener("click", () => {
+  const query = new URLSearchParams();
+  if (state.contacts.domain) query.set("domain", state.contacts.domain);
+  if (state.contacts.search) query.set("search", state.contacts.search);
+  window.location.href = `/api/prospecting-beta/saved-contacts/export?${query}`;
 });
 byId("saved-previous").addEventListener("click", () => {
   state.contacts.offset = Math.max(0, state.contacts.offset - state.contacts.limit); refreshSavedContacts();
@@ -177,6 +222,23 @@ byId("saved-next").addEventListener("click", () => {
   const payload = state.contacts.payload;
   if (!payload || state.contacts.offset + payload.items.length >= payload.total) return;
   state.contacts.offset += state.contacts.limit; refreshSavedContacts();
+});
+byId("saved-domain-previous").addEventListener("click", () => {
+  state.contacts.domainOffset = Math.max(0, state.contacts.domainOffset - state.contacts.domainLimit); refreshSavedContacts();
+});
+byId("saved-domain-next").addEventListener("click", () => {
+  const payload = state.contacts.payload;
+  if (!payload || payload.domain_offset + payload.domains.length >= payload.domain_total) return;
+  state.contacts.domainOffset += state.contacts.domainLimit; refreshSavedContacts();
+});
+byId("result-previous").addEventListener("click", () => {
+  if (!state.run) return;
+  state.results.offset = Math.max(0, state.results.offset - state.results.limit); refreshRunResults(state.run);
+});
+byId("result-next").addEventListener("click", () => {
+  const payload = state.results.payload;
+  if (!state.run || !payload || payload.offset + payload.items.length >= payload.total) return;
+  state.results.offset += state.results.limit; refreshRunResults(state.run);
 });
 
 (async () => {

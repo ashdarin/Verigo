@@ -124,17 +124,49 @@ class ProspectingRunResponse(BaseModel):
     error: str | None
     profile_patterns: list[str]
     summary: dict[str, int]
-    results: list[dict[str, Any]]
+    result_total: int
     saved_count: int
     protection: dict[str, Any]
 
 
+class ProspectingResultsResponse(BaseModel):
+    total: int
+    offset: int
+    limit: int
+    items: list[dict[str, Any]]
+
+
 class SavedProspectingContactsResponse(BaseModel):
+    workspace_total: int
     total: int
     items: list[dict[str, Any]]
     domains: list[dict[str, Any]]
     offset: int
     limit: int
+    domain_total: int
+    domain_offset: int
+    domain_limit: int
+
+
+class ProspectingContactUpdateRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=254)
+    favorite: bool | None = None
+    tags: list[str] | None = Field(default=None, max_length=20)
+
+    @field_validator("email")
+    @classmethod
+    def normalize_email(cls, value: str) -> str:
+        return value.strip().lower()
+
+    @field_validator("tags")
+    @classmethod
+    def normalize_tags(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        tags = list(dict.fromkeys(item.strip()[:40] for item in value if item.strip()))
+        if len(tags) != len(value):
+            raise ValueError("Tags must be non-empty and unique")
+        return tags
 
 
 class PaymentOrderRequest(BaseModel):
