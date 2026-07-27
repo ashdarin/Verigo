@@ -107,6 +107,10 @@ caddy validate --config /etc/caddy/Caddyfile
 systemctl reload caddy
 ```
 
+## Cloud Shell 节点
+
+两个 Cloud Shell 账户会在国外邮箱队列出现时自动启动。`VERIGO_CLOUDSHELL_WORKER_PROCESSES` 与 `VERIGO_CLOUDSHELL_SECONDARY_WORKER_PROCESSES` 分别控制主、次账户中的远程领取进程数；每个进程使用独立的 PID、环境文件和节点标识。它们不改变 Gmail 的全局 MX 并发上限，分片内的验证并发仍由任务和调度器控制。
+
 ## Cloud Studio 节点
 
 QQ 任务保留 `tencent_qq` 执行目标；站点重启不会把它们改派为本机任务。Cloud Studio worker 使用 claim 和 heartbeat 上报在线状态，生命周期协调器只会在队列有需要时启动工作空间，并在空闲后停止它。

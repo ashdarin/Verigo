@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import shlex
 import subprocess
 import threading
 import time
@@ -28,6 +29,7 @@ class CloudShellLifecycle:
         ssh_key_path: Path | None = None,
         ssh_known_hosts_path: Path | None = None,
         worker_id: str = "cloudshell-gmail-1",
+        worker_processes: int | None = None,
         register_ssh_public_key: bool = False,
     ) -> None:
         self._enabled = settings.google_cloudshell_enabled if enabled is None else enabled
@@ -47,6 +49,12 @@ class CloudShellLifecycle:
             else ssh_known_hosts_path
         )
         self._worker_id = worker_id
+        self._worker_processes = max(
+            1,
+            settings.cloudshell_worker_processes
+            if worker_processes is None
+            else worker_processes,
+        )
         self._register_ssh_public_key = register_ssh_public_key
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
@@ -102,26 +110,37 @@ class CloudShellLifecycle:
         job_store.record_worker_seen(GMAIL_TARGET, worker_id)
 
     @staticmethod
-    def _worker_command(release_version: str = "") -> str:
-        """Replace a stale Gmail worker once; keep a matching worker alive."""
+    def _worker_command(worker_number: int = 1, release_version: str = "") -> str:
+        """Replace one stale worker process without disturbing its siblings."""
+        if worker_number < 1:
+            raise ValueError("Cloud Shell worker number must be positive")
+        pid_file = f".gmail-worker-{worker_number}.pid"
+        environment_file = f".gmail-worker-{worker_number}.env"
+        release_marker = shlex.quote(f"VERIGO_REMOTE_WORKER_RELEASE={release_version}")
         version_check = (
             f" && tr '\\0' '\\n' < \"/proc/$(cat \"$pid_file\")/environ\" "
-            f"| grep -qx 'VERIGO_REMOTE_WORKER_RELEASE={release_version}'"
+            f"| grep -qx {release_marker}"
             if release_version else ""
+        )
+        legacy_cleanup = (
+            "if test -s .gmail-worker.pid; then "
+            "kill \"$(cat .gmail-worker.pid)\" 2>/dev/null || true; fi; "
+            "rm -f .gmail-worker.pid; "
+            if worker_number == 1 else ""
         )
         return (
             "cd ~/verigo-worker && python3 -m venv .venv && "
             ".venv/bin/pip -q install 'dnspython>=2.6,<3' && "
-            "pid_file=.gmail-worker.pid; "
+            f"pid_file={pid_file}; environment_file={environment_file}; "
+            f"{legacy_cleanup}"
             "if test -s \"$pid_file\" && kill -0 \"$(cat \"$pid_file\")\" 2>/dev/null "
             "&& tr '\\0' '\\n' < \"/proc/$(cat \"$pid_file\")/environ\" "
             "| grep -qx 'VERIGO_REMOTE_WORKER_TARGET=gmail'"
             f"{version_check}; then exit 0; fi; "
             "if test -s \"$pid_file\"; then kill \"$(cat \"$pid_file\")\" 2>/dev/null || true; fi; "
-            "pkill -TERM -f '[c]url.*workers/gmail' 2>/dev/null || true; sleep 1; "
             "rm -f \"$pid_file\"; "
-            "(set -a; . .worker.env; set +a; nohup .venv/bin/python -m "
-            "app.tencent_qq_worker >/tmp/verigo-gmail-worker.log 2>&1 </dev/null & "
+            "(set -a; . \"$environment_file\"; set +a; nohup .venv/bin/python -m "
+            f"app.tencent_qq_worker >/tmp/verigo-gmail-worker-{worker_number}.log 2>&1 </dev/null & "
             "echo $! > \"$pid_file\")"
         )
 
@@ -248,17 +267,33 @@ class CloudShellLifecycle:
             archive = subprocess.run(["tar", "-C", str(source_root), "-czf", "-", "app", "验证8.py"], check=True, capture_output=True).stdout
             subprocess.run(base + ["mkdir -p ~/verigo-worker && tar -xzf - -C ~/verigo-worker"], input=archive, check=True, timeout=90)
             release_version = Path("/opt/verigo/current/RELEASE_VERSION").read_text().strip()
-            environment_file = "\n".join((
-                "VERIGO_REMOTE_WORKER_TARGET=gmail",
-                "VERIGO_REMOTE_WORKER_SERVER=https://verigo.site",
-                f"VERIGO_REMOTE_WORKER_TOKEN={settings.gmail_worker_token}",
-                f"VERIGO_TENCENT_QQ_WORKER_ID={self._worker_id}",
-                f"VERIGO_REMOTE_WORKER_CAPACITY={settings.cloudshell_worker_max_workers}",
-                f"VERIGO_REMOTE_WORKER_RELEASE={release_version}",
-            )) + "\n"
-            subprocess.run(base + ["cat > ~/verigo-worker/.worker.env && chmod 600 ~/verigo-worker/.worker.env"], input=environment_file.encode(), check=True, timeout=30)
-            subprocess.run(base + [self._worker_command(release_version)], check=True, timeout=120)
-            logger.info("Cloud Shell Gmail worker bootstrap completed")
+            for worker_number in range(1, self._worker_processes + 1):
+                environment_file = "\n".join((
+                    "VERIGO_REMOTE_WORKER_TARGET=gmail",
+                    "VERIGO_REMOTE_WORKER_SERVER=https://verigo.site",
+                    f"VERIGO_REMOTE_WORKER_TOKEN={settings.gmail_worker_token}",
+                    f"VERIGO_TENCENT_QQ_WORKER_ID={self._worker_id}-{worker_number}",
+                    # The worker loop is single-lease. Its child verification
+                    # parallelism remains controlled by the leased job.
+                    "VERIGO_REMOTE_WORKER_CAPACITY=1",
+                    f"VERIGO_REMOTE_WORKER_RELEASE={release_version}",
+                )) + "\n"
+                remote_path = f"~/verigo-worker/.gmail-worker-{worker_number}.env"
+                subprocess.run(
+                    base + [f"cat > {remote_path} && chmod 600 {remote_path}"],
+                    input=environment_file.encode(),
+                    check=True,
+                    timeout=30,
+                )
+                subprocess.run(
+                    base + [self._worker_command(worker_number, release_version)],
+                    check=True,
+                    timeout=120,
+                )
+            logger.info(
+                "Cloud Shell Gmail worker bootstrap completed with %s processes",
+                self._worker_processes,
+            )
         except Exception as exc:
             logger.exception("Cloud Shell Gmail worker bootstrap failed: %s", exc)
             job_store.set_queued_target_message(
@@ -278,6 +313,7 @@ cloudshell_secondary_lifecycle = CloudShellLifecycle(
     ssh_key_path=settings.google_cloudshell_secondary_ssh_key_path,
     ssh_known_hosts_path=settings.google_cloudshell_secondary_ssh_known_hosts_path,
     worker_id="cloudshell-gmail-2",
+    worker_processes=settings.cloudshell_secondary_worker_processes,
     register_ssh_public_key=True,
 )
 cloudshell_lifecycles = (cloudshell_lifecycle, cloudshell_secondary_lifecycle)

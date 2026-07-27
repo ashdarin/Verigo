@@ -41,6 +41,15 @@ class Settings:
     cloudshell_worker_max_workers: int = max(
         1, int(os.getenv("VERIGO_CLOUDSHELL_MAX_WORKERS", "25"))
     )
+    # A remote worker process handles one lease at a time. Keep process count
+    # separate from the per-shard verification parallelism above.
+    cloudshell_worker_processes: int = min(
+        8, max(1, int(os.getenv("VERIGO_CLOUDSHELL_WORKER_PROCESSES", "2")))
+    )
+    cloudshell_secondary_worker_processes: int = min(
+        8,
+        max(1, int(os.getenv("VERIGO_CLOUDSHELL_SECONDARY_WORKER_PROCESSES", "1"))),
+    )
     scheduler_gmail_concurrency: int = max(1, int(os.getenv("VERIGO_SCHEDULER_GMAIL_CONCURRENCY", "25")))
     scheduler_microsoft_concurrency: int = max(1, int(os.getenv("VERIGO_SCHEDULER_MICROSOFT_CONCURRENCY", "64")))
     scheduler_default_domain_concurrency: int = max(1, int(os.getenv("VERIGO_SCHEDULER_DEFAULT_DOMAIN_CONCURRENCY", "4")))
