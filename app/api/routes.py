@@ -22,6 +22,8 @@ from app.api.schemas import (
     NotificationListResponse,
     PaymentOrderRequest,
     PaymentOrderResponse,
+    ProspectingRunRequest,
+    ProspectingRunResponse,
     ResultsResponse,
     SingleVerificationRequest,
     WorkerFailureRequest,
@@ -30,6 +32,7 @@ from app.api.schemas import (
 from app.config import settings
 from app.core.imports import extract_emails
 from app.core.discovery import candidate_emails
+from app.core.prospecting import generate_candidates, normalize_company_domain
 from app.core.security import token_hash
 from app.core.worker_lifecycle import (
     DOMESTIC_CLOUDSTUDIO_TARGET,
@@ -52,6 +55,7 @@ from app.core.provider_policy import (
 from app.db.auth import User, auth_store
 from app.db.jobs import Job, job_store, utc_now
 from app.db.metrics import metrics_store
+from app.db.prospecting import ProspectingRun, prospecting_store
 from app.tasks.verification import (
     clean_emails,
     job_progress,
@@ -117,6 +121,20 @@ def require_verification_submission_open() -> None:
             detail="Verification service is temporarily draining for maintenance. Please retry shortly.",
             headers={"Retry-After": "60"},
         )
+
+
+def require_prospecting_beta(
+    user: Annotated[User, Depends(require_user)],
+) -> User:
+    allowed = settings.prospecting_beta_allowed_emails
+    if (
+        not settings.prospecting_beta_enabled
+        or not user.email_verified
+        or not user.email
+        or user.email.lower() not in allowed
+    ):
+        raise HTTPException(status_code=403, detail="该内测功能当前不可用")
+    return user
 
 
 def tencent_qq_target(emails: list[str], owner_email: str | None) -> str:
@@ -782,6 +800,127 @@ def verify_discovery_candidates(
         raise HTTPException(status_code=429, detail=str(exc)) from exc
     metrics_store.record_conversion(request.cookies.get("verigo_analytics"), "free")
     return serialize_job(job)
+
+
+def _prospecting_result_type(result: dict[str, object]) -> str:
+    if result.get("domain_type") == "catch-all":
+        return "catch_all"
+    if result.get("deliverable") is True:
+        return "verified"
+    if result.get("deliverable") is False:
+        return "undeliverable"
+    return "unknown"
+
+
+def serialize_prospecting_run(run: ProspectingRun) -> ProspectingRunResponse:
+    job = require_job(run.verification_job_id)
+    if job.status == "completed":
+        prospecting_store.record_confirmed_patterns(run, job.results)
+        refreshed = prospecting_store.get(run.id, run.owner_id)
+        if refreshed is not None:
+            run = refreshed
+    completed, total, progress = job_progress(job)
+    source_candidates = prospecting_store.candidates(run.id)
+    raw_by_index = {
+        int(result.get("original_index", index)): normalize_result(dict(result))
+        for index, result in enumerate(job.results)
+    }
+    results: list[dict[str, object]] = []
+    for candidate in source_candidates:
+        raw = raw_by_index.get(int(candidate["original_index"]), {})
+        results.append({
+            **candidate,
+            "verification": raw,
+            "result_type": _prospecting_result_type(raw),
+        })
+    summary = summarize(job.results)
+    summary["verified"] = sum(item["result_type"] == "verified" for item in results)
+    summary["catch_all"] = sum(item["result_type"] == "catch_all" for item in results)
+    return ProspectingRunResponse(
+        id=run.id,
+        domain=run.domain,
+        verification_job_id=run.verification_job_id,
+        status=job.status,
+        created_at=run.created_at.isoformat(),
+        total=total,
+        completed=completed,
+        progress=progress,
+        error=job.error,
+        profile_patterns=list(run.profile_patterns),
+        summary=summary,
+        results=results,
+    )
+
+
+@router.post("/prospecting-beta/runs", response_model=ProspectingRunResponse, status_code=202)
+def create_prospecting_run(
+    payload: ProspectingRunRequest,
+    user: Annotated[User, Depends(require_prospecting_beta)],
+) -> ProspectingRunResponse:
+    require_verification_submission_open()
+    day_start = utc_now().replace(hour=0, minute=0, second=0, microsecond=0)
+    if prospecting_store.count_runs_since(user.id, day_start) >= settings.prospecting_beta_daily_run_limit:
+        raise HTTPException(status_code=429, detail="今日内测域名额度已用完，请明日继续")
+    try:
+        domain = normalize_company_domain(payload.domain)
+        learned_patterns = prospecting_store.domain_patterns(domain)
+        candidates = generate_candidates(
+            domain, settings.prospecting_beta_max_candidates, learned_patterns
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    job: Job | None = None
+    try:
+        job = submit_routed_job(
+            [candidate.email for candidate in candidates],
+            worker_count=min(4, settings.max_workers_per_job),
+            owner_id=user.id,
+            owner_email=user.email,
+            stop_on_deliverable=False,
+            job_id=uuid.uuid4().hex[:12],
+        )
+        run = prospecting_store.create_run(
+            user.id, domain, job.id, candidates, learned_patterns
+        )
+    except RuntimeError as exc:
+        if job is not None:
+            job_store.stop(job.id)
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    except Exception:
+        if job is not None:
+            job_store.stop(job.id)
+        raise
+    return serialize_prospecting_run(run)
+
+
+@router.get("/prospecting-beta/runs", response_model=list[ProspectingRunResponse])
+def list_prospecting_runs(
+    user: Annotated[User, Depends(require_prospecting_beta)],
+) -> list[ProspectingRunResponse]:
+    return [serialize_prospecting_run(run) for run in prospecting_store.recent(user.id)]
+
+
+@router.get("/prospecting-beta/runs/{run_id}", response_model=ProspectingRunResponse)
+def get_prospecting_run(
+    run_id: str,
+    user: Annotated[User, Depends(require_prospecting_beta)],
+) -> ProspectingRunResponse:
+    run = prospecting_store.get(run_id, user.id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="内测任务不存在")
+    return serialize_prospecting_run(run)
+
+
+@router.post("/prospecting-beta/runs/{run_id}/stop", response_model=ProspectingRunResponse)
+def stop_prospecting_run(
+    run_id: str,
+    user: Annotated[User, Depends(require_prospecting_beta)],
+) -> ProspectingRunResponse:
+    run = prospecting_store.get(run_id, user.id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="内测任务不存在")
+    job_store.stop(run.verification_job_id)
+    return serialize_prospecting_run(run)
 
 
 @router.post("/jobs", response_model=JobResponse, status_code=202)

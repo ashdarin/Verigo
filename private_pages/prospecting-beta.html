@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex,nofollow,noarchive">
+  <title>Verigo - 企业联系人发现内测</title>
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+  <link rel="stylesheet" href="/static/css/prospecting-beta.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/dashboard" aria-label="返回 Verigo">
+      <span class="brand-mark">V</span><span>Verigo</span>
+    </a>
+    <span class="beta-label">PRIVATE BETA</span>
+  </header>
+  <main class="shell">
+    <section class="intro" aria-labelledby="page-title">
+      <p class="eyebrow">企业联系人发现</p>
+      <h1 id="page-title">从公司域名开始</h1>
+      <p>系统会优先验证企业业务入口，再在严格预算内验证姓名组合候选。Catch-all 结果会单独标记，不计入有效联系人。</p>
+    </section>
+
+    <section class="tool" aria-labelledby="submit-title">
+      <div class="tool-heading">
+        <div><h2 id="submit-title">创建内测任务</h2><p>每个域名的候选数量固定受控，不会无限生成或绕过现有调度。</p></div>
+        <span id="daily-limit" class="limit">内测专用</span>
+      </div>
+      <form id="run-form" class="run-form">
+        <label for="domain">目标公司域名</label>
+        <div class="domain-row">
+          <input id="domain" name="domain" type="text" autocomplete="url" placeholder="company.com" spellcheck="false" required>
+          <button id="submit" class="primary" type="submit">开始发现</button>
+        </div>
+        <p id="form-error" class="error" role="alert"></p>
+      </form>
+    </section>
+
+    <section id="run-panel" class="run-panel hidden" aria-live="polite">
+      <div class="run-heading">
+        <div><p class="eyebrow">当前任务</p><h2 id="run-domain">-</h2></div>
+        <div class="run-actions"><span id="run-status" class="status">-</span><button id="stop" class="stop hidden" type="button">停止</button></div>
+      </div>
+      <div class="progress-copy"><span id="progress-copy">-</span><strong id="progress-value">0%</strong></div>
+      <div class="progress-track"><div id="progress-bar" class="progress-bar"></div></div>
+      <div class="metrics" aria-label="任务统计">
+        <div><span>候选</span><strong id="metric-total">0</strong></div>
+        <div><span>已处理</span><strong id="metric-completed">0</strong></div>
+        <div><span>有效</span><strong id="metric-verified">0</strong></div>
+        <div><span>Catch-all</span><strong id="metric-catchall">0</strong></div>
+      </div>
+      <p id="profile-copy" class="profile-copy"></p>
+      <p id="run-error" class="error" role="alert"></p>
+    </section>
+
+    <section id="results-panel" class="results hidden" aria-labelledby="results-title">
+      <div class="results-heading"><div><p class="eyebrow">结果</p><h2 id="results-title">已确认企业联系方式</h2></div><span id="result-count" class="limit">0</span></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>邮箱</th><th>类别</th><th>生成依据</th><th>状态</th><th>验证详情</th></tr></thead>
+          <tbody id="results-body"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+  <script src="/static/js/prospecting-beta.js"></script>
+</body>
+</html>

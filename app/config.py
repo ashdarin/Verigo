@@ -99,6 +99,20 @@ class Settings:
         for email in os.getenv("VERIGO_ADMIN_EMAILS", "").split(",")
         if email.strip()
     )
+    # Private beta for domain-only business contact discovery. It is disabled
+    # unless explicitly enabled on the server and its allowlist is non-empty.
+    prospecting_beta_enabled: bool = env_bool("VERIGO_PROSPECTING_BETA_ENABLED", False)
+    prospecting_beta_allowed_emails: frozenset[str] = frozenset(
+        email.strip().lower()
+        for email in os.getenv("VERIGO_PROSPECTING_BETA_ALLOWED_EMAILS", "").split(",")
+        if email.strip()
+    )
+    prospecting_beta_daily_run_limit: int = max(
+        1, int(os.getenv("VERIGO_PROSPECTING_BETA_DAILY_RUN_LIMIT", "3"))
+    )
+    prospecting_beta_max_candidates: int = min(
+        200, max(24, int(os.getenv("VERIGO_PROSPECTING_BETA_MAX_CANDIDATES", "120")))
+    )
     metrics_salt: str = os.getenv("VERIGO_METRICS_SALT", "")
     # Restricts operational queue and worker details to the local monitor.
     monitor_token: str = os.getenv("VERIGO_MONITOR_TOKEN", "")

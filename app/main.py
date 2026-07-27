@@ -3,17 +3,18 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 import secrets
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.responses import FileResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from app.api.auth import auth_router
-from app.api.routes import router
+from app.api.routes import require_prospecting_beta, router
 from app.config import BASE_DIR, settings
 from app.core.legacy import load_persistent_cache, save_persistent_cache
 from app.db.jobs import job_store
 from app.db.auth import auth_store
 from app.db.metrics import metrics_store
+from app.db.prospecting import prospecting_store
 
 
 STATIC_DIR = BASE_DIR / "static"
@@ -27,6 +28,7 @@ async def lifespan(_: FastAPI):
     job_store.initialize()
     auth_store.initialize()
     metrics_store.initialize()
+    prospecting_store.initialize()
     load_persistent_cache()
     try:
         yield
@@ -116,6 +118,18 @@ def sitemap() -> Response:
 def dashboard() -> FileResponse:
     return FileResponse(
         STATIC_DIR / "index.html", headers={"X-Robots-Tag": "noindex, nofollow"}
+    )
+
+
+@app.get(
+    "/prospecting-beta",
+    include_in_schema=False,
+    dependencies=[Depends(require_prospecting_beta)],
+)
+def prospecting_beta() -> FileResponse:
+    return FileResponse(
+        BASE_DIR / "private_pages" / "prospecting-beta.html",
+        headers={"X-Robots-Tag": "noindex, nofollow, noarchive"},
     )
 
 

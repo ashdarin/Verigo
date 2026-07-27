@@ -81,6 +81,25 @@ class DiscoveryResponse(BaseModel):
     candidates: list[str]
 
 
+class ProspectingRunRequest(BaseModel):
+    domain: str = Field(min_length=3, max_length=253)
+
+
+class ProspectingRunResponse(BaseModel):
+    id: str
+    domain: str
+    verification_job_id: str
+    status: Literal["queued", "running", "completed", "failed", "stopped"]
+    created_at: str
+    total: int
+    completed: int
+    progress: float
+    error: str | None
+    profile_patterns: list[str]
+    summary: dict[str, int]
+    results: list[dict[str, Any]]
+
+
 class PaymentOrderRequest(BaseModel):
     packages: int = Field(ge=1, le=1000)
 
