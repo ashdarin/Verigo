@@ -55,14 +55,22 @@ ENGLISH_SURNAMES = (
     "adams", "nelson", "carter", "mitchell", "roberts",
 )
 GERMAN_GIVEN = (
-    "luca", "leon", "paul", "jonas", "felix", "max", "ben", "finn", "moritz", "tim",
-    "anna", "emma", "mia", "hannah", "lea", "lena", "julia", "laura", "sophie", "marie",
-    "johannes", "thomas", "christian", "andreas", "markus", "sabine", "claudia", "martina",
+    "alexander", "maximilian", "paul", "elias", "ben", "jonas", "leon", "felix", "luis", "noah",
+    "lucas", "liam", "henry", "emil", "anton", "theo", "milan", "carl", "friedrich", "johann",
+    "wilhelm", "heinrich", "klaus", "hans", "jurgen", "peter", "wolfgang", "michael", "thomas", "andreas",
+    "stefan", "christian", "matthias", "daniel", "sebastian", "martin", "frank", "oliver", "tobias", "markus",
+    "emma", "hanna", "marie", "anna", "sophia", "emilia", "lina", "klara", "ella", "mia",
+    "lena", "lea", "amelie", "charlotte", "luisa", "johanna", "clara", "mathilda", "greta", "frieda",
+    "petra", "sabine", "andrea", "gabriele", "monika", "ursula", "ingrid", "christa", "brigitte", "renate",
+    "helga", "martina", "susanne", "angela", "claudia", "birgit", "katrin", "silke", "nicole", "karin",
 )
 GERMAN_SURNAMES = (
-    "muller", "schmidt", "schneider", "fischer", "weber", "meyer", "wagner", "becker",
-    "hoffmann", "klein", "bauer", "richter", "krause", "schulz", "hartmann", "lange",
-    "schmitt", "werner", "schmitz", "kraus", "meier", "walter", "koch", "hofmann",
+    "muller", "schmidt", "schneider", "fischer", "weber", "meyer", "wagner", "becker", "schulz", "hoffmann",
+    "schaefer", "koch", "bauer", "richter", "klein", "wolf", "schroeder", "neumann", "schwarz", "zimmermann",
+    "braun", "krueger", "hofmann", "hartmann", "lange", "schmitt", "werner", "schmitz", "krause", "meier",
+    "lehmann", "schmid", "schulze", "maier", "koehler", "herrmann", "koenig", "walter", "mayer", "huber",
+    "kaiser", "fuchs", "peters", "lang", "scholz", "moeller", "weiss", "jung", "hahn", "schubert",
+    "vogel", "friedrich", "keller", "guenther", "frank", "berger", "winkler", "roth", "beck", "lorenz",
 )
 FRENCH_GIVEN = (
     "jean", "pierre", "michel", "philippe", "nicolas", "thomas", "julien", "antoine",
@@ -273,6 +281,7 @@ def generate_candidates(
         *([selected_pattern] if selected_pattern else []), *learned,
         *DEFAULT_PERSON_PATTERNS, *ALL_PERSON_PATTERNS,
     ]))
+    name_pairs = _ranked_name_pairs(normalized_domain, normalized_country)
     candidates: list[ProspectingCandidate] = []
     seen: set[str] = set()
 
@@ -292,8 +301,10 @@ def generate_candidates(
     for local in ROLE_LOCAL_PARTS:
         append(local, "business_entry", f"role:{local}", "role_catalogue")
 
-    for first, last in _ranked_name_pairs(normalized_domain, normalized_country):
-        for pattern in personal_patterns:
+    # Exhaust the highest-confidence naming rule before trying a fallback rule.
+    # This keeps successive runs focused on a known company convention.
+    for pattern in personal_patterns:
+        for first, last in name_pairs:
             source = (
                 "user_selected_pattern" if pattern == selected_pattern
                 else "learned_domain_profile" if pattern in learned

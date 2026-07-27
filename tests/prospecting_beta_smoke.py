@@ -17,11 +17,18 @@ os.environ["VERIGO_MAX_PENDING_JOBS"] = "50"
 os.environ["VERIGO_PROSPECTING_BETA_ENABLED"] = "true"
 os.environ["VERIGO_PROSPECTING_BETA_ALLOWED_EMAILS"] = "4671793@qq.com"
 os.environ["VERIGO_PROSPECTING_BETA_MAX_CANDIDATES"] = "128"
+os.environ["VERIGO_PROSPECTING_BETA_CATALOGUE_CANDIDATES"] = "128"
 
 from fastapi.testclient import TestClient
 
 from app.config import settings
-from app.core.prospecting import ROLE_LOCAL_PARTS, generate_candidates, infer_email_pattern, normalize_company_domain
+from app.core.prospecting import (
+    COUNTRY_PROFILES,
+    ROLE_LOCAL_PARTS,
+    generate_candidates,
+    infer_email_pattern,
+    normalize_company_domain,
+)
 from app.db.auth import auth_store
 from app.db.jobs import job_store, utc_now
 from app.db.prospecting import prospecting_store
@@ -35,6 +42,18 @@ assert len(german_candidates) == 128
 first_personal = german_candidates[len(ROLE_LOCAL_PARTS)]
 assert first_personal.pattern == "last.first"
 assert first_personal.source == "user_selected_pattern"
+assert {candidate.pattern for candidate in german_candidates[len(ROLE_LOCAL_PARTS):]} == {"last.first"}
+first_last_candidates = generate_candidates("basf.com", "DE", 1_000, requested_pattern="first.last")
+assert {candidate.pattern for candidate in first_last_candidates[len(ROLE_LOCAL_PARTS):]} == {"first.last"}
+learned_first_last = generate_candidates("basf.com", "DE", 1_000, learned_patterns=("first.last", "firstlast"))
+assert {candidate.pattern for candidate in learned_first_last[len(ROLE_LOCAL_PARTS):]} == {"first.last"}
+german_pair_count = len(COUNTRY_PROFILES["DE"].given_names) * len(COUNTRY_PROFILES["DE"].surnames)
+assert german_pair_count == 4_800
+after_first_last = generate_candidates(
+    "basf.com", "DE", len(ROLE_LOCAL_PARTS) + german_pair_count + 1, requested_pattern="first.last"
+)
+assert {candidate.pattern for candidate in after_first_last[len(ROLE_LOCAL_PARTS):-1]} == {"first.last"}
+assert after_first_last[-1].pattern == "f.last"
 assert infer_email_pattern("example.com", "John", "Smith", "smith.john@example.com") == "last.first"
 try:
     normalize_company_domain("gmail.com")
@@ -121,6 +140,19 @@ with TestClient(app) as client:
     second_candidates = prospecting_store.candidates(second_run["id"])
     assert {item["email"] for item in candidates}.isdisjoint(
         {item["email"] for item in second_candidates}
+    )
+    assert {item["pattern"] for item in second_candidates if item["category"] == "personal_candidate"} == {"last.first"}
+
+    # The configured catalogue is intentionally one batch. Existing candidates
+    # must expand it so a later run still reserves a fresh batch.
+    third = client.post("/api/prospecting-beta/runs", json={
+        "domain": "example.com", "country": "DE", "email_pattern": "last.first",
+    })
+    assert third.status_code == 202, third.text
+    third_candidates = prospecting_store.candidates(third.json()["id"])
+    assert len(third_candidates) == 128
+    assert {item["email"] for item in second_candidates}.isdisjoint(
+        {item["email"] for item in third_candidates}
     )
 
     stopped = client.post(f"/api/prospecting-beta/runs/{run['id']}/stop")

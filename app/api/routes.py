@@ -879,14 +879,20 @@ def create_prospecting_run(
             known_email = payload.known_email.strip().lower()
             prospecting_store.record_provided_pattern(domain, known_pattern)
         learned_patterns = prospecting_store.domain_patterns(domain)
+        issued = prospecting_store.issued_emails(user.id, domain)
+        # Keep enough catalogue entries beyond prior runs that filtering cannot
+        # prematurely exhaust an otherwise still-available naming convention.
+        catalogue_budget = max(
+            settings.prospecting_beta_catalogue_candidates,
+            len(issued) + settings.prospecting_beta_max_candidates + 1,
+        )
         catalogue = generate_candidates(
             domain,
             payload.country,
-            settings.prospecting_beta_catalogue_candidates,
+            catalogue_budget,
             learned_patterns,
             known_pattern or payload.email_pattern,
         )
-        issued = prospecting_store.issued_emails(user.id, domain)
         candidates = rerank_candidates(
             candidate for candidate in catalogue
             if candidate.email not in issued and candidate.email != known_email
