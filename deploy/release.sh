@@ -157,7 +157,7 @@ trap rollback ERR
 
 # Reject new submissions first, then let existing workers settle their queue.
 # A timeout restores active mode and leaves the current release untouched.
-if [[ -f "$state_dir/data/verigo.db" ]]; then
+if [[ "${VERIGO_DEPLOY_MAINTENANCE:-false}" != "true" && -f "$state_dir/data/verigo.db" ]]; then
     drain_timeout=${VERIGO_DEPLOY_DRAIN_TIMEOUT_SECONDS:-900}
     drain_stall_timeout=${VERIGO_DEPLOY_DRAIN_STALL_SECONDS:-180}
     if ! [[ "$drain_timeout" =~ ^[1-9][0-9]*$ ]]; then

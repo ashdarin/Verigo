@@ -547,7 +547,7 @@ yahoo_mixed_parent = submit_routed_job(
 )
 yahoo_mixed_children = job_store.children(yahoo_mixed_parent.id)
 assert {child.execution_target for child in yahoo_mixed_children} == {
-    "unsupported", "local", "tencent_qq", "gmail"
+    "unsupported", "local", "tencent_qq"
 }
 yahoo_child = next(child for child in yahoo_mixed_children if child.execution_target == "unsupported")
 assert yahoo_child.status == "completed"
@@ -567,13 +567,12 @@ mixed_three_way_parent = submit_routed_job(
 mixed_three_way_children = job_store.children(mixed_three_way_parent.id)
 assert mixed_three_way_parent.execution_target == "aggregate"
 assert {child.execution_target for child in mixed_three_way_children} == {
-    "local", "tencent_qq", "gmail"
+    "local", "tencent_qq"
 }
 assert next(child for child in mixed_three_way_children if child.execution_target == "tencent_qq").emails == ["first@qq.com"]
-gmail_children = [child for child in mixed_three_way_children if child.execution_target == "gmail"]
-assert [email for child in gmail_children for email in child.emails] == ["second@gmail.com", "fourth@googlemail.com"]
-assert len(gmail_children) == 1
-assert next(child for child in mixed_three_way_children if child.execution_target == "local").emails == ["third@example.com"]
+assert next(child for child in mixed_three_way_children if child.execution_target == "local").emails == [
+    "second@gmail.com", "third@example.com", "fourth@googlemail.com"
+]
 for child in mixed_three_way_children:
     child.status = "completed"
     child.started_at = utc_now()
@@ -679,6 +678,17 @@ assert retry_parent is not None
 assert retry_parent.results[0]["retry_at"] == "2030-01-01T00:00:00+00:00"
 assert retry_parent.results[0]["retry_attempt"] == 1
 job_store.stop(retry_parent.id)
+
+fallback_job = verification_tasks.submit(
+    ["fallback@example.com"],
+    1,
+    owner_id="mixed-owner",
+    job_id="fallbackgmail001",
+    execution_target="gmail-fallback",
+)
+assert fallback_job.status == "queued"
+assert job_store.reroute_queued_jobs("gmail-fallback", "local", "Remote worker unavailable") == 1
+assert job_store.get(fallback_job.id).execution_target == "local"
 
 stopped_parent = submit_routed_job(
     ["stop@qq.com", "stop@163.com", "stop@example.com"],
@@ -853,12 +863,12 @@ with TestClient(app) as guest:
     assert parallel_claim.json()["job"]["id"] == remote_parallel_job.id
     assert parallel_claim.json()["job"]["worker_count"] == 4
     assert job_store.stop(remote_parallel_job.id).status == "stopped"
-    cloudshell_fast_job = submit_routed_job(
+    cloudshell_fast_job = verification_tasks.submit(
         ["fast@company.de"],
         8,
         owner_id="cloudshell-fast-owner",
-        owner_email="smoke@example.com",
         job_id="cloudshellfast01",
+        execution_target="gmail",
     )
     cloudshell_claim = guest.post(
         "/api/workers/gmail/claim?wait_seconds=0",

@@ -203,8 +203,10 @@ def email_execution_target(email: str, owner_email: str | None) -> str:
         return DOMESTIC_CLOUDSTUDIO_TARGET
     if is_domestic_email_domain(domain) and qq_worker_allowed(owner_email):
         return "tencent_qq"
+    # Cloud Shell is opportunistic capacity. Do not leave a user-visible task
+    # queued behind a remote node that may still be starting or unavailable.
     if is_foreign_email_domain(domain) and gmail_worker_allowed(owner_email):
-        return "gmail"
+        return "local"
     return "local"
 
 

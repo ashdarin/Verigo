@@ -5,7 +5,7 @@ import signal
 import threading
 import time
 
-from app.core.cloudshell_lifecycle import start_cloudshell_lifecycles, stop_cloudshell_lifecycles
+from app.core.cloudshell_lifecycle import GMAIL_TARGET, start_cloudshell_lifecycles, stop_cloudshell_lifecycles
 from app.core.worker_lifecycle import worker_lifecycle
 from app.db.jobs import job_store
 
@@ -15,6 +15,11 @@ stop_event = threading.Event()
 
 def main() -> None:
     job_store.initialize()
+    job_store.reroute_queued_jobs(
+        GMAIL_TARGET,
+        "local",
+        "Remote Gmail worker unavailable; reassigned to the local verification queue",
+    )
     worker_lifecycle.start()
     start_cloudshell_lifecycles()
     signal.signal(signal.SIGINT, lambda *_: stop_event.set())

@@ -1865,6 +1865,26 @@ class JobStore:
             row = connection.execute("SELECT status FROM jobs WHERE id=?", (job_id,)).fetchone()
         return row is not None and row[0] == "stopped"
 
+    def reroute_queued_jobs(self, source_target: str, destination_target: str, message: str) -> int:
+        """Move unclaimed remote work to an available execution target."""
+        self.initialize()
+        with self._lock, closing(self._connect()) as connection:
+            begin_immediate(connection)
+            try:
+                cursor = connection.execute(
+                    """
+                    UPDATE jobs SET execution_target=?, worker_id=NULL, heartbeat_at=NULL,
+                        deferred_retry_at=NULL, error=?
+                    WHERE execution_target=? AND status='queued'
+                    """,
+                    (destination_target, message, source_target),
+                )
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
+        return int(cursor.rowcount)
+
     def stop(self, job_id: str) -> Job | None:
         """Stop a queued or running job without discarding completed results."""
         self.initialize()
