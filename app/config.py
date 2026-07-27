@@ -76,6 +76,8 @@ class Settings:
         if email.strip()
     )
     metrics_salt: str = os.getenv("VERIGO_METRICS_SALT", "")
+    # Restricts operational queue and worker details to the local monitor.
+    monitor_token: str = os.getenv("VERIGO_MONITOR_TOKEN", "")
     max_workers_per_job: int = int(os.getenv("VERIGO_MAX_WORKERS", "8"))
     max_parallel_jobs: int = int(os.getenv("VERIGO_MAX_PARALLEL_JOBS", "2"))
     verification_price_fen_per_100: int = max(

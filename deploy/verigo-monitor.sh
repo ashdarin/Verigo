@@ -16,12 +16,24 @@ queue_limit=${VERIGO_MONITOR_QUEUE_LIMIT:-10}
 mkdir -p "$state_dir"
 
 issues=()
-health_payload=
-if ! health_payload=$(curl -fsS --max-time 12 https://verigo.site/api/health); then
+public_health_payload=
+readiness_payload=
+if ! public_health_payload=$(curl -fsS --max-time 12 https://verigo.site/api/health); then
     issues+=("public health endpoint is unavailable")
 else
+    monitor_token=$(sed -n 's/^VERIGO_MONITOR_TOKEN=//p' /etc/verigo/verigo.env | tail -n 1)
+    if [[ -z "$monitor_token" ]]; then
+        issues+=("monitor token is not configured")
+    elif ! readiness_payload=$(curl -fsS --max-time 12 \
+        -H "X-Verigo-Monitor-Token: ${monitor_token}" \
+        http://127.0.0.1:8000/api/internal/readiness); then
+        issues+=("internal readiness endpoint is unavailable")
+    fi
+fi
+
+if [[ -n "$readiness_payload" ]]; then
     read -r health_status service_mode queued pending verifying stale unhealthy < <(
-        HEALTH_PAYLOAD="$health_payload" /opt/verigo/.venv/bin/python - <<'PY'
+        HEALTH_PAYLOAD="$readiness_payload" /opt/verigo/.venv/bin/python - <<'PY'
 import json
 import os
 
@@ -74,7 +86,7 @@ if [[ ! -f "$backup_success" ]] || (( $(date +%s) - $(stat -c %Y "$backup_succes
     issues+=("latest completed backup is older than ${backup_max_age_hours} hours")
 fi
 
-if [[ -n "$health_payload" ]] && (( queued >= queue_limit )); then
+if [[ -n "$readiness_payload" ]] && (( queued >= queue_limit )); then
     issues+=("queued jobs: ${queued}")
 fi
 

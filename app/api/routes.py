@@ -437,6 +437,25 @@ def serialize_job(job: Job) -> JobResponse:
 @router.get("/health")
 def health() -> dict[str, object]:
     try:
+        job_store.health_summary()
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="database is unavailable") from exc
+    return {
+        "status": "ok",
+        "database": "ok",
+    }
+
+
+@router.get("/internal/readiness")
+def readiness(
+    token: Annotated[str | None, Header(alias="X-Verigo-Monitor-Token")] = None,
+) -> dict[str, object]:
+    configured_token = settings.monitor_token
+    if not configured_token:
+        raise HTTPException(status_code=503, detail="monitor token is not configured")
+    if not token or not hmac.compare_digest(token, configured_token):
+        raise HTTPException(status_code=401, detail="monitor authentication failed")
+    try:
         summary = job_store.health_summary()
     except Exception as exc:
         raise HTTPException(status_code=503, detail="database is unavailable") from exc

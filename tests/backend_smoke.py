@@ -22,6 +22,7 @@ os.environ["VERIGO_MAX_PENDING_JOBS"] = "50"
 os.environ["VERIGO_TRIAL_NETWORK_LIMIT"] = "2"
 os.environ["VERIGO_ADMIN_EMAILS"] = "admin@example.com"
 os.environ["VERIGO_METRICS_SALT"] = "smoke-test-metrics-salt"
+os.environ["VERIGO_MONITOR_TOKEN"] = "smoke-monitor-token"
 os.environ["VERIGO_CLOUDSTUDIO_PROBE_TOKEN"] = "smoke-cloudstudio-probe-token"
 os.environ["VERIGO_TENCENT_QQ_WORKER_TOKEN"] = "smoke-tencent-worker-token"
 os.environ["VERIGO_TENCENT_QQ_WORKER_ENABLED"] = "true"
@@ -662,9 +663,15 @@ with TestClient(app) as guest:
     health = guest.get("/api/health")
     assert health.status_code == 200
     health_payload = health.json()
-    assert health_payload["status"] in {"ok", "degraded"}
-    assert health_payload["database"] == "ok"
-    assert "pending_results" in health_payload
+    assert health_payload == {"status": "ok", "database": "ok"}
+    assert guest.get("/api/internal/readiness").status_code == 401
+    readiness = guest.get(
+        "/api/internal/readiness",
+        headers={"X-Verigo-Monitor-Token": "smoke-monitor-token"},
+    )
+    assert readiness.status_code == 200, readiness.text
+    assert readiness.json()["database"] == "ok"
+    assert "pending_results" in readiness.json()
     assert guest.get("/dashboard").status_code == 200
     assert guest.get("/").status_code == 200
     robots = guest.get("/robots.txt")

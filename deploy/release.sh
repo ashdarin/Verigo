@@ -273,6 +273,9 @@ done
 if ! grep -q '^VERIGO_METRICS_SALT=' /etc/verigo/verigo.env; then
     printf 'VERIGO_METRICS_SALT=%s\n' "$(openssl rand -hex 32)" >> /etc/verigo/verigo.env
 fi
+if ! grep -q '^VERIGO_MONITOR_TOKEN=[^[:space:]]' /etc/verigo/verigo.env; then
+    printf 'VERIGO_MONITOR_TOKEN=%s\n' "$(openssl rand -hex 32)" >> /etc/verigo/verigo.env
+fi
 if [[ ! -f "$state_dir/data/domain_type_cache.json" && -f "$state_dir/domain_type_cache.json" ]]; then
     install -m 600 -o verigo -g verigo "$state_dir/domain_type_cache.json" "$state_dir/data/domain_type_cache.json"
 fi
