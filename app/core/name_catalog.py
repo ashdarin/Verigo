@@ -1,8 +1,6 @@
 """Read the derived name dictionary without storing a name-pair cross product."""
 from __future__ import annotations
 
-import hashlib
-import math
 import sqlite3
 from collections.abc import Iterator
 from itertools import zip_longest
@@ -59,19 +57,9 @@ def ranked_pairs(
     given_names: tuple[str, ...],
     surnames: tuple[str, ...],
 ) -> Iterator[tuple[str, str]]:
-    """Yield every pair once in a deterministic domain-specific permutation."""
-    total = len(given_names) * len(surnames)
-    if not total:
-        return
-    seed = _hash_int(f"{domain}:{country}:derived-name-catalogue")
-    start = seed % total
-    stride = (seed // max(1, total)) % total or 1
-    # A coprime step visits every position exactly once without sorting N*M pairs.
-    while math.gcd(stride, total) != 1:
-        stride = (stride + 1) % total or 1
-    for offset in range(total):
-        position = (start + offset * stride) % total
-        yield given_names[position // len(surnames)], surnames[position % len(surnames)]
+    """Yield each pair once, prioritizing the most common given and surname."""
+    del domain, country
+    return common_first_pairs(given_names, surnames)
 
 
 def common_first_pairs(given_names: tuple[str, ...], surnames: tuple[str, ...]) -> Iterator[tuple[str, str]]:

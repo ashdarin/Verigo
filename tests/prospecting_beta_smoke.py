@@ -119,6 +119,37 @@ object.__setattr__(settings, "name_catalog_path", previous_catalogue_path)
 assert [item.email.split("@", 1)[0] for item in cn_ranked[len(ROLE_LOCAL_PARTS):]] == [
     "wei.wang", "zihao.wang", "wei.li", "zihao.li", "ming.wang", "yuchen.wang", "ming.li", "yuchen.li",
 ]
+
+# Every country follows the same frequency-first ordering. Australia has no
+# separate source file, so it intentionally uses the weighted GB catalogue.
+with sqlite3.connect(name_catalog) as connection:
+    connection.execute("DROP TABLE name_entries")
+    connection.execute(
+        "CREATE TABLE name_entries (country TEXT, kind TEXT, romanized TEXT, gender TEXT, name_characters INTEGER, weight INTEGER)"
+    )
+    connection.executemany(
+        "INSERT INTO name_entries VALUES (?, ?, ?, ?, ?, ?)",
+        [
+            ("IT", "given", "giulia", "F", 0, 100),
+            ("IT", "given", "marco", "M", 0, 90),
+            ("IT", "surname", "rossi", "U", 0, 100),
+            ("IT", "surname", "romano", "U", 0, 90),
+            ("GB", "given", "olivia", "F", 0, 100),
+            ("GB", "given", "noah", "M", 0, 90),
+            ("GB", "surname", "smith", "U", 0, 100),
+            ("GB", "surname", "jones", "U", 0, 90),
+        ],
+    )
+object.__setattr__(settings, "name_catalog_path", name_catalog)
+italian_ranked = generate_candidates("example.it", "IT", len(ROLE_LOCAL_PARTS) + 4, requested_pattern="first.last")
+australian_ranked = generate_candidates("example.au", "AU", len(ROLE_LOCAL_PARTS) + 4, requested_pattern="first.last")
+object.__setattr__(settings, "name_catalog_path", previous_catalogue_path)
+assert [item.email.split("@", 1)[0] for item in italian_ranked[len(ROLE_LOCAL_PARTS):]] == [
+    "giulia.rossi", "giulia.romano", "marco.rossi", "marco.romano",
+]
+assert [item.email.split("@", 1)[0] for item in australian_ranked[len(ROLE_LOCAL_PARTS):]] == [
+    "olivia.smith", "olivia.jones", "noah.smith", "noah.jones",
+]
 assert infer_email_pattern("example.com", "John", "Smith", "smith.john@example.com") == "last.first"
 try:
     normalize_company_domain("gmail.com")
