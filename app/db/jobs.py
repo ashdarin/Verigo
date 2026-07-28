@@ -1132,6 +1132,7 @@ class JobStore:
             # idle. Scan a bounded fair queue and lease the first runnable work.
             for row in rows:
                 candidate = self._job_from_row(row)
+                candidate_is_prospecting = self._is_prospecting_job(connection, candidate.id)
                 leased: set[int] = set()
                 for (raw_indices,) in connection.execute("""
                     SELECT indices_json FROM job_leases WHERE job_id=? AND completed_at IS NULL
@@ -1153,7 +1154,8 @@ class JobStore:
                         index in leased
                         or self._scheduler_profile_is_cooling_down(connection, mx_key, now)
                         or candidate_load.get(mx_key, 0) >= self._scheduler_profile_limit(
-                            connection, mx_key, now
+                            connection, mx_key, now,
+                            prospecting=candidate_is_prospecting,
                         )
                     ):
                         continue
@@ -1298,15 +1300,46 @@ class JobStore:
 
     @classmethod
     def _scheduler_profile_limit(
-        cls, connection: sqlite3.Connection, mx_key: str, now: datetime
+        cls, connection: sqlite3.Connection, mx_key: str, now: datetime, *, prospecting: bool = False,
     ) -> int:
         row = connection.execute(
-            "SELECT current_limit FROM scheduler_domain_profiles WHERE scheduler_key=?", (mx_key,)
+            "SELECT current_limit, pressure_events, cooldown_until FROM scheduler_domain_profiles "
+            "WHERE scheduler_key=?", (mx_key,)
         ).fetchone()
         _minimum, maximum = cls._scheduler_profile_bounds(mx_key)
         if row is None:
-            return maximum if mx_key in {"gmail", "microsoft"} else cls._scheduler_mx_capacity(mx_key)
-        return max(1, min(int(row[0]), maximum))
+            current = maximum if mx_key in {"gmail", "microsoft"} else cls._scheduler_mx_capacity(mx_key)
+            pressure_events = 0
+            cooldown_until = None
+        else:
+            current = int(row[0])
+            pressure_events = int(row[1])
+            cooldown_until = str(row[2]) if row[2] else None
+        limit = max(1, min(current, maximum))
+        if not prospecting or mx_key in {"gmail", "microsoft"} or pressure_events:
+            return limit
+        if cooldown_until:
+            try:
+                if datetime.fromisoformat(cooldown_until) > now:
+                    return limit
+            except ValueError:
+                return limit
+        return max(
+            limit,
+            min(maximum, settings.prospecting_scheduler_initial_domain_concurrency),
+        )
+
+    @staticmethod
+    def _is_prospecting_job(connection: sqlite3.Connection, job_id: str) -> bool:
+        """Keep discovery-only scheduling separate from ordinary verification."""
+        try:
+            return connection.execute(
+                "SELECT 1 FROM prospecting_runs WHERE verification_job_id=?", (job_id,)
+            ).fetchone() is not None
+        except sqlite3.OperationalError:
+            # Minimal installs and scheduler-only tests do not create the
+            # prospecting tables, so they retain the normal verification path.
+            return False
 
     @staticmethod
     def _scheduler_profile_is_cooling_down(
@@ -1354,6 +1387,7 @@ class JobStore:
         if not indices:
             return
         placeholders = ", ".join("?" for _ in indices)
+        prospecting = self._is_prospecting_job(connection, job_id)
         grouped: dict[str, dict[str, int]] = {}
         for email, raw_result in connection.execute(
             f"SELECT email, result_json FROM job_results WHERE job_id=? AND original_index IN ({placeholders})",
@@ -1400,8 +1434,13 @@ class JobStore:
                     streak = 0
                 else:
                     streak += outcome["success"]
-                    if streak >= settings.scheduler_successes_per_step and current < maximum:
-                        current += 1
+                    successes_per_step = (
+                        settings.prospecting_scheduler_successes_per_step
+                        if prospecting else settings.scheduler_successes_per_step
+                    )
+                    step_size = settings.prospecting_scheduler_step_size if prospecting else 1
+                    if streak >= successes_per_step and current < maximum:
+                        current = min(maximum, current + step_size)
                         streak = 0
                         adjusted_at = now.isoformat()
             connection.execute("""

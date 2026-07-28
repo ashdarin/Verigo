@@ -281,6 +281,88 @@ assert connection.execute(
 ).fetchone() == (3, 2)
 connection.close()
 
+# Prospecting tasks can fill a larger first batch and ramp faster after stable
+# SMTP outcomes. Receiver pressure still cancels the discovery-specific floor.
+connection = store._connect()
+connection.execute("CREATE TABLE prospecting_runs (verification_job_id TEXT PRIMARY KEY)")
+connection.close()
+previous_prospecting_initial = settings.prospecting_scheduler_initial_domain_concurrency
+previous_prospecting_step = settings.prospecting_scheduler_successes_per_step
+previous_prospecting_size = settings.prospecting_scheduler_step_size
+object.__setattr__(settings, "prospecting_scheduler_initial_domain_concurrency", 8)
+object.__setattr__(settings, "prospecting_scheduler_successes_per_step", 8)
+object.__setattr__(settings, "prospecting_scheduler_step_size", 2)
+prospecting_fast = Job(
+    id="prospecting-fast",
+    emails=[f"person-{index}@prospecting-fast.test" for index in range(16)],
+    worker_count=8,
+    execution_target="profile-test",
+)
+store.add(prospecting_fast)
+connection = store._connect()
+connection.execute(
+    "INSERT INTO prospecting_runs(verification_job_id) VALUES (?)", (prospecting_fast.id,)
+)
+connection.close()
+prospecting_lease = store.claim_remote_lease("prospecting-a", "profile-test", shard_size=25)
+assert prospecting_lease is not None and len(prospecting_lease.pending_indices) == 8
+store.upsert_results(prospecting_fast.id, [{
+    "email": prospecting_fast.emails[index], "original_index": index,
+    "progress_state": "completed", "checks": {"smtp": True}, "smtp_result": "250 accepted",
+} for index in prospecting_lease.pending_indices])
+assert store.complete_lease(prospecting_fast.id, "prospecting-a", prospecting_lease.lease_id or "")
+connection = store._connect()
+assert connection.execute(
+    "SELECT current_limit FROM scheduler_domain_profiles "
+    "WHERE scheduler_key='domain:prospecting-fast.test'"
+).fetchone() == (6,)
+connection.close()
+
+prospecting_pressure = Job(
+    id="prospecting-pressure",
+    emails=[f"person-{index}@prospecting-pressure.test" for index in range(8)],
+    worker_count=8,
+    execution_target="profile-test",
+)
+store.add(prospecting_pressure)
+connection = store._connect()
+connection.execute(
+    "INSERT INTO prospecting_runs(verification_job_id) VALUES (?)", (prospecting_pressure.id,)
+)
+connection.close()
+pressure_lease = store.claim_remote_lease("prospecting-b", "profile-test", shard_size=25)
+assert pressure_lease is not None and len(pressure_lease.pending_indices) == 8
+store.upsert_results(prospecting_pressure.id, [{
+    "email": prospecting_pressure.emails[index], "original_index": index,
+    "progress_state": "completed", "smtp_result": "421 rate limited",
+} for index in pressure_lease.pending_indices])
+assert store.complete_lease(prospecting_pressure.id, "prospecting-b", pressure_lease.lease_id or "")
+prospecting_after_pressure = Job(
+    id="prospecting-after-pressure",
+    emails=[f"retry-{index}@prospecting-pressure.test" for index in range(8)],
+    worker_count=8,
+    execution_target="profile-test",
+)
+store.add(prospecting_after_pressure)
+connection = store._connect()
+connection.execute(
+    "INSERT INTO prospecting_runs(verification_job_id) VALUES (?)", (prospecting_after_pressure.id,)
+)
+connection.execute(
+    "UPDATE scheduler_domain_profiles SET cooldown_until=? "
+    "WHERE scheduler_key='domain:prospecting-pressure.test'",
+    ((utc_now() - timedelta(seconds=1)).isoformat(),),
+)
+connection.close()
+after_pressure_lease = store.claim_remote_lease("prospecting-c", "profile-test", shard_size=25)
+assert after_pressure_lease is not None and len(after_pressure_lease.pending_indices) == 2
+assert store.abandon_lease(
+    prospecting_after_pressure.id, "prospecting-c", after_pressure_lease.lease_id or ""
+)
+object.__setattr__(settings, "prospecting_scheduler_initial_domain_concurrency", previous_prospecting_initial)
+object.__setattr__(settings, "prospecting_scheduler_successes_per_step", previous_prospecting_step)
+object.__setattr__(settings, "prospecting_scheduler_step_size", previous_prospecting_size)
+
 # A completed verification teaches later scheduling to use the actual shared MX.
 routed = Job(
     id="routed-domain", emails=["first@tenant-one.test"], worker_count=1,
