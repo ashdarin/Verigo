@@ -289,9 +289,10 @@ def submit_routed_job(
             immediate_results_by_target=immediate_results,
         )
 
-    if stop_on_deliverable and len(partitions) > 1:
-        # This mode must stop globally after the first deliverable result, which
-        # cannot be preserved across concurrent remote child jobs.
+    if stop_on_deliverable:
+        # This mode must stop globally after the first deliverable result. It
+        # cannot be leased to the sharded remote queue, even if all candidates
+        # happen to route to one remote target; remote claims exclude it.
         return verification_tasks.submit(
             emails,
             worker_count,

@@ -539,6 +539,16 @@ large_stop_on_deliverable = submit_routed_job(
 )
 assert large_stop_on_deliverable.execution_target == "local"
 assert job_store.stop(large_stop_on_deliverable.id).status == "stopped"
+single_target_stop_on_deliverable = submit_routed_job(
+    ["first@gmail.com", "second@gmail.com"],
+    2,
+    owner_id="mixed-owner",
+    owner_email="mixed-owner@example.com",
+    stop_on_deliverable=True,
+    job_id="singlestopdeliver01",
+)
+assert single_target_stop_on_deliverable.execution_target == "local"
+assert job_store.stop(single_target_stop_on_deliverable.id).status == "stopped"
 yahoo_mixed_parent = submit_routed_job(
     ["skip@yahoo.com", "first@qq.com", "second@gmail.com", "third@example.com"],
     2,
