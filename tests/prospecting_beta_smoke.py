@@ -94,6 +94,31 @@ object.__setattr__(settings, "name_catalog_path", previous_catalogue_path)
 assert len(derived) == 1_000
 assert {candidate.pattern for candidate in derived[len(ROLE_LOCAL_PARTS):]} == {"first.last"}
 assert {candidate.source for candidate in derived[len(ROLE_LOCAL_PARTS):]} == {"user_selected_pattern"}
+
+# CN uses frequency ordering within each name length, while alternating
+# two-character and three-character full-name shapes exactly.
+with sqlite3.connect(name_catalog) as connection:
+    connection.execute("DROP TABLE name_entries")
+    connection.execute(
+        "CREATE TABLE name_entries (country TEXT, kind TEXT, romanized TEXT, gender TEXT, name_characters INTEGER, weight INTEGER)"
+    )
+    connection.executemany(
+        "INSERT INTO name_entries VALUES (?, ?, ?, ?, ?, ?)",
+        [
+            ("CN", "given", "wei", "U", 1, 100),
+            ("CN", "given", "ming", "U", 1, 90),
+            ("CN", "given", "zihao", "U", 2, 100),
+            ("CN", "given", "yuchen", "U", 2, 90),
+            ("CN", "surname", "wang", "U", 0, 100),
+            ("CN", "surname", "li", "U", 0, 90),
+        ],
+    )
+object.__setattr__(settings, "name_catalog_path", name_catalog)
+cn_ranked = generate_candidates("example.cn", "CN", len(ROLE_LOCAL_PARTS) + 8, requested_pattern="first.last")
+object.__setattr__(settings, "name_catalog_path", previous_catalogue_path)
+assert [item.email.split("@", 1)[0] for item in cn_ranked[len(ROLE_LOCAL_PARTS):]] == [
+    "wei.wang", "zihao.wang", "wei.li", "zihao.li", "ming.wang", "yuchen.wang", "ming.li", "yuchen.li",
+]
 assert infer_email_pattern("example.com", "John", "Smith", "smith.john@example.com") == "last.first"
 try:
     normalize_company_domain("gmail.com")

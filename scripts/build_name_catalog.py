@@ -180,11 +180,12 @@ def open_catalogue(path: Path, replace: bool) -> sqlite3.Connection:
             kind TEXT NOT NULL CHECK(kind IN ('given', 'surname')),
             romanized TEXT NOT NULL,
             gender TEXT,
+            name_characters INTEGER NOT NULL DEFAULT 0,
             weight INTEGER NOT NULL DEFAULT 0,
-            PRIMARY KEY(country, kind, romanized)
+            PRIMARY KEY(country, kind, romanized, name_characters)
         );
         CREATE INDEX IF NOT EXISTS idx_name_entries_lookup
-            ON name_entries(country, kind, weight DESC, romanized);
+            ON name_entries(country, kind, name_characters, weight DESC, romanized);
         CREATE TABLE IF NOT EXISTS catalogue_sources (
             source TEXT PRIMARY KEY,
             imported_at TEXT NOT NULL,
@@ -198,9 +199,9 @@ def open_catalogue(path: Path, replace: bool) -> sqlite3.Connection:
 
 
 UPSERT_NAME = """
-    INSERT INTO name_entries(country, kind, romanized, gender, weight)
-    VALUES (?, ?, ?, ?, ?)
-    ON CONFLICT(country, kind, romanized) DO UPDATE SET
+    INSERT INTO name_entries(country, kind, romanized, gender, name_characters, weight)
+    VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT(country, kind, romanized, name_characters) DO UPDATE SET
         weight = name_entries.weight + excluded.weight,
         gender = CASE
             WHEN name_entries.gender = excluded.gender THEN name_entries.gender
@@ -210,7 +211,7 @@ UPSERT_NAME = """
 """
 
 
-def flush_names(connection: sqlite3.Connection, batch: list[tuple[str, str, str, str, int]]) -> None:
+def flush_names(connection: sqlite3.Connection, batch: list[tuple[str, str, str, str, int, int]]) -> None:
     if batch:
         connection.executemany(UPSERT_NAME, batch)
         batch.clear()
@@ -218,7 +219,7 @@ def flush_names(connection: sqlite3.Connection, batch: list[tuple[str, str, str,
 
 def import_american_ssa(connection: sqlite3.Connection, directory: Path) -> dict[str, int]:
     totals = Counter()
-    batch: list[tuple[str, str, str, str, int]] = []
+    batch: list[tuple[str, str, str, str, int, int]] = []
     for path in sorted(directory.glob("yob*.txt")):
         with path.open("r", encoding="utf-8", newline="") as handle:
             for row in csv.reader(handle):
@@ -236,7 +237,7 @@ def import_american_ssa(connection: sqlite3.Connection, directory: Path) -> dict
                 except ValueError:
                     totals["rejected"] += 1
                     continue
-                batch.append(("US", "given", normalized, sex, weight))
+                batch.append(("US", "given", normalized, sex, 0, weight))
                 totals["accepted"] += 1
                 if len(batch) >= 5_000:
                     flush_names(connection, batch)
@@ -269,7 +270,7 @@ def import_world_names(
             # those non-Roman rows to be rejected by romanize().
             encoding = "utf-8"
             totals["lossy_utf8_fallback"] += 1
-        batch: list[tuple[str, str, str, str, int]] = []
+        batch: list[tuple[str, str, str, str, int, int]] = []
         with path.open("r", encoding=encoding, errors="replace", newline="") as handle:
             for row in csv.reader(handle):
                 if max_rows_per_file and totals["seen"] >= max_rows_per_file:
@@ -287,8 +288,8 @@ def import_world_names(
                     continue
                 normalized_gender = gender.upper() if gender.upper() in {"M", "F"} else "U"
                 batch.extend((
-                    (country, "given", normalized_given, normalized_gender, 1),
-                    (country, "surname", normalized_surname, "U", 1),
+                    (country, "given", normalized_given, normalized_gender, 0, 1),
+                    (country, "surname", normalized_surname, "U", 0, 1),
                 ))
                 totals["accepted_rows"] += 1
                 if len(batch) >= 5_000:
@@ -301,7 +302,7 @@ def import_world_names(
 def import_chinese_name_corpus(connection: sqlite3.Connection, source: Path) -> dict[str, int]:
     """Build a clean pinyin CN dictionary from actual Chinese full names only."""
     totals = Counter()
-    batch: list[tuple[str, str, str, str, int]] = []
+    batch: list[tuple[str, str, str, str, int, int]] = []
     with source.open("r", encoding="utf-8-sig", errors="replace") as handle:
         for line in handle:
             totals["seen"] += 1
@@ -323,8 +324,10 @@ def import_chinese_name_corpus(connection: sqlite3.Connection, source: Path) -> 
                 totals["rejected"] += 1
                 continue
             batch.extend((
-                ("CN", "given", romanized_given, "U", 1),
-                ("CN", "surname", romanized_surname, "U", 1),
+                # Preserve the original Han-character count. Pinyin length is
+                # not a proxy: a one-character name can have many letters.
+                ("CN", "given", romanized_given, "U", len(given), 1),
+                ("CN", "surname", romanized_surname, "U", 0, 1),
             ))
             totals["accepted"] += 1
             if len(batch) >= 5_000:
