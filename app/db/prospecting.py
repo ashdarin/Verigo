@@ -126,6 +126,17 @@ class ProspectingStore:
                 connection.execute("CREATE INDEX IF NOT EXISTS idx_prospecting_saved_contacts_owner ON prospecting_saved_contacts(owner_id, saved_at DESC)")
                 connection.execute("CREATE INDEX IF NOT EXISTS idx_prospecting_saved_contacts_owner_domain ON prospecting_saved_contacts(owner_id, domain, saved_at DESC)")
                 connection.execute("""
+                    CREATE TABLE IF NOT EXISTS prospecting_companies (
+                        id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, import_id TEXT NOT NULL,
+                        name TEXT NOT NULL, domain TEXT, country TEXT, industry TEXT,
+                        source_row INTEGER NOT NULL, selected INTEGER NOT NULL DEFAULT 0,
+                        discovery_run_id TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                        UNIQUE(owner_id, import_id, name, domain)
+                    )
+                """)
+                connection.execute("CREATE INDEX IF NOT EXISTS idx_prospecting_companies_owner ON prospecting_companies(owner_id, created_at DESC)")
+                connection.execute("CREATE INDEX IF NOT EXISTS idx_prospecting_companies_owner_import ON prospecting_companies(owner_id, import_id, id)")
+                connection.execute("""
                     CREATE TABLE IF NOT EXISTS prospecting_domain_protection (
                         domain TEXT PRIMARY KEY, pressure_events INTEGER NOT NULL DEFAULT 0,
                         strong_events INTEGER NOT NULL DEFAULT 0, cooldown_until TEXT,
@@ -654,6 +665,116 @@ class ProspectingStore:
             return int(connection.execute(
                 "SELECT COUNT(*) FROM prospecting_saved_contacts WHERE owner_id=?", (owner_id,)
             ).fetchone()[0])
+
+    def import_companies(self, owner_id: str, companies: Iterable[Any]) -> tuple[str, int]:
+        """Store a user-provided company source list for review before discovery."""
+        self.initialize()
+        import_id = uuid.uuid4().hex[:12]
+        now = utc_now().isoformat()
+        rows = [
+            (uuid.uuid4().hex[:12], owner_id, import_id, item.name, item.domain, item.country,
+             item.industry, item.source_row, now, now)
+            for item in companies
+        ]
+        if not rows:
+            return import_id, 0
+        with closing(self._connect()) as connection:
+            connection.executemany("""
+                INSERT INTO prospecting_companies(
+                    id, owner_id, import_id, name, domain, country, industry, source_row,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, rows)
+        return import_id, len(rows)
+
+    def company_page(
+        self, owner_id: str, *, import_id: str | None = None, search: str = "",
+        domain_state: str = "all", offset: int = 0, limit: int = 50,
+    ) -> tuple[int, list[dict[str, Any]]]:
+        self.initialize()
+        clauses = ["owner_id=?"]
+        parameters: list[Any] = [owner_id]
+        if import_id:
+            clauses.append("import_id=?")
+            parameters.append(import_id)
+        if search:
+            clauses.append("(name LIKE ? COLLATE NOCASE OR domain LIKE ? COLLATE NOCASE OR industry LIKE ? COLLATE NOCASE)")
+            parameters.extend([f"%{search}%"] * 3)
+        if domain_state == "ready":
+            clauses.append("domain IS NOT NULL")
+        elif domain_state == "missing":
+            clauses.append("domain IS NULL")
+        where = " AND ".join(clauses)
+        with closing(self._connect()) as connection:
+            total = int(connection.execute(
+                f"SELECT COUNT(*) FROM prospecting_companies WHERE {where}", parameters
+            ).fetchone()[0])
+            rows = connection.execute(f"""
+                SELECT id, import_id, name, domain, country, industry, source_row, selected,
+                       discovery_run_id, created_at, updated_at
+                FROM prospecting_companies WHERE {where}
+                ORDER BY selected DESC, domain IS NOT NULL DESC, name COLLATE NOCASE ASC
+                LIMIT ? OFFSET ?
+            """, [*parameters, limit, offset]).fetchall()
+        return total, [self._company_from_row(row) for row in rows]
+
+    @staticmethod
+    def _company_from_row(row: tuple[Any, ...]) -> dict[str, Any]:
+        return {
+            "id": row[0], "import_id": row[1], "name": row[2], "domain": row[3],
+            "country": row[4], "industry": row[5], "source_row": int(row[6]),
+            "selected": bool(row[7]), "discovery_run_id": row[8],
+            "created_at": row[9], "updated_at": row[10],
+        }
+
+    def update_company(
+        self, owner_id: str, company_id: str, *, domain: str | None,
+        country: str | None, selected: bool | None,
+    ) -> dict[str, Any] | None:
+        self.initialize()
+        assignments: list[str] = ["updated_at=?"]
+        parameters: list[Any] = [utc_now().isoformat()]
+        if domain is not None:
+            assignments.append("domain=?")
+            parameters.append(domain)
+        if country is not None:
+            assignments.append("country=?")
+            parameters.append(country)
+        if selected is not None:
+            assignments.append("selected=?")
+            parameters.append(int(selected))
+        with closing(self._connect()) as connection:
+            connection.execute(
+                f"UPDATE prospecting_companies SET {', '.join(assignments)} WHERE id=? AND owner_id=?",
+                [*parameters, company_id, owner_id],
+            )
+            row = connection.execute("""
+                SELECT id, import_id, name, domain, country, industry, source_row, selected,
+                       discovery_run_id, created_at, updated_at
+                FROM prospecting_companies WHERE id=? AND owner_id=?
+            """, (company_id, owner_id)).fetchone()
+        return self._company_from_row(row) if row else None
+
+    def selected_companies(self, owner_id: str, company_ids: list[str]) -> list[dict[str, Any]]:
+        self.initialize()
+        if not company_ids:
+            return []
+        placeholders = ", ".join("?" for _ in company_ids)
+        with closing(self._connect()) as connection:
+            rows = connection.execute(f"""
+                SELECT id, import_id, name, domain, country, industry, source_row, selected,
+                       discovery_run_id, created_at, updated_at
+                FROM prospecting_companies WHERE owner_id=? AND id IN ({placeholders})
+            """, [owner_id, *company_ids]).fetchall()
+        return [self._company_from_row(row) for row in rows]
+
+    def attach_company_run(self, owner_id: str, company_id: str, run_id: str) -> None:
+        self.initialize()
+        with closing(self._connect()) as connection:
+            connection.execute("""
+                UPDATE prospecting_companies SET discovery_run_id=?, selected=0, updated_at=?
+                WHERE id=? AND owner_id=?
+            """, (run_id, utc_now().isoformat(), company_id, owner_id))
 
     def record_confirmed_patterns(self, run: ProspectingRun, results: list[dict[str, Any]]) -> bool:
         """Record only non-catch-all personal confirmations, exactly once per run."""

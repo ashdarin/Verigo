@@ -169,6 +169,39 @@ class ProspectingContactUpdateRequest(BaseModel):
         return tags
 
 
+class ProspectingCompanyImportResponse(BaseModel):
+    import_id: str
+    imported: int
+
+
+class ProspectingCompanyPageResponse(BaseModel):
+    total: int
+    offset: int
+    limit: int
+    items: list[dict[str, Any]]
+
+
+class ProspectingCompanyUpdateRequest(BaseModel):
+    domain: str | None = Field(default=None, max_length=253)
+    country: str | None = Field(default=None, max_length=8)
+    selected: bool | None = None
+
+    @field_validator("country")
+    @classmethod
+    def check_country(cls, value: str | None) -> str | None:
+        return normalize_country(value) if value and value.strip() else None
+
+
+class ProspectingCompanyDiscoverRequest(BaseModel):
+    company_ids: list[str] = Field(min_length=1, max_length=25)
+    country: str
+
+    @field_validator("country")
+    @classmethod
+    def check_country(cls, value: str) -> str:
+        return normalize_country(value)
+
+
 class PaymentOrderRequest(BaseModel):
     packages: int = Field(ge=1, le=1000)
 

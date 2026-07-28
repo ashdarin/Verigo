@@ -240,4 +240,30 @@ with TestClient(app) as client:
     assert normalized_550["smtp_code"] == "550"
     assert normalized_550["smtp_raw_result"] == "550 recipient verification is not permitted"
 
+    company_file = "Company Name,Website,Country,Industry\nAcme GmbH,https://www.acme.example,DE,Industrial\nNo Site,,DE,Industrial\n"
+    imported_companies = client.post(
+        "/api/prospecting-beta/companies/import",
+        files={"file": ("companies.csv", company_file.encode(), "text/csv")},
+    )
+    assert imported_companies.status_code == 200, imported_companies.text
+    assert imported_companies.json()["imported"] == 2
+    companies = client.get("/api/prospecting-beta/companies?domain_state=ready")
+    assert companies.status_code == 200, companies.text
+    assert companies.json()["total"] == 1
+    company = companies.json()["items"][0]
+    selected_company = client.patch(
+        f"/api/prospecting-beta/companies/{company['id']}", json={"selected": True}
+    )
+    assert selected_company.status_code == 200, selected_company.text
+    discovered_company = client.post("/api/prospecting-beta/companies/discover", json={
+        "company_ids": [company["id"]], "country": "DE",
+    })
+    assert discovered_company.status_code == 202, discovered_company.text
+    assert len(discovered_company.json()["runs"]) == 1
+    company_run = discovered_company.json()["runs"][0]
+    company_stored_run = prospecting_store.get(company_run["run_id"], stored_run.owner_id)
+    assert company_stored_run is not None
+    company_job = job_store.get(company_stored_run.verification_job_id)
+    assert company_job is not None and len(company_job.emails) == 1
+
 print("prospecting beta smoke: ok")

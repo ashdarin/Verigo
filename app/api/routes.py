@@ -28,6 +28,10 @@ from app.api.schemas import (
     ProspectingRunResponse,
     ProspectingResultsResponse,
     ProspectingContactUpdateRequest,
+    ProspectingCompanyDiscoverRequest,
+    ProspectingCompanyImportResponse,
+    ProspectingCompanyPageResponse,
+    ProspectingCompanyUpdateRequest,
     SavedProspectingContactsResponse,
     ResultsResponse,
     SingleVerificationRequest,
@@ -35,6 +39,7 @@ from app.api.schemas import (
     WorkerResultsRequest,
 )
 from app.config import settings
+from app.core.company_imports import extract_companies
 from app.core.imports import extract_emails
 from app.core.discovery import candidate_emails
 from app.core.prospecting import (
@@ -870,10 +875,11 @@ def serialize_prospecting_run(run: ProspectingRun) -> ProspectingRunResponse:
     )
 
 
-@router.post("/prospecting-beta/runs", response_model=ProspectingRunResponse, status_code=202)
-def create_prospecting_run(
+def submit_prospecting_run(
     payload: ProspectingRunRequest,
-    user: Annotated[User, Depends(require_prospecting_beta)],
+    user: User,
+    *,
+    business_entry_only: bool = False,
 ) -> ProspectingRunResponse:
     require_verification_submission_open()
     try:
@@ -911,6 +917,8 @@ def create_prospecting_run(
             candidate for candidate in catalogue
             if candidate.email not in issued and candidate.email != known_email
         )[:settings.prospecting_beta_max_candidates]
+        if business_entry_only:
+            candidates = candidates[:1]
         if not candidates:
             raise ValueError("All available unique candidates for this account and domain have already been checked")
     except ValueError as exc:
@@ -937,6 +945,104 @@ def create_prospecting_run(
             job_store.stop(job.id)
         raise
     return serialize_prospecting_run(run)
+
+
+@router.post("/prospecting-beta/runs", response_model=ProspectingRunResponse, status_code=202)
+def create_prospecting_run(
+    payload: ProspectingRunRequest,
+    user: Annotated[User, Depends(require_prospecting_beta)],
+) -> ProspectingRunResponse:
+    return submit_prospecting_run(payload, user)
+
+
+@router.post("/prospecting-beta/companies/import", response_model=ProspectingCompanyImportResponse)
+async def import_prospecting_companies(
+    file: Annotated[UploadFile, File()],
+    user: Annotated[User, Depends(require_prospecting_beta)],
+) -> ProspectingCompanyImportResponse:
+    data = await file.read(settings.max_import_bytes + 1)
+    if len(data) > settings.max_import_bytes:
+        raise HTTPException(status_code=413, detail="Import file is too large")
+    try:
+        companies = extract_companies(
+            file.filename or "companies.csv", data, settings.prospecting_company_import_max_rows
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if not companies:
+        raise HTTPException(status_code=422, detail="No companies were found in this file")
+    import_id, imported = prospecting_store.import_companies(user.id, companies)
+    return ProspectingCompanyImportResponse(import_id=import_id, imported=imported)
+
+
+@router.get("/prospecting-beta/companies", response_model=ProspectingCompanyPageResponse)
+def list_prospecting_companies(
+    user: Annotated[User, Depends(require_prospecting_beta)],
+    import_id: str | None = Query(default=None, min_length=8, max_length=32),
+    search: str = Query(default="", max_length=128),
+    domain_state: str = Query(default="all", pattern="^(all|ready|missing)$"),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=50, ge=1, le=100),
+) -> ProspectingCompanyPageResponse:
+    total, items = prospecting_store.company_page(
+        user.id, import_id=import_id, search=search.strip(), domain_state=domain_state,
+        offset=offset, limit=limit,
+    )
+    return ProspectingCompanyPageResponse(total=total, offset=offset, limit=limit, items=items)
+
+
+@router.patch("/prospecting-beta/companies/{company_id}")
+def update_prospecting_company(
+    company_id: str,
+    payload: ProspectingCompanyUpdateRequest,
+    user: Annotated[User, Depends(require_prospecting_beta)],
+) -> dict[str, Any]:
+    try:
+        domain = normalize_company_domain(payload.domain) if payload.domain and payload.domain.strip() else None
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    company = prospecting_store.update_company(
+        user.id, company_id, domain=domain, country=payload.country, selected=payload.selected,
+    )
+    if company is None:
+        raise HTTPException(status_code=404, detail="Company does not exist")
+    return company
+
+
+@router.post("/prospecting-beta/companies/discover", status_code=202)
+def discover_selected_prospecting_companies(
+    payload: ProspectingCompanyDiscoverRequest,
+    user: Annotated[User, Depends(require_prospecting_beta)],
+) -> dict[str, Any]:
+    require_verification_submission_open()
+    company_ids = list(dict.fromkeys(payload.company_ids))
+    companies = prospecting_store.selected_companies(user.id, company_ids)
+    by_id = {company["id"]: company for company in companies}
+    runs: list[dict[str, str]] = []
+    skipped: list[dict[str, str]] = []
+    for company_id in company_ids:
+        company = by_id.get(company_id)
+        if company is None:
+            skipped.append({"id": company_id, "reason": "Company does not exist"})
+            continue
+        if not company["selected"]:
+            skipped.append({"id": company_id, "reason": "Company is not selected"})
+            continue
+        if not company["domain"]:
+            skipped.append({"id": company_id, "reason": "A company domain is required"})
+            continue
+        country = company["country"] if company["country"] in {"US", "GB", "DE", "FR", "IT", "ES", "CN", "JP", "KR", "IN", "CA", "AU", "NL", "SE", "CH", "BR", "MX", "PL", "TR", "OTHER"} else payload.country
+        try:
+            run = submit_prospecting_run(
+                ProspectingRunRequest(domain=company["domain"], country=country), user,
+                business_entry_only=True,
+            )
+        except HTTPException as exc:
+            skipped.append({"id": company_id, "reason": str(exc.detail)})
+            continue
+        prospecting_store.attach_company_run(user.id, company_id, run.id)
+        runs.append({"company_id": company_id, "run_id": run.id, "domain": run.domain})
+    return {"runs": runs, "skipped": skipped}
 
 
 @router.get("/prospecting-beta/runs/{run_id}/results", response_model=ProspectingResultsResponse)

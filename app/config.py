@@ -115,6 +115,9 @@ class Settings:
     prospecting_beta_catalogue_candidates: int = max(
         100, int(os.getenv("VERIGO_PROSPECTING_BETA_CATALOGUE_CANDIDATES", "10000"))
     )
+    prospecting_company_import_max_rows: int = min(
+        10_000, max(100, int(os.getenv("VERIGO_PROSPECTING_COMPANY_IMPORT_MAX_ROWS", "5000")))
+    )
     # Domain prospecting deliberately backs off when a receiver signals that
     # recipient enumeration or rapid probing is unwelcome.
     prospecting_protection_cooldown_seconds: int = max(

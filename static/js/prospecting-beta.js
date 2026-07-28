@@ -2,6 +2,7 @@ const state = {
   run: null, timer: null, pollGeneration: 0,
   contacts: { domain: null, search: "", offset: 0, limit: 50, domainOffset: 0, domainLimit: 50, payload: null },
   results: { runId: null, offset: 0, limit: 50, payload: null },
+  companies: { search: "", domainState: "all", offset: 0, limit: 50, payload: null },
 };
 const byId = (id) => document.getElementById(id);
 const labels = { queued: "排队中", running: "验证中", completed: "已完成", failed: "失败", stopped: "已停止" };
@@ -95,6 +96,39 @@ async function refreshSavedContacts() {
   if (state.contacts.domain) query.set("domain", state.contacts.domain);
   if (state.contacts.search) query.set("search", state.contacts.search);
   renderSavedContacts(await api(`/api/prospecting-beta/saved-contacts?${query}`));
+}
+
+function renderCompanies(payload) {
+  state.companies.payload = payload;
+  byId("company-count").textContent = `${payload.total} 家`;
+  byId("companies-previous").disabled = payload.offset === 0;
+  byId("companies-next").disabled = payload.offset + payload.items.length >= payload.total;
+  const body = byId("companies-body"); body.replaceChildren();
+  if (!payload.items.length) {
+    const row = document.createElement("tr"); row.className = "empty";
+    const cell = document.createElement("td"); cell.colSpan = 6; cell.textContent = "还没有企业名单，先上传有企业名称和官网/域名列的文件。";
+    row.append(cell); body.append(row); return;
+  }
+  payload.items.forEach((item) => {
+    const row = document.createElement("tr");
+    const selectCell = document.createElement("td"); const check = document.createElement("input"); check.type = "checkbox"; check.checked = item.selected; check.disabled = !item.domain;
+    check.title = item.domain ? "选择此企业" : "请先补充官网域名";
+    check.addEventListener("change", async () => { await api(`/api/prospecting-beta/companies/${item.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ selected: check.checked }) }); refreshCompanies(); });
+    selectCell.append(check); row.append(selectCell);
+    [item.name].forEach((value) => { const cell = document.createElement("td"); cell.textContent = value; row.append(cell); });
+    const domainCell = document.createElement("td"); const domain = document.createElement("input"); domain.className = "company-domain"; domain.value = item.domain || ""; domain.placeholder = "company.com";
+    domain.addEventListener("change", async () => { await api(`/api/prospecting-beta/companies/${item.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ domain: domain.value || null }) }); refreshCompanies(); });
+    domainCell.append(domain); row.append(domainCell);
+    [item.country || "-", item.industry || "-"].forEach((value) => { const cell = document.createElement("td"); cell.textContent = value; row.append(cell); });
+    const status = document.createElement("td"); status.className = "company-status"; status.textContent = item.discovery_run_id ? "已创建发现任务" : item.domain ? "可发现" : "待补官网"; row.append(status);
+    body.append(row);
+  });
+}
+
+async function refreshCompanies() {
+  const query = new URLSearchParams({ offset: String(state.companies.offset), limit: String(state.companies.limit), domain_state: state.companies.domainState });
+  if (state.companies.search) query.set("search", state.companies.search);
+  renderCompanies(await api(`/api/prospecting-beta/companies?${query}`));
 }
 
 function renderResults(payload, status) {
@@ -241,7 +275,26 @@ byId("result-next").addEventListener("click", () => {
   state.results.offset += state.results.limit; refreshRunResults(state.run);
 });
 
+byId("company-import").addEventListener("click", async () => {
+  const file = byId("company-file").files[0]; if (!file) { byId("company-error").textContent = "请选择企业名单文件。"; return; }
+  const button = byId("company-import"); button.disabled = true; byId("company-error").textContent = "";
+  try { const data = new FormData(); data.append("file", file); const result = await api("/api/prospecting-beta/companies/import", { method: "POST", body: data }); byId("company-error").textContent = `已导入 ${result.imported} 家企业，先补齐缺失的官网再勾选。`; state.companies.offset = 0; await refreshCompanies(); }
+  catch (error) { byId("company-error").textContent = error.message; } finally { button.disabled = false; }
+});
+byId("company-discover").addEventListener("click", async () => {
+  const selected = (state.companies.payload?.items || []).filter((item) => item.selected).map((item) => item.id);
+  if (!selected.length) { byId("company-error").textContent = "先在当前页勾选有官网的企业。"; return; }
+  const button = byId("company-discover"); button.disabled = true; byId("company-error").textContent = "";
+  try { const result = await api("/api/prospecting-beta/companies/discover", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ company_ids: selected, country: byId("country").value || "OTHER" }) }); byId("company-error").textContent = `已创建 ${result.runs.length} 个低风险发现任务${result.skipped.length ? `；${result.skipped.length} 家跳过` : ""}。`; await refreshCompanies(); if (result.runs.length) { const runs = await api("/api/prospecting-beta/runs"); if (runs.length) { renderRun(runs[0]); if (["queued", "running"].includes(runs[0].status)) poll(); } } }
+  catch (error) { byId("company-error").textContent = error.message; } finally { button.disabled = false; }
+});
+let companySearchTimer = null;
+byId("company-search").addEventListener("input", (event) => { clearTimeout(companySearchTimer); companySearchTimer = setTimeout(() => { state.companies.search = event.target.value.trim(); state.companies.offset = 0; refreshCompanies(); }, 250); });
+byId("company-domain-state").addEventListener("change", (event) => { state.companies.domainState = event.target.value; state.companies.offset = 0; refreshCompanies(); });
+byId("companies-previous").addEventListener("click", () => { state.companies.offset = Math.max(0, state.companies.offset - state.companies.limit); refreshCompanies(); });
+byId("companies-next").addEventListener("click", () => { const payload = state.companies.payload; if (!payload || payload.offset + payload.items.length >= payload.total) return; state.companies.offset += state.companies.limit; refreshCompanies(); });
+
 (async () => {
-  try { await refreshSavedContacts(); const runs = await api("/api/prospecting-beta/runs"); if (runs.length) { renderRun(runs[0]); if (["queued", "running"].includes(runs[0].status)) poll(); } }
+  try { await Promise.all([refreshSavedContacts(), refreshCompanies()]); const runs = await api("/api/prospecting-beta/runs"); if (runs.length) { renderRun(runs[0]); if (["queued", "running"].includes(runs[0].status)) poll(); } }
   catch (error) { byId("form-error").textContent = error.message; }
 })();
