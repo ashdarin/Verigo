@@ -33,6 +33,7 @@ def run(worker_name: str) -> None:
             worker_name,
             "local",
             shard_size=settings.scheduler_remote_shard_size,
+            prospecting_shard_size=settings.prospecting_scheduler_shard_size,
         )
         if job is None:
             # Discovery needs deterministic, stop-after-match ordering and is

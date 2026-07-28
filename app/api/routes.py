@@ -366,8 +366,10 @@ def require_remote_worker(worker_target: str, token: str | None) -> str:
 
 def require_remote_job(job_id: str, worker_id: str, execution_target: str, lease_id: str | None = None) -> Job:
     job = require_job(job_id, include_results=False)
-    valid_lease = bool(lease_id and job_store.lease_valid(job_id, worker_id, lease_id))
-    if job.execution_target != execution_target or not valid_lease:
+    valid_lease = bool(
+        lease_id and job_store.lease_valid(job_id, worker_id, lease_id, execution_target)
+    )
+    if not valid_lease:
         raise HTTPException(status_code=409, detail="远程验证节点任务租约无效")
     if execution_target == "tencent_qq":
         worker_lifecycle.record_worker_seen(worker_id)
@@ -547,6 +549,7 @@ async def claim_tencent_qq_job(
                 settings.remote_worker_max_emails_per_job,
             ),
             allow_local_fallback=True,
+            prospecting_shard_size=settings.prospecting_scheduler_shard_size,
         )
         if job is not None:
             sync_parent_job(job)
@@ -582,8 +585,6 @@ def heartbeat_tencent_qq_job(
 ) -> dict[str, object]:
     execution_target = require_remote_worker(worker_target, token)
     job = require_job(job_id, include_results=False)
-    if job.execution_target != execution_target:
-        raise HTTPException(status_code=409, detail="不是腾讯 QQ 验证节点任务")
     if job.status == "stopped":
         return {"status": "stopped", "stop_requested": True}
     worker_name = (worker_id or "").strip()
@@ -603,8 +604,6 @@ def report_tencent_qq_results(
 ) -> dict[str, object]:
     execution_target = require_remote_worker(worker_target, token)
     job = require_job(job_id, include_results=False)
-    if job.execution_target != execution_target:
-        raise HTTPException(status_code=409, detail="不是腾讯 QQ 验证节点任务")
     if job.status == "stopped":
         return {"status": "stopped", "stop_requested": True}
     worker_name = (worker_id or "").strip()
@@ -646,8 +645,6 @@ def complete_tencent_qq_job(
 ) -> JobResponse:
     execution_target = require_remote_worker(worker_target, token)
     job = require_job(job_id, include_results=False)
-    if job.execution_target != execution_target:
-        raise HTTPException(status_code=409, detail="不是腾讯 QQ 验证节点任务")
     if job.status == "stopped":
         return serialize_job(job)
     worker_name = (worker_id or "").strip()
@@ -688,8 +685,6 @@ def fail_tencent_qq_job(
 ) -> JobResponse:
     execution_target = require_remote_worker(worker_target, token)
     job = require_job(job_id)
-    if job.execution_target != execution_target:
-        raise HTTPException(status_code=409, detail="不是腾讯 QQ 验证节点任务")
     if job.status == "stopped":
         return serialize_job(job)
     worker_name = (worker_id or "").strip()
@@ -933,6 +928,12 @@ def submit_prospecting_run(
             stop_on_deliverable=False,
             job_id=uuid.uuid4().hex[:12],
         )
+        # Discovery is a shared-pool workload. Its small leases can be picked
+        # up by local, Cloud Shell, and Cloud Studio workers at the same time.
+        if job.execution_target == "local":
+            worker_lifecycle.notify_job_queued()
+            domestic_worker_lifecycle.notify_job_queued()
+            notify_cloudshell_job_queued()
         run = prospecting_store.create_run(
             user.id, domain, payload.country, known_pattern or payload.email_pattern, job.id, candidates, learned_patterns
         )

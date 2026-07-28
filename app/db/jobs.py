@@ -1052,7 +1052,7 @@ class JobStore:
 
     def claim_remote_lease(
         self, worker_id: str, execution_target: str, *, capacity: int = 1, shard_size: int = 100,
-        allow_local_fallback: bool = False,
+        allow_local_fallback: bool = False, prospecting_shard_size: int | None = None,
     ) -> Job | None:
         """Allocate unfinished indexes, prioritizing a remote node's own queue."""
         self.initialize()
@@ -1145,6 +1145,11 @@ class JobStore:
                 candidate_indices: list[int] = []
                 candidate_slots: dict[str, int] = {}
                 candidate_load = dict(active_by_key)
+                candidate_shard_size = (
+                    max(1, prospecting_shard_size)
+                    if candidate_is_prospecting and prospecting_shard_size is not None
+                    else max(1, shard_size)
+                )
                 for index, email in connection.execute("""
                     SELECT original_index, email FROM job_results WHERE job_id=?
                         AND progress_state='pending' ORDER BY original_index
@@ -1162,7 +1167,7 @@ class JobStore:
                     candidate_indices.append(int(index))
                     candidate_slots[mx_key] = candidate_slots.get(mx_key, 0) + 1
                     candidate_load[mx_key] = candidate_load.get(mx_key, 0) + 1
-                    if len(candidate_indices) >= max(1, shard_size):
+                    if len(candidate_indices) >= candidate_shard_size:
                         break
                 if not candidate_indices:
                     continue
@@ -1199,11 +1204,10 @@ class JobStore:
             )
             connection.execute("""
                 UPDATE jobs SET status='running', worker_id=?, started_at=COALESCE(started_at, ?),
-                    heartbeat_at=?, deferred_retry_at=NULL, error=NULL, execution_target=? WHERE id=?
-            """, (worker_id, now.isoformat(), now.isoformat(), execution_target, job.id))
+                    heartbeat_at=?, deferred_retry_at=NULL, error=NULL WHERE id=?
+            """, (worker_id, now.isoformat(), now.isoformat(), job.id))
             connection.commit()
         job.status, job.worker_id, job.heartbeat_at = "running", worker_id, now
-        job.execution_target = execution_target
         job.started_at = job.started_at or now
         job.pending_indices, job.lease_id = indices, lease_id
         return job
@@ -1459,13 +1463,20 @@ class JobStore:
                 mx_key,
             ))
 
-    def lease_valid(self, job_id: str, worker_id: str, lease_id: str) -> bool:
+    def lease_valid(
+        self, job_id: str, worker_id: str, lease_id: str, execution_target: str | None = None,
+    ) -> bool:
         stale = (utc_now() - timedelta(seconds=settings.worker_lease_seconds)).isoformat()
+        target_clause = " AND execution_target=?" if execution_target else ""
+        parameters: tuple[Any, ...] = (lease_id, job_id, worker_id, stale)
+        if execution_target:
+            parameters += (execution_target,)
         with closing(self._connect()) as connection:
-            return connection.execute("""
+            return connection.execute(f"""
                 SELECT 1 FROM job_leases WHERE id=? AND job_id=? AND worker_id=?
                     AND completed_at IS NULL AND heartbeat_at >= ?
-            """, (lease_id, job_id, worker_id, stale)).fetchone() is not None
+                    {target_clause}
+            """, parameters).fetchone() is not None
 
     def lease_accepts_results(
         self, job_id: str, worker_id: str, lease_id: str, indices: list[int]

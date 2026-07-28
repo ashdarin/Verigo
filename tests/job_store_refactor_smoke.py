@@ -152,9 +152,10 @@ shared_lease = store.claim_remote_lease(
     "gmail-worker", "gmail", shard_size=1, allow_local_fallback=True,
 )
 assert shared_lease is not None and shared_lease.id == shared_pool.id
-assert shared_lease.execution_target == "gmail"
-assert store.get(shared_pool.id).execution_target == "gmail"
+assert shared_lease.execution_target == "local"
+assert store.get(shared_pool.id).execution_target == "local"
 assert store.abandon_lease(shared_pool.id, "gmail-worker", shared_lease.lease_id or "")
+assert store.stop(shared_pool.id) is not None
 
 # Provider/domain capacity is global. Adding a node must not multiply the
 # configured Gmail or Microsoft concurrency budget.
@@ -317,6 +318,43 @@ assert connection.execute(
     "WHERE scheduler_key='domain:prospecting-fast.test'"
 ).fetchone() == (6,)
 connection.close()
+
+# A single company discovery is shared among idle worker pools. Small leases
+# distribute it across nodes, while the MX scheduler still caps total probes.
+shared_discovery = Job(
+    id="prospecting-shared", emails=[f"person-{index}@prospecting-shared.test" for index in range(8)],
+    worker_count=8, execution_target="local",
+)
+store.add(shared_discovery)
+connection = store._connect()
+connection.execute(
+    "INSERT INTO prospecting_runs(verification_job_id) VALUES (?)", (shared_discovery.id,)
+)
+connection.close()
+local_discovery_lease = store.claim_remote_lease(
+    "local-discovery", "local", shard_size=25, prospecting_shard_size=1,
+)
+gmail_discovery_lease = store.claim_remote_lease(
+    "gmail-discovery", "gmail", shard_size=25, allow_local_fallback=True,
+    prospecting_shard_size=1,
+)
+domestic_discovery_lease = store.claim_remote_lease(
+    "domestic-discovery", "cloudstudio_domestic", shard_size=25, allow_local_fallback=True,
+    prospecting_shard_size=1,
+)
+qq_discovery_lease = store.claim_remote_lease(
+    "qq-discovery", "tencent_qq", shard_size=25, allow_local_fallback=True,
+    prospecting_shard_size=1,
+)
+assert local_discovery_lease is not None and local_discovery_lease.pending_indices == [0]
+assert gmail_discovery_lease is not None and gmail_discovery_lease.pending_indices == [1]
+assert domestic_discovery_lease is not None and domestic_discovery_lease.pending_indices == [2]
+assert qq_discovery_lease is not None and qq_discovery_lease.pending_indices == [3]
+assert store.get(shared_discovery.id).execution_target == "local"
+assert store.abandon_lease(shared_discovery.id, "local-discovery", local_discovery_lease.lease_id or "")
+assert store.abandon_lease(shared_discovery.id, "gmail-discovery", gmail_discovery_lease.lease_id or "")
+assert store.abandon_lease(shared_discovery.id, "domestic-discovery", domestic_discovery_lease.lease_id or "")
+assert store.abandon_lease(shared_discovery.id, "qq-discovery", qq_discovery_lease.lease_id or "")
 
 prospecting_pressure = Job(
     id="prospecting-pressure",

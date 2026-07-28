@@ -59,6 +59,11 @@ class Settings:
     scheduler_remote_shard_size: int = max(
         1, int(os.getenv("VERIGO_SCHEDULER_REMOTE_SHARD_SIZE", "25"))
     )
+    # Small discovery leases let several otherwise idle nodes share one
+    # company domain while the MX scheduler remains the global safety limit.
+    prospecting_scheduler_shard_size: int = max(
+        1, int(os.getenv("VERIGO_PROSPECTING_SCHEDULER_SHARD_SIZE", "1"))
+    )
     scheduler_claim_scan_limit: int = max(
         1, int(os.getenv("VERIGO_SCHEDULER_CLAIM_SCAN_LIMIT", "64"))
     )
