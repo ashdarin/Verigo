@@ -144,7 +144,7 @@ function switchView(view) {
   if (discovery && !state.user) {
     el("auth-dialog").showModal();
     setAuthMode("login");
-    el("auth-error").textContent = "请先登录后使用工作邮箱查找";
+    el("auth-error").textContent = "请先登录后使用企业邮箱查找";
     return;
   }
   state.view = view;

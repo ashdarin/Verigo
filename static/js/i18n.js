@@ -1,6 +1,22 @@
 const VerigoI18n = (() => {
   const english = {
     "单个验证": "Single check", "批量验证": "Bulk check", "查找工作邮箱": "Find work email",
+    "面向销售、招聘与出海团队": "For sales, recruiting, and global teams", "先验证名单，再找到能联系上的企业邮箱。": "Verify your list, then find company emails you can contact.",
+    "Verigo 将邮箱验证、批量清洗和按域名联系人发现放在一条工作流中，帮助你减少退信、保护发信信誉，并更快触达目标企业。": "Verigo brings email verification, list cleaning, and company email finding into one workflow to reduce bounces and reach target companies faster.",
+    "免费验证邮箱": "Verify email free", "查看价格与额度": "View pricing", "单个验证每日免费 20 次": "20 free single checks daily", "注册验证后赠 10 次体验额度": "10 trial credits after verification", "支持 CSV、Excel 与 API": "CSV, Excel, and API supported",
+    "减少无效触达": "Reduce wasted outreach", "在发信、导入 CRM 或联系候选人前，先识别明显不可用的邮箱。": "Identify clearly unusable email addresses before sending, importing to CRM, or contacting candidates.",
+    "直接找到企业邮箱": "Find company emails directly", "输入公司域名，查找用于销售开发、招聘和合作联络的工作邮箱。": "Enter a company domain to find work emails for sales, recruiting, and partnerships.",
+    "按量付费，先免费体验": "Pay as you go, start free", "单个邮箱验证免费；批量验证低至 ¥0.50 / 100 次。": "Single checks are free; bulk verification starts at CNY 0.50 per 100 checks.",
+    "一条可行动的工作流": "One actionable workflow", "从名单质量到目标企业邮箱": "From list quality to target company emails", "选择你当前最需要完成的动作，几分钟内得到可用于下一步决策的结果。": "Choose the job you need now and get results you can act on within minutes.",
+    "验证单个邮箱": "Verify one email", "在回复、邀请或导入 CRM 前，快速判断一个邮箱是否值得继续使用。": "Quickly decide whether an email is worth using before replying, inviting, or importing it to CRM.", "立即验证": "Verify now",
+    "批量清洗名单": "Clean lists in bulk", "导入 CSV 或 Excel，识别明显不可用的地址，让营销和销售名单更干净。": "Import CSV or Excel files to identify clearly unusable addresses and keep sales and marketing lists cleaner.", "批量清洗": "Clean list",
+    "企业邮箱查找": "Company email finder", "输入目标公司域名，找到适合销售开发、招聘和商务合作的工作邮箱。": "Enter a target company domain to find work emails for sales, recruiting, and business partnerships.", "查找企业邮箱": "Find company emails",
+    "为业务动作而设计": "Built for business action", "让下一封邮件、更值得发出去": "Make the next email worth sending", "保护发信信誉": "Protect sender reputation", "在发送前排除明显无效邮箱，减少退信对发件域名和账号信誉的影响。": "Remove clearly invalid emails before sending to reduce bounce damage to your domain and account reputation.",
+    "更快启动企业开发": "Start company outreach faster", "不用先拿到姓名或猜邮箱格式；从目标企业域名开始，直接查找可联系的工作邮箱。": "No need to know a name or guess an email pattern. Start with a company domain and find work emails you can contact.",
+    "适合团队工作流": "Fits team workflows", "支持 Excel、CSV、批量任务和 API，可在 CRM 导入、活动发送或招聘触达前完成检查。": "Excel, CSV, bulk jobs, and API support help you check addresses before CRM imports, campaigns, or recruiting outreach.",
+    "常见问题": "Frequently asked questions", "购买或开始验证前，你需要知道这些": "What to know before buying or verifying", "批量验证怎么收费？": "How is bulk verification priced?", "批量验证按额度计费，当前公开价格为 ¥0.50 / 100 次。单个邮箱验证和企业邮箱查找可免费开始使用。": "Bulk verification uses credits and currently costs CNY 0.50 per 100 checks. Single email verification and company email finding are free to start.",
+    "Catch-all 邮箱是什么意思？": "What is a catch-all email domain?", "Catch-all 是企业邮箱域名的一种设置：例如对方公司启用它后，发往任意前缀的邮件都可能被服务器接收或转发。因此服务器的“接受”响应不能证明某个具体员工邮箱真实存在，建议单独处理。": "A catch-all is a company-domain setting where emails sent to any prefix may be accepted or forwarded. An accepted server response therefore cannot prove that a specific employee mailbox exists, so handle these separately.",
+    "企业邮箱查找和普通验证有什么区别？": "How is company email finding different from verification?", "普通验证检查你手上已有的邮箱。企业邮箱查找从目标公司域名开始，生成并验证常见的工作邮箱格式，帮你找到可用于销售、招聘或商务合作的联系方式。": "Standard verification checks an email address you already have. Company email finding starts with a target domain, generates and checks common work-email formats, and helps you find contacts for sales, recruiting, or partnerships.",
     "运营监控": "Operations", "额度管理": "Credit management", "资金与使用": "Wallet",
     "运行中": "Online", "验证邮箱领取体验额度": "Verify email for trial credits", "登录": "Sign in",
     "绑定邮箱": "Link email", "修改密码": "Change password", "删除账户": "Delete account", "退出登录": "Sign out",
@@ -9,13 +25,13 @@ const VerigoI18n = (() => {
     "选择文件": "Choose file", "验证速度": "Verification speed", "稳定": "Steady", "标准": "Standard", "快速": "Fast", "极速": "Fastest",
     "免费验证": "Free verification", "最近任务": "Recent jobs", "任务工作台": "Job workspace", "等待任务": "Waiting for a job",
     "未开始": "Not started", "排队中": "Queued", "等待验证": "Waiting", "验证中": "Verifying", "未完成": "Not completed", "已完成": "Completed", "失败": "Failed", "已停止": "Stopped",
-    "无限额度": "Unlimited", "开始验证": "Start verification", "工作邮箱查找": "Work email discovery",
+    "无限额度": "Unlimited", "开始验证": "Start verification", "工作邮箱查找": "Work email discovery", "企业邮箱查找": "Company email finder",
     "稳定模式": "Steady mode", "标准模式": "Standard mode", "快速模式": "Fast mode", "极速模式": "Fastest mode",
     "已出结果": "Results ready", "可投递": "Deliverable", "不可投递": "Undeliverable", "待确认": "Pending",
     "全部结果": "All results", "继续未完成验证": "Resume verification", "停止验证": "Stop verification", "下载 CSV": "Download CSV",
     "邮箱": "Email", "结果": "Result", "域名类型": "Domain type", "验证方式": "Method", "服务器响应": "Server response",
     "尚无验证结果": "No verification results yet", "等待验证结果": "Waiting for results", "上一页": "Previous", "下一页": "Next",
-    "按姓名查找工作邮箱": "Find a work email by name", "查找邮箱": "Find emails", "免费验证候选邮箱": "Verify candidates free",
+    "按姓名查找工作邮箱": "Find a work email by name", "找到目标企业的工作邮箱": "Find a work email by name", "查找邮箱": "Find emails", "免费验证候选邮箱": "Verify candidates free",
     "查找结果": "Search results", "等待查找": "Waiting to search", "请输入姓名和公司域名": "Enter a first name, last name, and company domain",
     "候选邮箱": "Candidate emails", "尚无查找结果": "No search results yet", "报告快照": "Report snapshot", "网站运营概览": "Website operations overview",
     "正在加载数据": "Loading data", "最近 14 天": "Last 14 days", "刷新": "Refresh", "独立访客": "Unique visitors", "今日": "Today",
@@ -65,7 +81,7 @@ const VerigoI18n = (() => {
     "没有符合条件的结果": "No results match the current filters", "正在等待首条验证结果": "Waiting for the first verification result", "下载失败": "Download failed", "未验证": "Not verified", "正在生成验证结果": "Generating verification results",
     "验证已停止，已保留当前结果。": "Verification stopped. Current results were kept.", "正在从候选地址中确认结果": "Confirming results from candidate addresses", "已找到": "Found", "等待验证": "Waiting for verification",
     "加载中...": "Loading...", "还没有 API Key。": "No API keys yet.", "撤销": "Revoke", "已复制": "Copied", "尚未使用": "Not used yet",
-    "请先登录管理员账户": "Sign in with an administrator account", "请先登录后使用工作邮箱查找": "Sign in to use work email discovery", "收费批量验证": "Paid bulk verification", "批量验证收件地址": "Verify emails in bulk", "创建账户": "Create account", "例如：生产环境": "e.g. Production",
+    "请先登录管理员账户": "Sign in with an administrator account", "请先登录后使用工作邮箱查找": "Sign in to use work email discovery", "请先登录后使用企业邮箱查找": "Sign in to use company email finder", "收费批量验证": "Paid bulk verification", "批量验证收件地址": "Verify emails in bulk", "创建账户": "Create account", "例如：生产环境": "e.g. Production",
     "腾讯 QQ 验证节点正在启动，请稍候": "Tencent QQ verification node is starting. Please wait.", "腾讯 QQ 验证节点正在重启，请稍候": "Tencent QQ verification node is restarting. Please wait.",
     "腾讯 QQ 验证节点启动超时，请稍后重新提交": "Tencent QQ verification node timed out while starting. Please submit again later.", "腾讯 QQ 验证节点启动失败，请稍后重新提交": "Tencent QQ verification node failed to start. Please submit again later."
   };
@@ -216,9 +232,9 @@ const VerigoI18n = (() => {
 
   function apply() {
     document.documentElement.lang = locale === "en" ? "en" : "zh-CN";
-    document.title = locale === "en" ? "Verigo | Email Verification and Work Email Discovery" : "Verigo | 邮箱验证与工作邮箱查找";
+    document.title = locale === "en" ? "Verigo | Email Verification, List Cleaning & Company Email Finder" : "Verigo | 邮箱验证、名单清洗与企业邮箱查找";
     const description = document.querySelector('meta[name="description"]');
-    if (description) description.content = locale === "en" ? "Verify individual and bulk email addresses, and discover work email candidates." : "Verigo 提供单个邮箱验证、批量邮箱验证与工作邮箱查找，帮助团队清理邮箱名单并降低退信风险。";
+    if (description) description.content = locale === "en" ? "Verify email addresses, clean lists, and find company email addresses." : "Verigo 帮助销售、招聘与出海团队验证邮箱、清洗名单，并查找目标企业的可联系邮箱。";
     const code = document.getElementById("locale-code");
     const toggle = document.getElementById("locale-toggle");
     if (toggle) {
