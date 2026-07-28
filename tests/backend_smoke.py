@@ -1034,6 +1034,10 @@ with TestClient(app) as account:
     assert account.get("/api/auth/me").json()["credits"] == 10
 
     job_store.add(completed_job("ownedjob0001", owner_id=user_id))
+    legacy_jobs = account.get("/api/jobs?limit=20")
+    assert legacy_jobs.status_code == 200
+    assert isinstance(legacy_jobs.json(), list)
+    assert "ownedjob0001" in [job["id"] for job in legacy_jobs.json()]
     jobs = account.get("/api/jobs?offset=0&limit=20")
     assert jobs.status_code == 200
     assert jobs.json()["total"] >= 1
