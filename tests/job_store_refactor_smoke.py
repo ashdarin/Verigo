@@ -290,12 +290,12 @@ connection.close()
 previous_prospecting_initial = settings.prospecting_scheduler_initial_domain_concurrency
 previous_prospecting_step = settings.prospecting_scheduler_successes_per_step
 previous_prospecting_size = settings.prospecting_scheduler_step_size
-object.__setattr__(settings, "prospecting_scheduler_initial_domain_concurrency", 8)
+object.__setattr__(settings, "prospecting_scheduler_initial_domain_concurrency", 16)
 object.__setattr__(settings, "prospecting_scheduler_successes_per_step", 8)
 object.__setattr__(settings, "prospecting_scheduler_step_size", 2)
 prospecting_fast = Job(
     id="prospecting-fast",
-    emails=[f"person-{index}@prospecting-fast.test" for index in range(16)],
+    emails=[f"person-{index}@prospecting-fast.test" for index in range(32)],
     worker_count=8,
     execution_target="profile-test",
 )
@@ -306,7 +306,7 @@ connection.execute(
 )
 connection.close()
 prospecting_lease = store.claim_remote_lease("prospecting-a", "profile-test", shard_size=25)
-assert prospecting_lease is not None and len(prospecting_lease.pending_indices) == 8
+assert prospecting_lease is not None and len(prospecting_lease.pending_indices) == 16
 store.upsert_results(prospecting_fast.id, [{
     "email": prospecting_fast.emails[index], "original_index": index,
     "progress_state": "completed", "checks": {"smtp": True}, "smtp_result": "250 accepted",

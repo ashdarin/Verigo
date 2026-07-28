@@ -74,7 +74,7 @@ class Settings:
     # MX hosts can ramp faster than ordinary verification, while the same
     # receiver-pressure safeguards remain authoritative.
     prospecting_scheduler_initial_domain_concurrency: int = max(
-        1, int(os.getenv("VERIGO_PROSPECTING_SCHEDULER_INITIAL_DOMAIN_CONCURRENCY", "8"))
+        1, int(os.getenv("VERIGO_PROSPECTING_SCHEDULER_INITIAL_DOMAIN_CONCURRENCY", "16"))
     )
     prospecting_scheduler_successes_per_step: int = max(
         1, int(os.getenv("VERIGO_PROSPECTING_SCHEDULER_SUCCESSES_PER_STEP", "8"))
