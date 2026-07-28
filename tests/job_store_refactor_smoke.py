@@ -92,6 +92,7 @@ store.upsert_results(child.id, [{
     "email": "two@example.com", "original_index": 0, "progress_state": "pending",
 }])
 assert store.get(child.id).results[0]["progress_state"] == "completed"
+assert store.stop(child.id) is not None
 
 remote = Job(
     id="remote", emails=["one@a.test", "two@b.test"], worker_count=1,
@@ -121,6 +122,39 @@ third = store.claim_remote_lease("worker-c", "refactor-test", shard_size=1)
 assert third is not None and third.lease_id
 assert store.abandon_lease(remote.id, "worker-c", third.lease_id)
 assert store.get(remote.id).results[0]["progress_state"] == "pending"
+
+fallback = Job(
+    id="remote-fallback", emails=["one@fallback.test"], worker_count=1,
+    execution_target="gmail",
+)
+store.add(fallback)
+connection = store._connect()
+connection.execute(
+    "UPDATE jobs SET created_at=? WHERE id=?",
+    ((utc_now() - timedelta(minutes=10)).isoformat(), fallback.id),
+)
+connection.close()
+assert store.reroute_stale_queued_jobs("gmail", "local", 60, "Remote worker unavailable") == 1
+assert store.get(fallback.id).execution_target == "local"
+assert store.stop(fallback.id) is not None
+
+# A remote node first serves its own target. When that queue is empty, it
+# joins the local pool immediately instead of idling.
+shared_pool = Job(
+    id="shared-pool", emails=["one@shared-pool.test"], worker_count=1,
+    execution_target="local",
+)
+store.add(shared_pool)
+connection = store._connect()
+connection.execute("UPDATE jobs SET created_at=? WHERE id=?", ("1970-01-01T00:00:00+00:00", shared_pool.id))
+connection.close()
+shared_lease = store.claim_remote_lease(
+    "gmail-worker", "gmail", shard_size=1, allow_local_fallback=True,
+)
+assert shared_lease is not None and shared_lease.id == shared_pool.id
+assert shared_lease.execution_target == "gmail"
+assert store.get(shared_pool.id).execution_target == "gmail"
+assert store.abandon_lease(shared_pool.id, "gmail-worker", shared_lease.lease_id or "")
 
 # Provider/domain capacity is global. Adding a node must not multiply the
 # configured Gmail or Microsoft concurrency budget.

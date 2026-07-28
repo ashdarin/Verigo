@@ -6,7 +6,8 @@ import threading
 import time
 
 from app.core.cloudshell_lifecycle import GMAIL_TARGET, start_cloudshell_lifecycles, stop_cloudshell_lifecycles
-from app.core.worker_lifecycle import worker_lifecycle
+from app.core.worker_lifecycle import DOMESTIC_CLOUDSTUDIO_TARGET, worker_lifecycle
+from app.config import settings
 from app.db.jobs import job_store
 
 
@@ -15,11 +16,6 @@ stop_event = threading.Event()
 
 def main() -> None:
     job_store.initialize()
-    job_store.reroute_queued_jobs(
-        GMAIL_TARGET,
-        "local",
-        "Remote Gmail worker unavailable; reassigned to the local verification queue",
-    )
     worker_lifecycle.start()
     start_cloudshell_lifecycles()
     signal.signal(signal.SIGINT, lambda *_: stop_event.set())
@@ -28,6 +24,16 @@ def main() -> None:
     while not stop_event.wait(1):
         if time.monotonic() >= next_node_reconcile:
             job_store.reconcile_worker_nodes()
+            for target, label in (
+                (GMAIL_TARGET, "Cloud Shell"),
+                (DOMESTIC_CLOUDSTUDIO_TARGET, "Cloud Studio"),
+            ):
+                job_store.reroute_stale_queued_jobs(
+                    target,
+                    "local",
+                    settings.remote_worker_fallback_seconds,
+                    f"{label} worker did not claim this task in time; reassigned to local verification",
+                )
             next_node_reconcile = time.monotonic() + 30
     stop_cloudshell_lifecycles()
     worker_lifecycle.stop()

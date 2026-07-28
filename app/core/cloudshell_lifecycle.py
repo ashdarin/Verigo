@@ -101,7 +101,10 @@ class CloudShellLifecycle:
 
     def _run(self) -> None:
         while not self._stop_event.is_set():
-            if self.configured and job_store.active_target_count(GMAIL_TARGET):
+            if self.configured and (
+                job_store.active_target_count(GMAIL_TARGET)
+                or job_store.active_target_count("local")
+            ):
                 self.notify_job_queued()
             self._wake_event.wait(5)
             self._wake_event.clear()

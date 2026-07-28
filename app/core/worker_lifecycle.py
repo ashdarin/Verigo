@@ -491,6 +491,8 @@ class WorkerLifecycleCoordinator:
         now = now or utc_now()
         self.store.requeue_stale_jobs()
         active = self.store.active_target_count(self.target)
+        if not active and self.target != "local":
+            active = self.store.active_target_count("local")
         runtime = self.store.worker_runtime(self.target)
         online = self._is_online(runtime, now)
 

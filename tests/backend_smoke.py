@@ -184,12 +184,13 @@ assert gmail_target(["person@gmail.com"], "smoke@example.com") == "gmail"
 assert gmail_target(["person@gmail.com"], "other@example.com") == "local"
 assert gmail_target(["person@outlook.com"], "smoke@example.com") == "gmail"
 assert gmail_target(["person@company.de"], "smoke@example.com") == "gmail"
-assert gmail_target(["person@example.com"], "smoke@example.com") == "local"
+assert gmail_target(["person@example.com"], "smoke@example.com") == "gmail"
 assert remote_worker_count("tencent_qq", 8) == 4
 assert remote_worker_count("gmail", 8) == 8
 object.__setattr__(settings, "cloudstudio_domestic_worker_enabled", True)
 assert email_execution_target("person@163.com", "smoke@example.com") == "cloudstudio_domestic"
 assert email_execution_target("person@qq.com", "smoke@example.com") == "tencent_qq"
+assert email_execution_target("sales@company.com", "smoke@example.com") == "gmail"
 object.__setattr__(settings, "cloudstudio_domestic_worker_enabled", False)
 assert is_temporary_smtp_452({"smtp_result": "452 temporary mailbox failure"})
 assert is_temporary_smtp_452({"message": "452 暂时无法确认"})
@@ -547,7 +548,7 @@ yahoo_mixed_parent = submit_routed_job(
 )
 yahoo_mixed_children = job_store.children(yahoo_mixed_parent.id)
 assert {child.execution_target for child in yahoo_mixed_children} == {
-    "unsupported", "local", "tencent_qq"
+    "unsupported", "gmail", "tencent_qq"
 }
 yahoo_child = next(child for child in yahoo_mixed_children if child.execution_target == "unsupported")
 assert yahoo_child.status == "completed"
@@ -567,10 +568,10 @@ mixed_three_way_parent = submit_routed_job(
 mixed_three_way_children = job_store.children(mixed_three_way_parent.id)
 assert mixed_three_way_parent.execution_target == "aggregate"
 assert {child.execution_target for child in mixed_three_way_children} == {
-    "local", "tencent_qq"
+    "gmail", "tencent_qq"
 }
 assert next(child for child in mixed_three_way_children if child.execution_target == "tencent_qq").emails == ["first@qq.com"]
-assert next(child for child in mixed_three_way_children if child.execution_target == "local").emails == [
+assert next(child for child in mixed_three_way_children if child.execution_target == "gmail").emails == [
     "second@gmail.com", "third@example.com", "fourth@googlemail.com"
 ]
 for child in mixed_three_way_children:

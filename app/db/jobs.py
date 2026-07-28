@@ -1052,8 +1052,9 @@ class JobStore:
 
     def claim_remote_lease(
         self, worker_id: str, execution_target: str, *, capacity: int = 1, shard_size: int = 100,
+        allow_local_fallback: bool = False,
     ) -> Job | None:
-        """Allocate only unfinished result indexes, allowing idle nodes to steal work."""
+        """Allocate unfinished indexes, prioritizing a remote node's own queue."""
         self.initialize()
         now = utc_now()
         stale = now - timedelta(seconds=settings.worker_lease_seconds)
@@ -1091,22 +1092,28 @@ class JobStore:
             if load >= max(1, capacity):
                 connection.commit()
                 return None
+            claim_targets = [execution_target]
+            if allow_local_fallback and execution_target != "local":
+                claim_targets.append("local")
+            target_placeholders = ", ".join("?" for _ in claim_targets)
             rows = connection.execute(f"""
                 SELECT {', '.join('j.' + column for column in self._columns)} FROM jobs j
                 LEFT JOIN jobs parent ON parent.id=j.parent_id
                 LEFT JOIN scheduler_owner_turns turn ON turn.target=?
                     AND turn.owner_key=COALESCE(parent.owner_id, j.owner_id, j.id)
-                WHERE j.status IN ('queued', 'running') AND j.execution_target=?
+                WHERE j.status IN ('queued', 'running') AND j.execution_target IN ({target_placeholders})
                     AND j.stop_on_deliverable=0
                     AND (j.deferred_retry_at IS NULL OR j.deferred_retry_at <= ?)
                     AND EXISTS (SELECT 1 FROM job_results r WHERE r.job_id=j.id
                         AND r.progress_state='pending')
-                ORDER BY COALESCE(turn.last_claimed_at, '1970-01-01T00:00:00+00:00'), j.created_at
+                ORDER BY CASE WHEN j.execution_target=? THEN 0 ELSE 1 END,
+                    COALESCE(turn.last_claimed_at, '1970-01-01T00:00:00+00:00'), j.created_at
                 LIMIT ?
             """, (
                 execution_target,
-                execution_target,
+                *claim_targets,
                 now.isoformat(),
+                execution_target,
                 settings.scheduler_claim_scan_limit,
             )).fetchall()
             if not rows:
@@ -1190,10 +1197,11 @@ class JobStore:
             )
             connection.execute("""
                 UPDATE jobs SET status='running', worker_id=?, started_at=COALESCE(started_at, ?),
-                    heartbeat_at=?, deferred_retry_at=NULL, error=NULL WHERE id=?
-            """, (worker_id, now.isoformat(), now.isoformat(), job.id))
+                    heartbeat_at=?, deferred_retry_at=NULL, error=NULL, execution_target=? WHERE id=?
+            """, (worker_id, now.isoformat(), now.isoformat(), execution_target, job.id))
             connection.commit()
         job.status, job.worker_id, job.heartbeat_at = "running", worker_id, now
+        job.execution_target = execution_target
         job.started_at = job.started_at or now
         job.pending_indices, job.lease_id = indices, lease_id
         return job
@@ -1897,6 +1905,29 @@ class JobStore:
                     WHERE execution_target=? AND status='queued'
                     """,
                     (destination_target, message, source_target),
+                )
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
+        return int(cursor.rowcount)
+
+    def reroute_stale_queued_jobs(
+        self, source_target: str, destination_target: str, older_than_seconds: int, message: str,
+    ) -> int:
+        """Fall back only work that a remote target has not claimed in time."""
+        self.initialize()
+        cutoff = utc_now() - timedelta(seconds=max(1, older_than_seconds))
+        with self._lock, closing(self._connect()) as connection:
+            begin_immediate(connection)
+            try:
+                cursor = connection.execute(
+                    """
+                    UPDATE jobs SET execution_target=?, worker_id=NULL, heartbeat_at=NULL,
+                        deferred_retry_at=NULL, error=?
+                    WHERE execution_target=? AND status='queued' AND created_at <= ?
+                    """,
+                    (destination_target, message, source_target, cutoff.isoformat()),
                 )
                 connection.commit()
             except Exception:

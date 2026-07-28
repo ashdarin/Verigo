@@ -49,6 +49,7 @@ class FakeApi:
 class FakeStore:
     def __init__(self) -> None:
         self.active = 0
+        self.local_active = 0
         self.runtime = WorkerRuntime(target=TARGET)
         self.message: str | None = None
         self.failed = 0
@@ -57,6 +58,8 @@ class FakeStore:
         return 0
 
     def active_target_count(self, target: str) -> int:
+        if target == "local":
+            return self.local_active
         assert target == TARGET
         return self.active
 
@@ -163,6 +166,17 @@ assert running_api.activation_calls == 1
 current_time += timedelta(seconds=15)
 running_coordinator.tick(current_time)
 assert running_api.activation_calls == 2
+
+# A remote-only worker must also wake for local backlog, then claim from the
+# shared pool when its dedicated target has no work.
+shared_store = FakeStore()
+shared_store.local_active = 1
+shared_api = FakeApi()
+shared_coordinator = WorkerLifecycleCoordinator(
+    store=shared_store, api=shared_api, config=config
+)
+shared_coordinator.tick(current_time)
+assert shared_api.run_calls == 1
 
 timeout_store = FakeStore()
 timeout_api = FakeApi()

@@ -235,6 +235,9 @@ class Settings:
     cloudstudio_secondary_lifecycle_enabled: bool = env_bool(
         "VERIGO_CLOUDSTUDIO_SECONDARY_LIFECYCLE_ENABLED", False
     )
+    remote_worker_fallback_seconds: int = max(
+        60, int(os.getenv("VERIGO_REMOTE_WORKER_FALLBACK_SECONDS", "180"))
+    )
     cloudstudio_secondary_secret_id: str = os.getenv(
         "VERIGO_CLOUDSTUDIO_SECONDARY_SECRET_ID", ""
     )
