@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-import re
 import sqlite3
 import threading
 import uuid
@@ -13,6 +12,11 @@ from typing import Any, Iterable
 
 from app.config import settings
 from app.core.prospecting import ProspectingCandidate
+from app.core.prospecting_protection import (
+    control_sample_rejected,
+    is_confirmed_smtp_sample,
+    is_suspicious_recipient_rejection,
+)
 from app.db.sqlite import begin_immediate, connect
 
 
@@ -137,6 +141,13 @@ class ProspectingStore:
                 connection.execute("CREATE INDEX IF NOT EXISTS idx_prospecting_companies_owner ON prospecting_companies(owner_id, created_at DESC)")
                 connection.execute("CREATE INDEX IF NOT EXISTS idx_prospecting_companies_owner_import ON prospecting_companies(owner_id, import_id, id)")
                 connection.execute("""
+                    CREATE TABLE IF NOT EXISTS prospecting_control_samples (
+                        owner_id TEXT NOT NULL, domain TEXT NOT NULL, email TEXT NOT NULL,
+                        verified_at TEXT NOT NULL, smtp_detail TEXT NOT NULL,
+                        PRIMARY KEY(owner_id, domain)
+                    )
+                """)
+                connection.execute("""
                     CREATE TABLE IF NOT EXISTS prospecting_domain_protection (
                         domain TEXT PRIMARY KEY, pressure_events INTEGER NOT NULL DEFAULT 0,
                         strong_events INTEGER NOT NULL DEFAULT 0, cooldown_until TEXT,
@@ -150,6 +161,15 @@ class ProspectingStore:
                         FOREIGN KEY(run_id) REFERENCES prospecting_runs(id) ON DELETE CASCADE
                     )
                 """)
+                # A generic 550 is not proof of enumeration. Clear the old
+                # automatic blocks; future stops require a failed control sample.
+                connection.execute("""
+                    UPDATE prospecting_domain_protection
+                    SET stop_until=NULL, cooldown_until=NULL,
+                        last_reason='Legacy generic 550 protection cleared; a control sample is now required',
+                        updated_at=?
+                    WHERE last_reason='The receiving mail system returned repeated non-specific 550 refusals'
+                """, (utc_now().isoformat(),))
             self._initialized = True
 
     @staticmethod
@@ -327,6 +347,7 @@ class ProspectingStore:
         verified_at = utc_now().isoformat()
         rows = []
         event_rows = []
+        control_rows = []
         for result in results:
             if result.get("deliverable") is not True or result.get("domain_type") == "catch-all":
                 continue
@@ -346,6 +367,11 @@ class ProspectingStore:
                 run.owner_id, candidate["email"], run.id, verified_at, method, detail,
                 confidence, candidate["source"],
             ))
+            if is_confirmed_smtp_sample(result):
+                control_rows.append((
+                    run.owner_id, run.domain, candidate["email"], verified_at,
+                    str(result.get("smtp_raw_result") or result.get("smtp_result") or "250")[:500],
+                ))
         if not rows:
             return 0
         with closing(self._connect()) as connection:
@@ -373,67 +399,31 @@ class ProspectingStore:
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(owner_id, email, run_id) DO NOTHING
                 """, event_rows)
+                if control_rows:
+                    connection.executemany("""
+                        INSERT INTO prospecting_control_samples(owner_id, domain, email, verified_at, smtp_detail)
+                        VALUES (?, ?, ?, ?, ?)
+                        ON CONFLICT(owner_id, domain) DO UPDATE SET
+                            email=excluded.email, verified_at=excluded.verified_at,
+                            smtp_detail=excluded.smtp_detail
+                    """, control_rows)
                 connection.execute("COMMIT")
             except Exception:
                 connection.execute("ROLLBACK")
                 raise
         return inserted
 
-    @staticmethod
-    def _protection_signal(result: dict[str, Any]) -> tuple[str, str] | None:
-        """Classify receiver feedback conservatively; mailbox failures never count."""
-        detail = " ".join(
-            str(result.get(field) or "")
-            for field in ("smtp_raw_result", "smtp_result", "message", "failure_reason")
-        ).lower()
-        if not detail or result.get("delivery_block_reason") == "mailbox_full":
+    def control_sample_for_job(self, verification_job_id: str) -> str | None:
+        """Return this user's newest known SMTP-250 sample for a discovery run."""
+        run = self.get_by_job_id(verification_job_id)
+        if run is None:
             return None
-        strong_markers = (
-            "anti-enumerat", "anti enumerat", "enumeration", "directory harvest",
-            "too many invalid recipient", "too many recipients", "recipient verification",
-            "verification not permitted", "verification not allowed",
-        )
-        if any(marker in detail for marker in strong_markers):
-            return "stop", "The receiving mail system rejected further address discovery"
-        pressure_markers = (
-            "rate limit", "rate limited", "throttl", "too many connection", "too many request",
-            "temporarily blocked", "try again later", "server busy",
-        )
-        code = str(result.get("smtp_code") or "")
-        if code.startswith("4") or any(marker in detail for marker in pressure_markers):
-            return "wait", "The receiving mail system requested a cooldown before more checks"
-        return None
-
-    @staticmethod
-    def _generic_550_wall(results: list[dict[str, Any]]) -> int | None:
-        """Identify uniform, non-specific 550 refusals before a large probe is sent."""
-        observed: list[tuple[int, str]] = []
-        for fallback_index, result in enumerate(results):
-            if result.get("progress_state") not in {None, "completed"} or result.get("skipped"):
-                continue
-            detail = str(result.get("smtp_raw_result") or result.get("smtp_result") or result.get("message") or "")
-            code = str(result.get("smtp_code") or "")
-            if not code:
-                match = re.search(r"\b([245]\d{2})\b", detail)
-                code = match.group(1) if match else ""
-            if result.get("deliverable") is True or code != "550":
-                return None
-            normalized = detail.lower().strip()
-            recipient_specific = (
-                "5.1.1", "user unknown", "unknown user", "no such user", "mailbox unavailable",
-                "recipient address rejected", "invalid recipient", "does not exist",
-            )
-            if any(marker in normalized for marker in recipient_specific):
-                return None
-            observed.append((int(result.get("original_index", fallback_index)), normalized))
-        threshold = settings.prospecting_protection_generic_550_threshold
-        if len(observed) < threshold:
-            return None
-        # A receiver returning the same generic refusal to every probe is not
-        # evidence that every generated mailbox is invalid; stop conservatively.
-        if len({detail for _, detail in observed}) == 1:
-            return observed[threshold - 1][0]
-        return None
+        self.initialize()
+        with closing(self._connect()) as connection:
+            row = connection.execute("""
+                SELECT email FROM prospecting_control_samples WHERE owner_id=? AND domain=?
+            """, (run.owner_id, run.domain)).fetchone()
+        return str(row[0]) if row else None
 
     def _protection_status(self, domain: str, now: datetime | None = None) -> dict[str, Any]:
         self.initialize()
@@ -472,26 +462,29 @@ class ProspectingStore:
         return datetime.fromisoformat(str(status["resume_at"]))
 
     def apply_protection_outcomes(
-        self, verification_job_id: str, results: list[dict[str, Any]]
+        self, verification_job_id: str, results: list[dict[str, Any]],
+        control_probes: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any] | None:
-        """Persist new receiver-pressure signals and choose wait versus stop once."""
+        """Use a failed SMTP-250 control sample as the sole hard stop signal."""
         run = self.get_by_job_id(verification_job_id)
         if run is None:
             return None
         if any(result.get("deliverable") is True and result.get("domain_type") != "catch-all" for result in results):
             self.save_confirmed_contacts(run, results)
         signals: list[tuple[int, str, str]] = []
-        for fallback_index, raw in enumerate(results):
-            signal = self._protection_signal(raw)
-            if signal is not None:
-                signals.append((int(raw.get("original_index", fallback_index)), *signal))
-        generic_550_index = self._generic_550_wall(results)
-        if generic_550_index is not None:
-            signals.append((
-                generic_550_index,
-                "stop",
-                "The receiving mail system returned repeated non-specific 550 refusals",
-            ))
+        suspicious = any(is_suspicious_recipient_rejection(result) for result in results)
+        sample = self.control_sample_for_job(verification_job_id)
+        if suspicious and sample:
+            for probe in control_probes or []:
+                if str(probe.get("email") or "").lower() != sample.lower():
+                    continue
+                raw_probe = probe.get("result")
+                if isinstance(raw_probe, dict) and control_sample_rejected(raw_probe):
+                    signals.append((
+                        -1, "stop",
+                        "A previously SMTP-250 control address now returned 550 during recipient discovery",
+                    ))
+                    break
         if not signals:
             return None
 
@@ -514,23 +507,21 @@ class ProspectingStore:
                 if not new_signals:
                     connection.execute("COMMIT")
                     return None
-                pressure_count = sum(signal == "wait" for _, signal, _ in new_signals)
                 strong_count = sum(signal == "stop" for _, signal, _ in new_signals)
-                run_pressure_count = int(connection.execute("""
-                    SELECT COUNT(*) FROM prospecting_protection_events WHERE run_id=? AND signal='wait'
-                """, (run.id,)).fetchone()[0])
-                stop = strong_count > 0 or run_pressure_count >= settings.prospecting_protection_max_pressure_events
+                # SMTP 4xx and generic 550 responses describe an individual
+                # request, not a domain-wide enumeration block. Only a known
+                # SMTP-250 control mailbox changing to 550 can stop discovery.
+                stop = strong_count > 0
                 reason = new_signals[-1][2]
-                cooldown_until = now + timedelta(seconds=settings.prospecting_protection_cooldown_seconds)
                 stop_until = now + timedelta(seconds=settings.prospecting_protection_stop_seconds)
                 connection.execute("""
                     UPDATE prospecting_domain_protection SET
                         pressure_events=pressure_events+?, strong_events=strong_events+?,
-                        cooldown_until=CASE WHEN ? THEN cooldown_until ELSE ? END,
+                        cooldown_until=NULL,
                         stop_until=CASE WHEN ? THEN ? ELSE stop_until END,
                         last_reason=?, updated_at=? WHERE domain=?
                 """, (
-                    pressure_count, strong_count, int(stop), cooldown_until.isoformat(),
+                    0, strong_count,
                     int(stop), stop_until.isoformat(), reason, now.isoformat(), run.domain,
                 ))
                 connection.execute("COMMIT")
@@ -542,10 +533,7 @@ class ProspectingStore:
                 "action": "stop", "resume_at": stop_until, "message":
                 "Discovery stopped automatically because the receiving system rejected further address checks",
             }
-        return {
-            "action": "wait", "resume_at": cooldown_until, "message":
-            "Discovery paused automatically to respect the receiving system's rate limit",
-        }
+        return None
 
     def finalize_run(self, verification_job_id: str, results: list[dict[str, Any]]) -> None:
         run = self.get_by_job_id(verification_job_id)

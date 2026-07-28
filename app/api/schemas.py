@@ -250,6 +250,7 @@ class NotificationListResponse(BaseModel):
 
 class WorkerResultsRequest(BaseModel):
     results: list[dict[str, Any]] = Field(default_factory=list, max_length=5000)
+    control_probes: list[dict[str, Any]] = Field(default_factory=list, max_length=4)
     lease_id: str | None = Field(default=None, min_length=8, max_length=64)
 
 

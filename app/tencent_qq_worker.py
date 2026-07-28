@@ -13,6 +13,7 @@ from typing import Any
 from app.config import settings
 from app.core.legacy import create_verifier
 from app.core.provider_policy import is_qq_email
+from app.core.prospecting_protection import is_suspicious_recipient_rejection
 from app.core.result_retry import (
     is_retryable_smtp_result,
     is_smtp_greylisted,
@@ -104,9 +105,13 @@ def report_result(job_id: str, result: dict[str, Any], lease_id: str | None = No
     return request_json(f"/api/workers/{WORKER_TARGET}/jobs/{job_id}/results", payload)
 
 
-def complete_job(job_id: str, lease_id: str | None = None) -> None:
+def complete_job(
+    job_id: str, lease_id: str | None = None, control_probes: list[dict[str, Any]] | None = None,
+) -> None:
     """Complete a lease after every result callback has been durably acknowledged."""
     payload: dict[str, object] = {"results": []}
+    if control_probes:
+        payload["control_probes"] = control_probes
     if lease_id:
         payload["lease_id"] = lease_id
     request_json(f"/api/workers/{WORKER_TARGET}/jobs/{job_id}/complete", payload)
@@ -144,6 +149,7 @@ def _verify_job(job: dict[str, object], control: dict[str, object]) -> None:
     worker_count = max(1, min(int(job.get("worker_count", 1)), remote_limit))
     if any(is_qq_email(email) for email in emails):
         worker_count = 1
+    completed_results: list[dict[str, Any]] = []
     def on_result(raw_result: dict[str, Any]) -> None:
         if stopped(job_id, control):
             return
@@ -151,6 +157,7 @@ def _verify_job(job: dict[str, object], control: dict[str, object]) -> None:
         relative_index = int(result.get("original_index", 0))
         if 0 <= relative_index < len(original_indices):
             result["original_index"] = original_indices[relative_index]
+        completed_results.append(dict(result))
         needs_retry = (
             is_retryable_smtp_result(result)
             and not is_smtp_greylisted(result)
@@ -183,6 +190,7 @@ def _verify_job(job: dict[str, object], control: dict[str, object]) -> None:
                 continue
             result = dict(batch[0])
             result["original_index"] = original_indices[index]
+            completed_results.append(dict(result))
             response = report_result(job_id, result, lease_id)
             control["stopped"] = bool(response.get("stop_requested"))
             if control["stopped"]:
@@ -205,7 +213,14 @@ def _verify_job(job: dict[str, object], control: dict[str, object]) -> None:
         if stopped(job_id, control):
             return
     if not stopped(job_id, control):
-        complete_job(job_id, lease_id)
+        control_probes: list[dict[str, Any]] = []
+        control_email = str(job.get("control_probe_email") or "")
+        if control_email and any(is_suspicious_recipient_rejection(item) for item in completed_results):
+            verifier = create_verifier(1)
+            probe = verifier.verify_batch_distributed([control_email], num_processes=1)
+            if probe:
+                control_probes.append({"email": control_email, "result": dict(probe[0])})
+        complete_job(job_id, lease_id, control_probes)
 
 
 def verify_job(job: dict[str, object]) -> None:

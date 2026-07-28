@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo
 from app.config import settings
 from app.core.legacy import create_verifier
 from app.core.provider_policy import YAHOO_UNSUPPORTED_MESSAGE, is_yahoo_email
+from app.core.prospecting_protection import is_suspicious_recipient_rejection
 from app.core.result_retry import (
     is_recipient_mailbox_full,
     is_smtp_greylisted,
@@ -734,11 +735,29 @@ def requeue_recent_single_temporary_jobs() -> int:
     return repaired
 
 
-def apply_prospecting_receiver_protection(job: Job) -> Job | None:
+def _verify_prospecting_control_sample(job: Job, results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Recheck a known SMTP-250 address only after a generic 550 appears."""
+    if not any(is_suspicious_recipient_rejection(result) for result in results):
+        return []
+    from app.db.prospecting import prospecting_store
+
+    control_email = prospecting_store.control_sample_for_job(job.id)
+    if not control_email or control_email.lower() in {email.lower() for email in job.emails}:
+        return []
+    verifier = create_verifier(1)
+    batch = verifier.verify_batch_distributed([control_email], num_processes=1)
+    if not batch:
+        return []
+    return [{"email": control_email, "result": normalize_result(dict(batch[0]))}]
+
+
+def apply_prospecting_receiver_protection(
+    job: Job, control_probes: list[dict[str, Any]] | None = None,
+) -> Job | None:
     """Apply the prospecting-only safety policy as receiver feedback arrives."""
     from app.db.prospecting import prospecting_store
 
-    decision = prospecting_store.apply_protection_outcomes(job.id, job.results)
+    decision = prospecting_store.apply_protection_outcomes(job.id, job.results, control_probes)
     if decision is None:
         return None
     if decision["action"] == "stop":
@@ -824,22 +843,11 @@ def run_job(job: Job) -> None:
                         "retry_at": retry_at.isoformat(),
                     })
                 now = time.monotonic()
-                safety_checkpoint = len(by_index) >= settings.prospecting_protection_generic_550_threshold and (
-                    len(by_index) == settings.prospecting_protection_generic_550_threshold
-                    or len(by_index) % 5 == 0
-                )
-                if len(by_index) % 5 == 0 or now - last_persist >= 1.0 or safety_checkpoint:
+                if len(by_index) % 5 == 0 or now - last_persist >= 1.0:
                     job.results = [by_index[index] for index in sorted(by_index)]
                     job_store.persist(job)
                     job_store.heartbeat(job)
                     last_persist = now
-                    if safety_checkpoint:
-                        refreshed = job_store.get(job.id)
-                        if refreshed is not None:
-                            protected = apply_prospecting_receiver_protection(refreshed)
-                            if protected is not None:
-                                job = protected
-                                receiver_protection_applied = True
 
             final_results = verifier.verify_batch_distributed(
                 missing_emails,
@@ -856,6 +864,7 @@ def run_job(job: Job) -> None:
                 by_index[result["original_index"]] = normalize_result(result)
 
         job.results = [by_index[index] for index in sorted(by_index)]
+        control_probes = _verify_prospecting_control_sample(job, job.results)
         if job.lease_id:
             job_store.persist(job)
             if not job_store.complete_lease(
@@ -865,7 +874,7 @@ def run_job(job: Job) -> None:
             refreshed = job_store.get(job.id)
             if refreshed is None or job_store.is_stopped(job.id):
                 return
-            protected = apply_prospecting_receiver_protection(refreshed)
+            protected = apply_prospecting_receiver_protection(refreshed, control_probes)
             if protected is not None:
                 job = protected
                 return
@@ -876,6 +885,11 @@ def run_job(job: Job) -> None:
             job = refreshed
             from app.db.prospecting import prospecting_store
             prospecting_store.finalize_run(job.id, job.results)
+        else:
+            protected = apply_prospecting_receiver_protection(job, control_probes)
+            if protected is not None:
+                job = protected
+                return
         if job.retry_parent_id:
             job.finished_at = utc_now()
             job.error = None

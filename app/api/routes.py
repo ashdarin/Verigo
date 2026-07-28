@@ -563,6 +563,7 @@ async def claim_tencent_qq_job(
                         execution_target, job.worker_count
                     ),
                     "stop_on_deliverable": job.stop_on_deliverable,
+                    "control_probe_email": prospecting_store.control_sample_for_job(job.id),
                 }
             }
         remaining = deadline - time.monotonic()
@@ -614,7 +615,7 @@ def report_tencent_qq_results(
     refreshed = job_store.get(job.id)
     if refreshed is None:
         raise HTTPException(status_code=404, detail="Verification job no longer exists")
-    protected = apply_prospecting_receiver_protection(refreshed)
+    protected = apply_prospecting_receiver_protection(refreshed, payload.control_probes)
     if protected is not None:
         sync_parent_job(protected)
         return {
@@ -657,7 +658,7 @@ def complete_tencent_qq_job(
     refreshed = job_store.get(job.id)
     if refreshed is None:
         raise HTTPException(status_code=404, detail="Verification job no longer exists")
-    protected = apply_prospecting_receiver_protection(refreshed)
+    protected = apply_prospecting_receiver_protection(refreshed, payload.control_probes)
     if protected is not None:
         sync_parent_job(protected)
         return serialize_job(protected)

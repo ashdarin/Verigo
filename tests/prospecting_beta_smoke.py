@@ -129,7 +129,11 @@ with TestClient(app) as client:
         result["valid"] = False
         result["domain_type"] = "normal"
         result["progress_state"] = "completed"
-    job.results[0].update({"deliverable": True, "valid": True})
+    job.results[0].update({
+        "deliverable": True, "valid": True,
+        "smtp_result": "250 accepted", "smtp_raw_result": "250 accepted",
+        "checks": {"smtp": True},
+    })
     job.results[1].update({"deliverable": True, "valid": True, "domain_type": "catch-all"})
     job.results[personal["original_index"]].update({"deliverable": True, "valid": True})
     job.status = "completed"
@@ -161,6 +165,7 @@ with TestClient(app) as client:
     assert {item["email"] for item in saved.json()["items"]} == {
         candidates[0]["email"], personal["email"],
     }
+    assert prospecting_store.control_sample_for_job(run["verification_job_id"]) == candidates[0]["email"]
     first_page = client.get("/api/prospecting-beta/saved-contacts?domain=example.com&limit=1")
     assert first_page.status_code == 200, first_page.text
     assert first_page.json()["total"] == 2
@@ -215,6 +220,17 @@ with TestClient(app) as client:
         "original_index": 0,
         "smtp_result": "550 5.7.1 anti-enumeration policy rejected recipient discovery",
     }])
+    assert protection is None
+    assert prospecting_store.protection_status("example.com")["state"] == "clear"
+    protection = prospecting_store.apply_protection_outcomes(
+        third.json()["verification_job_id"], [{
+            "original_index": 0,
+            "smtp_result": "550 5.7.1 anti-enumeration policy rejected recipient discovery",
+        }], control_probes=[{
+            "email": candidates[0]["email"],
+            "result": {"smtp_result": "550", "smtp_raw_result": "550", "deliverable": False},
+        }],
+    )
     assert protection is not None and protection["action"] == "stop"
     assert prospecting_store.protection_status("example.com")["state"] == "stopped"
     protected = client.post("/api/prospecting-beta/runs", json={
@@ -228,9 +244,11 @@ with TestClient(app) as client:
     assert generic.status_code == 202, generic.text
     generic_policy = prospecting_store.apply_protection_outcomes(
         generic.json()["verification_job_id"],
-        [{"original_index": index, "smtp_result": "550", "deliverable": False} for index in range(6)],
+        [{"original_index": index, "smtp_result": "550", "deliverable": False} for index in range(6)]
+        + [{"original_index": 7, "smtp_result": "450 rate limited", "deliverable": False}],
     )
-    assert generic_policy is not None and generic_policy["action"] == "stop"
+    assert generic_policy is None
+    assert prospecting_store.protection_status("generic550.example")["state"] == "clear"
 
     normalized_550 = normalize_result({
         "smtp_result": "550 recipient verification is not permitted",
