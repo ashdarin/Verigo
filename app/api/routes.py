@@ -896,7 +896,7 @@ def submit_prospecting_run(
         learned_patterns = prospecting_store.domain_patterns(user.id, domain)
         issued = prospecting_store.issued_emails(user.id, domain)
         # Keep enough catalogue entries beyond prior runs that filtering cannot
-        # prematurely exhaust an otherwise still-available naming convention.
+        # prematurely exhaust the selected or verified naming convention.
         catalogue_budget = max(
             settings.prospecting_beta_catalogue_candidates,
             len(issued) + settings.prospecting_beta_max_candidates + 1,
@@ -915,6 +915,11 @@ def submit_prospecting_run(
         if business_entry_only:
             candidates = candidates[:1]
         if not candidates:
+            if known_pattern or payload.email_pattern or learned_patterns:
+                raise ValueError(
+                    "The selected or verified email naming rule has no new name combinations. "
+                    "Import a larger country name catalogue or explicitly choose another rule."
+                )
             raise ValueError("All available unique candidates for this account and domain have already been checked")
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

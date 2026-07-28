@@ -10,6 +10,8 @@ from itertools import zip_longest
 from typing import Iterable
 from urllib.parse import urlsplit
 
+from app.core.name_catalog import country_pairs
+
 
 DOMAIN = re.compile(
     r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$"
@@ -281,7 +283,7 @@ def infer_email_pattern(domain: str, first_name: str, last_name: str, email: str
     raise ValueError("The known contact does not match a supported email naming rule")
 
 
-def _ranked_name_pairs(domain: str, country: str) -> list[tuple[str, str]]:
+def _legacy_ranked_name_pairs(domain: str, country: str) -> list[tuple[str, str]]:
     profile = COUNTRY_PROFILES[country]
     name_groups = [(profile.given_names, profile.surnames)]
     if profile.compound_given_names:
@@ -307,6 +309,15 @@ def _ranked_name_pairs(domain: str, country: str) -> list[tuple[str, str]]:
     return [pair for batch in zip_longest(*ranked_groups) for pair in batch if pair is not None]
 
 
+def _ranked_name_pairs(domain: str, country: str) -> tuple[Iterable[tuple[str, str]], str]:
+    """Prefer the derived dictionary, retaining legacy compound-name coverage."""
+    profile = COUNTRY_PROFILES[country]
+    pairs, source = country_pairs(domain, country, profile.given_names, profile.surnames)
+    if source == "derived_name_catalogue":
+        return pairs, f"country_name_catalogue:{country}:derived"
+    return _legacy_ranked_name_pairs(domain, country), f"country_name_catalogue:{country}:legacy"
+
+
 def generate_candidates(
     domain: str,
     country: str,
@@ -325,11 +336,14 @@ def generate_candidates(
         pattern for pattern in learned_patterns
         if pattern in SUPPORTED_PERSON_PATTERNS and pattern != selected_pattern
     ]
-    personal_patterns = list(dict.fromkeys([
-        *([selected_pattern] if selected_pattern else []), *learned,
-        *DEFAULT_PERSON_PATTERNS, *ALL_PERSON_PATTERNS,
-    ]))
-    name_pairs = _ranked_name_pairs(normalized_domain, normalized_country)
+    # A user-selected or previously verified convention is evidence. Do not
+    # silently spend requests trying a different convention once it is exhausted.
+    if selected_pattern:
+        personal_patterns = [selected_pattern]
+    elif learned:
+        personal_patterns = list(dict.fromkeys(learned))
+    else:
+        personal_patterns = list(dict.fromkeys([*DEFAULT_PERSON_PATTERNS, *ALL_PERSON_PATTERNS]))
     candidates: list[ProspectingCandidate] = []
     seen: set[str] = set()
 
@@ -352,11 +366,15 @@ def generate_candidates(
     # Exhaust the highest-confidence naming rule before trying a fallback rule.
     # This keeps successive runs focused on a known company convention.
     for pattern in personal_patterns:
+        # The derived catalogue is an iterator so that a large name space is
+        # never materialized in memory. Recreate it only when a non-evidenced
+        # fallback convention is intentionally tried.
+        name_pairs, name_source = _ranked_name_pairs(normalized_domain, normalized_country)
         for first, last in name_pairs:
             source = (
                 "user_selected_pattern" if pattern == selected_pattern
                 else "learned_domain_profile" if pattern in learned
-                else f"country_name_catalogue:{normalized_country}"
+                else name_source
             )
             append(_render_personal(pattern, first, last), "personal_candidate", pattern, source)
             if len(candidates) >= max_candidates:

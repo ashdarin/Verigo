@@ -195,6 +195,14 @@ class Settings:
     database_path: Path = Path(
         os.getenv("VERIGO_DATABASE_PATH", str(BASE_DIR / "data" / "verigo.db"))
     )
+    # A separately deployable, read-only dictionary. It deliberately remains
+    # outside the transactional application database.
+    name_catalog_path: Path = Path(
+        os.getenv("VERIGO_NAME_CATALOG_PATH", str(BASE_DIR / "data" / "name_catalog.db"))
+    )
+    name_catalog_pool_size: int = max(
+        100, int(os.getenv("VERIGO_NAME_CATALOG_POOL_SIZE", "10000"))
+    )
     smtp_limiter_path: Path = Path(
         os.getenv("VERIGO_SMTP_LIMITER_PATH", str(BASE_DIR / "data" / "smtp_limiter.db"))
     )

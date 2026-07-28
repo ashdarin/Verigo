@@ -30,7 +30,7 @@ import sqlite3
 from pathlib import Path
 
 target = Path(os.environ["BACKUP_DIR"])
-for source_name in ("verigo.db", "smtp_limiter.db"):
+for source_name in ("verigo.db", "smtp_limiter.db", "name_catalog.db"):
     source = Path("/opt/verigo/data") / source_name
     if not source.exists():
         continue

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 import sys
 import tempfile
 from pathlib import Path
@@ -73,8 +74,25 @@ assert german_pair_count == 4_800
 after_first_last = generate_candidates(
     "basf.com", "DE", len(ROLE_LOCAL_PARTS) + german_pair_count + 1, requested_pattern="first.last"
 )
-assert {candidate.pattern for candidate in after_first_last[len(ROLE_LOCAL_PARTS):-1]} == {"first.last"}
-assert after_first_last[-1].pattern == "f.last"
+assert {candidate.pattern for candidate in after_first_last[len(ROLE_LOCAL_PARTS):]} == {"first.last"}
+
+# A derived catalogue provides more combinations without materializing them,
+# and an evidence-backed convention must still never fall through to another.
+name_catalog = temp_dir / "name_catalog.db"
+with sqlite3.connect(name_catalog) as connection:
+    connection.execute("CREATE TABLE name_entries (country TEXT, kind TEXT, romanized TEXT, gender TEXT, weight INTEGER)")
+    connection.executemany(
+        "INSERT INTO name_entries VALUES (?, ?, ?, ?, ?)",
+        [("DE", "given", f"given{index}", "U", 1) for index in range(100)]
+        + [("DE", "surname", f"surname{index}", "U", 1) for index in range(100)],
+    )
+previous_catalogue_path = settings.name_catalog_path
+object.__setattr__(settings, "name_catalog_path", name_catalog)
+derived = generate_candidates("basf.com", "DE", 1_000, requested_pattern="first.last")
+object.__setattr__(settings, "name_catalog_path", previous_catalogue_path)
+assert len(derived) == 1_000
+assert {candidate.pattern for candidate in derived[len(ROLE_LOCAL_PARTS):]} == {"first.last"}
+assert {candidate.source for candidate in derived[len(ROLE_LOCAL_PARTS):]} == {"user_selected_pattern"}
 assert infer_email_pattern("example.com", "John", "Smith", "smith.john@example.com") == "last.first"
 try:
     normalize_company_domain("gmail.com")
