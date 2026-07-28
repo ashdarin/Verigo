@@ -14,10 +14,10 @@
   <meta property="og:description" content="验证邮箱地址、批量处理名单，并查找工作邮箱候选地址。">
   <meta property="og:url" content="https://verigo.site/">
   <meta name="twitter:card" content="summary">
-  <script type="application/ld+json">{"@context":"https://schema.org","@type":"WebApplication","name":"Verigo","url":"https://verigo.site/","applicationCategory":"BusinessApplication","operatingSystem":"Web","description":"邮箱验证、批量验证与工作邮箱查找工具。"}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"Organization","name":"Verigo","url":"https://verigo.site/","logo":"https://verigo.site/static/favicon.svg"},{"@type":"WebApplication","name":"Verigo","url":"https://verigo.site/","applicationCategory":"BusinessApplication","operatingSystem":"Web","description":"面向销售、招聘与出海团队的邮箱验证、名单清洗和企业联系人发现工具。","offers":{"@type":"Offer","price":"0.50","priceCurrency":"CNY","description":"100 次批量验证"}},{"@type":"FAQPage","mainEntity":[{"@type":"Question","name":"邮箱验证结果代表什么？","acceptedAnswer":{"@type":"Answer","text":"Verigo 会结合地址格式、域名、MX 与邮件服务器响应给出可投递、不可投递、待确认或 Catch-all 结果；结果不等同于保证送达。"}},{"@type":"Question","name":"企业联系人发现会公开我的结果吗？","acceptedAnswer":{"@type":"Answer","text":"不会。已验证联系人只会在后续用户主动提交同一企业域名的发现任务时按需复用，不提供可浏览的公共邮箱库。"}}]}]}</script>
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" referrerpolicy="no-referrer">
-  <link rel="stylesheet" href="/static/css/app.css?v=cr-pagination-v1">
+  <link rel="stylesheet" href="/static/css/app.css?v=commercial-v1">
 </head>
 <body>
   <header class="topbar">
@@ -29,6 +29,7 @@
       <button class="nav-item active" type="button" data-view="single">单个验证</button>
       <button class="nav-item" type="button" data-view="batch">批量验证</button>
       <button class="nav-item" type="button" data-view="discovery">查找工作邮箱</button>
+      <a class="nav-item nav-link" href="/pricing">价格</a>
       <button id="api-nav" class="nav-item" type="button">Developer API</button>
       <button id="dashboard-nav" class="nav-item hidden" type="button" data-view="dashboard">运营监控</button>
       <button id="admin-credits-nav" class="nav-item hidden" type="button" data-view="admin-credits">额度管理</button>
@@ -51,6 +52,17 @@
       </div>
     </div>
   </header>
+
+  <section class="commercial-hero" aria-labelledby="commercial-hero-title">
+    <div>
+      <p class="eyebrow">面向销售、招聘与出海团队</p>
+      <h1 id="commercial-hero-title">先验证名单，再找到能联系上的企业邮箱。</h1>
+      <p>Verigo 将邮箱验证、批量清洗和按域名联系人发现放在一条工作流中，帮助你减少退信、保护发信信誉，并更快触达目标企业。</p>
+      <div class="hero-actions"><a class="hero-primary" href="#verify-workspace">免费验证邮箱</a><a class="hero-secondary" href="/pricing">查看价格与额度</a></div>
+      <ul class="hero-points"><li>单个验证每日免费 20 次</li><li>注册验证后赠 10 次体验额度</li><li>支持 CSV、Excel 与 API</li></ul>
+    </div>
+    <aside class="hero-proof" aria-label="产品能力概览"><strong>不是公共邮箱库</strong><span>企业联系人仅在用户主动提交同域名需求时按需呈现。</span><hr><strong>结果可复核</strong><span>临时 SMTP 结果会自动安排复核，并精确通知到具体邮箱。</span><hr><strong>按 100 次计费</strong><span>批量验证低至 ¥0.50 / 100 次。</span></aside>
+  </section>
 
   <main id="verify-workspace" class="workspace">
     <aside class="control-panel">
@@ -172,6 +184,24 @@
       </div>
     </section>
   </main>
+
+  <section class="commercial-section" aria-labelledby="solutions-title">
+    <div class="commercial-heading"><p class="eyebrow">一条可行动的工作流</p><h2 id="solutions-title">从名单质量到目标企业联系人</h2><p>根据你的任务选择入口，不把技术结果伪装成绝对送达承诺。</p></div>
+    <div class="solution-grid"><article><span>01</span><h3>验证单个邮箱</h3><p>在回复、邀请或导入 CRM 前快速检查一个地址的可投递信号。</p><a href="#verify-workspace">立即验证</a></article><article><span>02</span><h3>批量清洗名单</h3><p>导入 CSV 或 Excel，区分可投递、不可投递、待确认与 Catch-all 地址。</p><a href="#verify-workspace" data-commercial-view="batch">批量清洗</a></article><article><span>03</span><h3>发现企业联系人</h3><p>按企业域名生成并验证候选邮箱；历史验证事实只在同域名需求下静默复用。</p><a href="#verify-workspace" data-commercial-view="discovery">查找工作邮箱</a></article></div>
+  </section>
+
+  <section class="commercial-section trust-section" aria-labelledby="trust-title">
+    <div class="commercial-heading"><p class="eyebrow">结果边界与数据边界</p><h2 id="trust-title">让团队知道结果能做什么，也知道不能做什么</h2></div>
+    <div class="trust-grid"><article><h3>SMTP 结果不是送达保证</h3><p>收件方策略、灰名单、Catch-all 与账户状态都会变化。Verigo 清楚标示待确认与 Catch-all，不把它们包装成有效邮箱。</p></article><article><h3>发现结果不公开售卖</h3><p>用户私有任务、标签和来源不对其他用户展示；平台验证事实仅服务于后续主动提交的同域名发现任务。</p></article><article><h3>合法使用是前提</h3><p>产品用于名单维护和合规业务联络。请只处理有合法联系依据的数据，并持续管理退订与发信信誉。</p></article></div>
+  </section>
+
+  <section class="commercial-section faq-section" aria-labelledby="faq-title">
+    <div class="commercial-heading"><p class="eyebrow">常见问题</p><h2 id="faq-title">购买或开始验证前，你需要知道这些</h2></div>
+    <details><summary>批量验证怎么收费？</summary><p>批量验证按额度计费，当前公开基准为 ¥0.50 / 100 次；单个验证与工作邮箱候选验证提供受控免费额度。具体额度以账户中心显示为准。</p></details>
+    <details><summary>为什么有些结果是“待确认”或 Catch-all？</summary><p>部分邮件服务器不提供明确的收件人判断，或会暂时限流。系统会保留不确定性并安排适当复核，不会将它们直接当成可投递结果。</p></details>
+    <details><summary>企业联系人发现和普通验证有什么区别？</summary><p>普通验证检查你已有的地址。企业联系人发现从企业域名与命名规则生成候选，并验证后展示结果，适合目标企业开发场景。</p></details>
+    <details><summary>可以通过 API 集成吗？</summary><p>可以。已登录账户可在产品中创建 API Key，并通过 API 文档将验证能力接入 CRM、表单或内部流程。</p></details>
+  </section>
 
   <main id="discovery-workspace" class="discovery-workspace hidden">
     <section class="discovery-form-area">
@@ -321,11 +351,12 @@
   </main>
 
   <footer class="site-footer">
-    <span>Verigo</span>
+    <span>Verigo · 邮箱验证与企业联系人发现</span>
     <nav aria-label="网站政策">
       <a href="/email-verification">邮箱验证指南</a>
       <a href="/bulk-email-verification">批量验证</a>
       <a href="/email-list-cleaning">名单清洗</a>
+      <a href="/pricing">价格</a>
       <a href="/api-docs">API 文档</a>
       <a href="/privacy">隐私与数据说明</a>
       <a href="/acceptable-use">使用边界</a>
@@ -449,6 +480,6 @@
   </dialog>
 
   <script src="/static/js/i18n.js?v=locale-v1" defer></script>
-  <script src="/static/js/app.js?v=cr-pagination-v1" defer></script>
+  <script src="/static/js/app.js?v=commercial-v1" defer></script>
 </body>
 </html>

@@ -301,6 +301,10 @@ document.querySelectorAll("[data-view]").forEach((button) => {
   button.addEventListener("click", () => switchView(button.dataset.view));
 });
 
+document.querySelectorAll("[data-commercial-view]").forEach((link) => {
+  link.addEventListener("click", () => switchView(link.dataset.commercialView));
+});
+
 document.querySelectorAll("[data-mode]").forEach((button) => {
   button.addEventListener("click", () => {
     state.mode = button.dataset.mode;

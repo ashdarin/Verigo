@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 import secrets
 
@@ -48,36 +49,51 @@ app.include_router(router)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
+def record_home_visit(client_host: str, user_agent: str, session_id: str) -> None:
+    """Persist analytics after the public page has started responding."""
+    try:
+        metrics_store.record_page_view(client_host, user_agent)
+        metrics_store.record_session_page_view(session_id, user_agent)
+    except Exception:
+        # Statistics must never make the public application unavailable.
+        pass
+
+
 @app.middleware("http")
 async def collect_page_views(request, call_next):
     response = await call_next(request)
-    if request.method == "GET" and request.url.path == "/":
-        try:
-            forwarded_for = request.headers.get("x-forwarded-for", "")
-            client_host = forwarded_for.split(",", 1)[0].strip() or (
-                request.client.host if request.client else "unknown"
-            )
-            metrics_store.record_page_view(client_host, request.headers.get("user-agent", ""))
-            existing_session = request.cookies.get("verigo_analytics")
-            session_id = (
-                existing_session
-                if existing_session and metrics_store.session_is_active(existing_session)
-                else secrets.token_urlsafe(24)
-            )
-            metrics_store.record_session_page_view(session_id, request.headers.get("user-agent", ""))
-            response.set_cookie(
-                key="verigo_analytics", value=session_id, max_age=1800, httponly=True,
-                secure=settings.secure_cookies, samesite="lax", path="/",
-            )
-        except Exception:
-            # Statistics must never make the public application unavailable.
-            pass
+    path = request.url.path
+    if path.startswith("/static/"):
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    elif path in {"/", "/pricing", "/email-verification", "/bulk-email-verification", "/email-list-cleaning"}:
+        response.headers["Cache-Control"] = "public, max-age=300, stale-while-revalidate=86400"
+    elif path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-store"
+    if request.method == "GET" and path == "/":
+        # Do not put an analytics SQLite write on the visitor's critical path.
+        forwarded_for = request.headers.get("x-forwarded-for", "")
+        client_host = forwarded_for.split(",", 1)[0].strip() or (
+            request.client.host if request.client else "unknown"
+        )
+        session_id = request.cookies.get("verigo_analytics") or secrets.token_urlsafe(24)
+        response.set_cookie(
+            key="verigo_analytics", value=session_id, max_age=1800, httponly=True,
+            secure=settings.secure_cookies, samesite="lax", path="/",
+        )
+        asyncio.create_task(asyncio.to_thread(
+            record_home_visit, client_host, request.headers.get("user-agent", ""), session_id,
+        ))
     return response
 
 
 @app.get("/", include_in_schema=False)
 def index() -> FileResponse:
     return FileResponse(STATIC_DIR / "index.html")
+
+
+@app.get("/pricing", include_in_schema=False)
+def pricing() -> FileResponse:
+    return FileResponse(STATIC_DIR / "pricing.html")
 
 
 @app.get("/api-docs", include_in_schema=False)
@@ -104,6 +120,7 @@ def sitemap() -> Response:
     body = """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
 <urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">
   <url><loc>https://verigo.site/</loc></url>
+  <url><loc>https://verigo.site/pricing</loc></url>
   <url><loc>https://verigo.site/privacy</loc></url>
   <url><loc>https://verigo.site/acceptable-use</loc></url>
   <url><loc>https://verigo.site/email-verification</loc></url>
@@ -131,6 +148,11 @@ def prospecting_beta() -> FileResponse:
         BASE_DIR / "private_pages" / "prospecting-beta.html",
         headers={"X-Robots-Tag": "noindex, nofollow, noarchive"},
     )
+
+
+@app.get("/aigc-demo", include_in_schema=False)
+def aigc_demo() -> FileResponse:
+    return FileResponse(STATIC_DIR / "aigc-demo" / "index.html")
 
 
 @app.get("/admin/credits", include_in_schema=False)
