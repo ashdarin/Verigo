@@ -34,6 +34,7 @@ import signal
 import ssl
 import random
 import string
+import secrets
 import urllib.request
 import urllib.error
 import urllib.parse
@@ -752,10 +753,6 @@ class EmailVerifier:
             return domain_type
 
         try:
-            # 生成随机测试邮箱
-            random_prefix = ''.join(random.choices(string.ascii_lowercase + string.digits, k=15))
-            test_email = f"test_random_{random_prefix}@{domain}"
-
             # 🔧 减少日志输出，只在调试时显示
             # print(f"🔍 检测域名 {domain} 是否为catch-all策略...")
 
@@ -770,52 +767,47 @@ class EmailVerifier:
                 set_shared_domain_type(domain, domain_type)
                 return domain_type
 
-            # 使用第一个MX记录进行测试
+            # Use the first MX consistently. A single accepted random address
+            # can be an anti-enumeration response, so catch-all requires three
+            # separate high-entropy probes to be accepted.
             mx_host = mx_records[0]
-
-            # 🔧 优化：快速SMTP测试，只需验证一个随机邮箱返回250即可证明是catch-all
-            try:
-                server = smtplib.SMTP(timeout=5)  # 🔧 优化：减少超时到5秒
-                code, response = server.connect(mx_host, 25)
-                if code != 220:
-                    server.quit()
-                    raise Exception(f"连接失败: {code}")
-
-                # EHLO握手
-                code, response = server.ehlo(SMTP_HELO_HOST)
-                if code != 250:
-                    server.quit()
-                    raise Exception(f"EHLO失败: {code}")
-
-                # MAIL FROM
-                code, response = server.mail(SMTP_MAIL_FROM)
-                if code != 250:
-                    server.quit()
-                    raise Exception(f"MAIL FROM失败: {code}")
-
-                # RCPT TO - 关键测试：随机邮箱返回250就是catch-all
-                code, response = server.rcpt(test_email)
-                server.quit()
-
-                if code == 250:
-                    domain_type = 'catch-all'
-                else:
-                    domain_type = 'normal'
-
-                # 🔧 缓存结果到本地和全局
-                self.domain_type_cache[domain] = {
-                    'type': domain_type,
-                    'checked_at': datetime.now()
-                }
-                set_shared_domain_type(domain, domain_type)
-                return domain_type
-
-            except Exception as e:
+            accepted_probes = 0
+            for _ in range(3):
+                # The address has 128 bits of randomness and uses a fresh SMTP
+                # connection, so a real mailbox collision is not plausible.
+                test_email = f"probe-{secrets.token_hex(16)}@{domain}"
+                server = None
                 try:
-                    server.quit()
-                except:
-                    pass
-                raise e
+                    server = smtplib.SMTP(timeout=5)
+                    code, _ = server.connect(mx_host, 25)
+                    if code != 220:
+                        break
+                    code, _ = server.ehlo(SMTP_HELO_HOST)
+                    if code != 250:
+                        break
+                    code, _ = server.mail(SMTP_MAIL_FROM)
+                    if code != 250:
+                        break
+                    code, _ = server.rcpt(test_email)
+                    if code != 250:
+                        break
+                    accepted_probes += 1
+                except Exception:
+                    break
+                finally:
+                    if server is not None:
+                        try:
+                            server.quit()
+                        except Exception:
+                            pass
+
+            domain_type = 'catch-all' if accepted_probes == 3 else 'normal'
+            self.domain_type_cache[domain] = {
+                'type': domain_type,
+                'checked_at': datetime.now()
+            }
+            set_shared_domain_type(domain, domain_type)
+            return domain_type
 
         except Exception as e:
             # 检测失败时默认为正常域名
@@ -1176,7 +1168,7 @@ class EmailVerifier:
             return result
 
 
-def worker_process(process_id, email_queue, result_queue, progress_queue, shared_domain_cache=None):
+def worker_process(process_id, email_queue, result_queue, progress_queue, shared_domain_cache=None, shared_domain_lock=None):
     """工作进程函数 - 优化版：支持共享域名类型缓存"""
     try:
         # 创建验证器实例
@@ -1199,27 +1191,45 @@ def worker_process(process_id, email_queue, result_queue, progress_queue, shared
                 if datetime.now() - cache_entry['checked_at'] < timedelta(hours=1):
                     return cache_entry['type']
             
-            # 再检查共享缓存
-            if shared_domain_cache and domain in shared_domain_cache:
+            # Only one process probes a newly seen domain. The other workers
+            # reuse its result rather than multiplying a three-probe check by
+            # the job's concurrency.
+            is_probe_owner = False
+            if shared_domain_cache and shared_domain_lock:
                 try:
-                    cache_entry = shared_domain_cache[domain]
-                    if datetime.now() - cache_entry['checked_at'] < timedelta(hours=1):
-                        # 同步到本地缓存
-                        verifier.domain_type_cache[domain] = cache_entry
-                        return cache_entry['type']
-                except:
+                    with shared_domain_lock:
+                        cache_entry = shared_domain_cache.get(domain)
+                        if cache_entry and cache_entry.get('type') != 'probing':
+                            if datetime.now() - cache_entry['checked_at'] < timedelta(hours=1):
+                                verifier.domain_type_cache[domain] = cache_entry
+                                return cache_entry['type']
+                        if not cache_entry or cache_entry.get('type') != 'probing':
+                            shared_domain_cache[domain] = {
+                                'type': 'probing', 'checked_at': datetime.now()
+                            }
+                            is_probe_owner = True
+                except Exception:
                     pass
-            
-            # 调用原始方法
+
+            if shared_domain_cache and not is_probe_owner:
+                # A concurrent worker is running the three probes. Waiting is
+                # bounded; a failed owner falls back to this worker's check.
+                for _ in range(20):
+                    time.sleep(0.25)
+                    try:
+                        cache_entry = shared_domain_cache.get(domain)
+                        if cache_entry and cache_entry.get('type') != 'probing':
+                            verifier.domain_type_cache[domain] = cache_entry
+                            return cache_entry['type']
+                    except Exception:
+                        break
+
             result = original_detect(domain)
-            
-            # 将结果同步到共享缓存
             if shared_domain_cache and domain in verifier.domain_type_cache:
                 try:
                     shared_domain_cache[domain] = verifier.domain_type_cache[domain]
-                except:
+                except Exception:
                     pass
-            
             return result
         
         verifier.detect_catch_all_domain = detect_with_shared_cache
@@ -1879,6 +1889,7 @@ class DistributedEmailVerifier:
         # 🔧 创建共享的域名类型缓存（使用Manager实现跨进程共享）
         manager = Manager()
         shared_domain_cache = manager.dict()
+        shared_domain_lock = manager.RLock()
         
         # 将预检测的结果复制到共享缓存
         for domain, cache_data in verifier_temp.domain_type_cache.items():
@@ -1899,7 +1910,7 @@ class DistributedEmailVerifier:
         processes = []
         for i in range(num_processes):
             p = Process(target=worker_process,
-                       args=(i+1, email_queue, result_queue, progress_queue, shared_domain_cache))
+                       args=(i+1, email_queue, result_queue, progress_queue, shared_domain_cache, shared_domain_lock))
             p.start()
             processes.append(p)
             self.process_stats[i+1] = {'processed': 0, 'status': 'starting', 'current_email': '', 'consumer_fix_count': 0}

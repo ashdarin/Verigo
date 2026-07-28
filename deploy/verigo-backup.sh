@@ -19,6 +19,14 @@ if ! [[ "$keep_days" =~ ^[1-9][0-9]*$ ]]; then
     exit 1
 fi
 
+# Deploys can be frequent. Keep a small number of the newest complete local
+# snapshots as a hard disk-space ceiling, independent of age-based retention.
+keep_count=${VERIGO_BACKUP_KEEP_COUNT:-3}
+if ! [[ "$keep_count" =~ ^[1-9][0-9]*$ ]]; then
+    echo "VERIGO_BACKUP_KEEP_COUNT must be a positive integer" >&2
+    exit 1
+fi
+
 timestamp=$(date -u +%Y%m%dT%H%M%SZ)
 backup_dir="$backup_root/$timestamp"
 umask 077
@@ -82,6 +90,13 @@ fi
 
 find "$backup_root" -mindepth 1 -maxdepth 1 -type d -name '20*' -mtime "+$keep_days" \
     -exec rm -rf -- {} +
+
+mapfile -t backup_dirs < <(find "$backup_root" -mindepth 1 -maxdepth 1 -type d -name '20*' -printf '%f\n' | sort -r)
+if (( ${#backup_dirs[@]} > keep_count )); then
+    for expired_dir in "${backup_dirs[@]:keep_count}"; do
+        rm -rf -- "$backup_root/$expired_dir"
+    done
+fi
 
 install -d -m 700 /var/lib/verigo-backup
 date -u +%Y-%m-%dT%H:%M:%SZ > /var/lib/verigo-backup/last-success

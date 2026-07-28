@@ -18,11 +18,44 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 
+from pypinyin import Style, lazy_pinyin
+
 
 MAX_SAMPLE_BYTES = 64 * 1024
 MAX_SAMPLE_ROWS = 200
 VALID_NAME = re.compile(r"^[a-z]{2,40}$")
 ENCODINGS = ("utf-8-sig", "utf-8", "gb18030", "utf-16", "cp932")
+
+# Sort longest-first so compound surnames are never split as one-character names.
+CHINESE_SURNAMES = tuple(sorted((
+    "欧阳", "司马", "上官", "诸葛", "司徒", "夏侯", "东方", "皇甫", "尉迟", "公孙", "慕容", "令狐",
+    "宇文", "长孙", "司空", "东郭", "南宫", "独孤", "西门", "百里", "闻人", "呼延", "羊舌", "微生",
+    "万俟", "澹台", "公冶", "宗政", "濮阳", "淳于", "单于", "太叔", "申屠", "公羊", "赫连", "轩辕",
+    "王", "李", "张", "刘", "陈", "杨", "黄", "赵", "吴", "周", "徐", "孙", "马", "朱", "胡", "郭",
+    "何", "高", "林", "罗", "郑", "梁", "谢", "宋", "唐", "许", "韩", "冯", "邓", "曹", "彭", "曾",
+    "肖", "田", "董", "袁", "潘", "于", "蒋", "蔡", "余", "杜", "叶", "程", "苏", "魏", "吕", "丁",
+    "任", "卢", "姚", "沈", "钟", "姜", "崔", "谭", "陆", "范", "汪", "廖", "石", "金", "韦", "贾",
+    "夏", "付", "方", "邹", "熊", "白", "孟", "秦", "邱", "江", "尹", "薛", "闫", "段", "雷", "侯",
+    "龙", "史", "陶", "黎", "贺", "顾", "毛", "郝", "龚", "邵", "万", "钱", "严", "赖", "覃", "洪",
+    "武", "莫", "孔", "向", "汤", "常", "温", "康", "施", "文", "牛", "樊", "葛", "邢", "安", "齐",
+    "易", "乔", "伍", "庞", "颜", "倪", "庄", "聂", "章", "鲁", "岳", "翟", "殷", "詹", "申", "欧",
+    "耿", "关", "兰", "焦", "俞", "左", "柳", "甘", "祝", "包", "宁", "尚", "符", "舒", "阮", "柯",
+    "纪", "梅", "童", "凌", "毕", "单", "季", "裴", "霍", "涂", "成", "苗", "谷", "盛", "曲", "翁",
+    "冉", "骆", "蓝", "路", "游", "辛", "欧", "管", "柴", "蒙", "鲍", "华", "喻", "祁", "蒲", "房",
+    "屈", "时", "傅", "皮", "卞", "冀", "平", "谈", "宗", "牟", "戴", "原", "乐", "夏", "井", "邬",
+    "花", "缪", "戚", "项", "祝", "卓", "戈", "阳", "郁", "车", "杭", "滕", "皮", "全", "班", "仇",
+), key=len, reverse=True))
+CHINESE_SURNAME_SET = frozenset(CHINESE_SURNAMES)
+
+
+def is_han_name(value: str) -> bool:
+    return bool(value) and all("\u4e00" <= char <= "\u9fff" for char in value)
+
+
+def chinese_pinyin(value: str) -> str | None:
+    if not is_han_name(value):
+        return None
+    return romanize("".join(lazy_pinyin(value, style=Style.NORMAL, errors="")))
 
 
 def romanize(value: str) -> str | None:
@@ -220,6 +253,11 @@ def import_world_names(
     """Import only documented four-column World Name files, one line at a time."""
     results: dict[str, dict[str, int]] = {}
     for country in sorted(countries):
+        if country == "CN":
+            # CN.csv contains people merely attributed to China. It includes
+            # foreign and corrupted values, so it is not a Chinese name source.
+            results[country] = {"skipped_untrusted_country_source": 1}
+            continue
         path = directory / f"{country}.csv"
         if not path.is_file():
             continue
@@ -258,6 +296,41 @@ def import_world_names(
         flush_names(connection, batch)
         results[country] = dict(totals)
     return results
+
+
+def import_chinese_name_corpus(connection: sqlite3.Connection, source: Path) -> dict[str, int]:
+    """Build a clean pinyin CN dictionary from actual Chinese full names only."""
+    totals = Counter()
+    batch: list[tuple[str, str, str, str, int]] = []
+    with source.open("r", encoding="utf-8-sig", errors="replace") as handle:
+        for line in handle:
+            totals["seen"] += 1
+            full_name = line.strip()
+            if not (2 <= len(full_name) <= 4 and is_han_name(full_name)):
+                totals["rejected"] += 1
+                continue
+            surname = next((item for item in CHINESE_SURNAMES if full_name.startswith(item)), None)
+            if surname is None:
+                totals["rejected"] += 1
+                continue
+            given = full_name[len(surname):]
+            if not (1 <= len(given) <= 2 and is_han_name(given)):
+                totals["rejected"] += 1
+                continue
+            romanized_surname = chinese_pinyin(surname)
+            romanized_given = chinese_pinyin(given)
+            if not romanized_surname or not romanized_given:
+                totals["rejected"] += 1
+                continue
+            batch.extend((
+                ("CN", "given", romanized_given, "U", 1),
+                ("CN", "surname", romanized_surname, "U", 1),
+            ))
+            totals["accepted"] += 1
+            if len(batch) >= 5_000:
+                flush_names(connection, batch)
+    flush_names(connection, batch)
+    return dict(totals)
 
 
 def write_report(path: Path, report: dict[str, object]) -> None:
@@ -330,6 +403,12 @@ def main() -> int:
                 countries,
                 args.max_world_rows,
             )
+        if "CN" in countries:
+            chinese_sources = sorted(args.source.glob("Chinese_Names_Corpus*.txt"))
+            if chinese_sources:
+                imports["chinese_name_corpus"] = import_chinese_name_corpus(
+                    connection, chinese_sources[0]
+                )
         connection.commit()
         report["imports"] = imports
         report["catalogue"] = {
