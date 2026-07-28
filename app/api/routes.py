@@ -615,6 +615,10 @@ def report_tencent_qq_results(
     refreshed = job_store.get(job.id)
     if refreshed is None:
         raise HTTPException(status_code=404, detail="Verification job no longer exists")
+    if job_store.reconcile_catch_all_conflicts(job.id):
+        refreshed = job_store.get(job.id)
+        if refreshed is None:
+            raise HTTPException(status_code=404, detail="Verification job no longer exists")
     protected = apply_prospecting_receiver_protection(refreshed, payload.control_probes)
     if protected is not None:
         sync_parent_job(protected)
@@ -651,6 +655,7 @@ def complete_tencent_qq_job(
     worker_name = (worker_id or "").strip()
     job = require_remote_job(job_id, worker_name, execution_target, payload.lease_id)
     merge_worker_results(job, worker_name, payload.lease_id or "", payload.results)
+    job_store.reconcile_catch_all_conflicts(job.id)
     if not payload.lease_id or not job_store.complete_lease(job.id, worker_name, payload.lease_id):
         raise HTTPException(status_code=409, detail="Remote worker lease is no longer active")
     refreshed = job_store.get(job.id)

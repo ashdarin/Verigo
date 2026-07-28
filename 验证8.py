@@ -233,7 +233,9 @@ def load_persistent_cache():
                         if now - checked_at < timedelta(days=DOMAIN_CACHE_TTL_DAYS):
                             _global_domain_type_cache[domain] = {
                                 'type': entry['type'],
-                                'checked_at': checked_at
+                                'checked_at': checked_at,
+                                'probe_count': int(entry.get('probe_count', 0)),
+                                'probe_codes': list(entry.get('probe_codes', [])),
                             }
                     except:
                         pass
@@ -251,28 +253,43 @@ def save_persistent_cache():
             for domain, entry in _global_domain_type_cache.items():
                 data[domain] = {
                     'type': entry['type'],
-                    'checked_at': entry['checked_at'].isoformat()
+                    'checked_at': entry['checked_at'].isoformat(),
+                    'probe_count': int(entry.get('probe_count', 0)),
+                    'probe_codes': list(entry.get('probe_codes', [])),
                 }
             with open(DOMAIN_CACHE_FILE, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
     except Exception as e:
         print(f"⚠️ 保存缓存文件失败: {e}")
 
+def has_catch_all_evidence(cache_entry):
+    """A cached Catch-all verdict is usable only with its full probe record."""
+    if cache_entry.get('type') != 'catch-all':
+        return True
+    codes = cache_entry.get('probe_codes', [])
+    return cache_entry.get('probe_count') == 3 and codes == [250, 250, 250]
+
+
 def get_shared_domain_type(domain):
     """获取共享的域名类型缓存"""
     with _global_domain_type_cache_lock:
         if domain in _global_domain_type_cache:
             cache_entry = _global_domain_type_cache[domain]
-            if datetime.now() - cache_entry['checked_at'] < timedelta(days=DOMAIN_CACHE_TTL_DAYS):
+            if (
+                datetime.now() - cache_entry['checked_at'] < timedelta(days=DOMAIN_CACHE_TTL_DAYS)
+                and has_catch_all_evidence(cache_entry)
+            ):
                 return cache_entry['type']
     return None
 
-def set_shared_domain_type(domain, domain_type):
+def set_shared_domain_type(domain, domain_type, *, probe_codes=None):
     """设置共享的域名类型缓存"""
     with _global_domain_type_cache_lock:
         _global_domain_type_cache[domain] = {
             'type': domain_type,
-            'checked_at': datetime.now()
+            'checked_at': datetime.now(),
+            'probe_count': len(probe_codes or []),
+            'probe_codes': list(probe_codes or []),
         }
 
 # ============================================================================
@@ -719,7 +736,10 @@ class EmailVerifier:
         # 🔧 优先检查本地缓存
         if domain in self.domain_type_cache:
             cache_entry = self.domain_type_cache[domain]
-            if datetime.now() - cache_entry['checked_at'] < timedelta(hours=1):
+            if (
+                datetime.now() - cache_entry['checked_at'] < timedelta(hours=1)
+                and has_catch_all_evidence(cache_entry)
+            ):
                 return cache_entry['type']
 
         # 🔧 检查全局共享缓存（跨进程）
@@ -771,7 +791,7 @@ class EmailVerifier:
             # can be an anti-enumeration response, so catch-all requires three
             # separate high-entropy probes to be accepted.
             mx_host = mx_records[0]
-            accepted_probes = 0
+            probe_codes = []
             for _ in range(3):
                 # The address has 128 bits of randomness and uses a fresh SMTP
                 # connection, so a real mailbox collision is not plausible.
@@ -789,9 +809,9 @@ class EmailVerifier:
                     if code != 250:
                         break
                     code, _ = server.rcpt(test_email)
+                    probe_codes.append(code)
                     if code != 250:
                         break
-                    accepted_probes += 1
                 except Exception:
                     break
                 finally:
@@ -801,12 +821,14 @@ class EmailVerifier:
                         except Exception:
                             pass
 
-            domain_type = 'catch-all' if accepted_probes == 3 else 'normal'
+            domain_type = 'catch-all' if probe_codes == [250, 250, 250] else 'normal'
             self.domain_type_cache[domain] = {
                 'type': domain_type,
-                'checked_at': datetime.now()
+                'checked_at': datetime.now(),
+                'probe_count': len(probe_codes),
+                'probe_codes': probe_codes,
             }
-            set_shared_domain_type(domain, domain_type)
+            set_shared_domain_type(domain, domain_type, probe_codes=probe_codes)
             return domain_type
 
         except Exception as e:
@@ -1188,7 +1210,10 @@ def worker_process(process_id, email_queue, result_queue, progress_queue, shared
             # 先检查本地缓存
             if domain in verifier.domain_type_cache:
                 cache_entry = verifier.domain_type_cache[domain]
-                if datetime.now() - cache_entry['checked_at'] < timedelta(hours=1):
+                if (
+                    datetime.now() - cache_entry['checked_at'] < timedelta(hours=1)
+                    and has_catch_all_evidence(cache_entry)
+                ):
                     return cache_entry['type']
             
             # Only one process probes a newly seen domain. The other workers
@@ -1200,7 +1225,10 @@ def worker_process(process_id, email_queue, result_queue, progress_queue, shared
                     with shared_domain_lock:
                         cache_entry = shared_domain_cache.get(domain)
                         if cache_entry and cache_entry.get('type') != 'probing':
-                            if datetime.now() - cache_entry['checked_at'] < timedelta(hours=1):
+                            if (
+                                datetime.now() - cache_entry['checked_at'] < timedelta(hours=1)
+                                and has_catch_all_evidence(cache_entry)
+                            ):
                                 verifier.domain_type_cache[domain] = cache_entry
                                 return cache_entry['type']
                         if not cache_entry or cache_entry.get('type') != 'probing':
@@ -1218,7 +1246,10 @@ def worker_process(process_id, email_queue, result_queue, progress_queue, shared
                     time.sleep(0.25)
                     try:
                         cache_entry = shared_domain_cache.get(domain)
-                        if cache_entry and cache_entry.get('type') != 'probing':
+                        if (
+                            cache_entry and cache_entry.get('type') != 'probing'
+                            and has_catch_all_evidence(cache_entry)
+                        ):
                             verifier.domain_type_cache[domain] = cache_entry
                             return cache_entry['type']
                     except Exception:

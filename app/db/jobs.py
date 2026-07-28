@@ -898,6 +898,57 @@ class JobStore:
                 """, parent_rows)
             connection.commit()
 
+    def reconcile_catch_all_conflicts(self, job_id: str) -> int:
+        """Keep a domain from exposing conflicting Catch-all and 250 verdicts."""
+        from app.core.catch_all import reconcile_catch_all_conflicts
+
+        self.initialize()
+        with self._lock, closing(self._connect()) as connection:
+            begin_immediate(connection)
+            rows = connection.execute(
+                "SELECT original_index, result_json FROM job_results WHERE job_id=?",
+                (job_id,),
+            ).fetchall()
+            results: list[dict[str, Any]] = []
+            for index, raw in rows:
+                try:
+                    result = json.loads(raw)
+                except (TypeError, json.JSONDecodeError):
+                    continue
+                if not isinstance(result, dict):
+                    continue
+                result["original_index"] = int(index)
+                results.append(result)
+            conflicts = reconcile_catch_all_conflicts(results)
+            if not conflicts:
+                connection.commit()
+                return 0
+            now = utc_now().isoformat()
+            updated_rows = [
+                self._result_row(job_id, int(result["original_index"]), result, now)
+                for result in results
+                if str(result.get("email") or "").rsplit("@", 1)[-1].lower() in conflicts
+            ]
+            connection.executemany(
+                """UPDATE job_results SET result_json=?, updated_at=?, deliverability=?, is_valid=?,
+                is_skipped=?, is_catch_all=?, retry_at=?, retry_updated=?, query_fields_ready=?
+                WHERE job_id=? AND original_index=?""",
+                [
+                    (
+                        row[4], row[5], row[6], row[7], row[8], row[9], row[10], row[11], row[12],
+                        row[0], row[1],
+                    )
+                    for row in updated_rows
+                ],
+            )
+            placeholders = ", ".join("?" for _ in conflicts)
+            connection.execute(
+                f"DELETE FROM catch_all_emails WHERE job_id=? AND lower(domain) IN ({placeholders})",
+                (job_id, *sorted(conflicts)),
+            )
+            connection.commit()
+        return len(updated_rows)
+
     def _hydrate_results(self, job: Job) -> Job:
         job.results = self.results_for_job(job.id)
         return job

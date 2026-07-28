@@ -11,6 +11,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from app.config import settings
+from app.core.catch_all import reconcile_catch_all_conflicts
 from app.core.legacy import create_verifier
 from app.core.provider_policy import YAHOO_UNSUPPORTED_MESSAGE, is_yahoo_email
 from app.core.prospecting_protection import is_suspicious_recipient_rejection
@@ -59,6 +60,7 @@ METHOD_LABELS = {
     "qq_avatar": "QQ 头像辅助证据",
     "microsoft_api": "Outlook 账号验证",
     "catch-all_detected": "域名通用收件",
+    "catch-all_conflict": "待确认",
 }
 
 
@@ -443,6 +445,7 @@ def _clear_retry_metadata(result: dict[str, Any], state: str = "completed") -> N
 
 def finish_initial_job(job: Job) -> Job:
     """Complete the user task immediately and hand transient results to idle workers."""
+    reconcile_catch_all_conflicts(job.results)
     job.finished_at = utc_now()
     write_csv(job)
     job.error = None
@@ -888,6 +891,7 @@ def run_job(job: Job) -> None:
                 by_index[result["original_index"]] = normalize_result(result)
 
         job.results = [by_index[index] for index in sorted(by_index)]
+        reconcile_catch_all_conflicts(job.results)
         control_probes = _verify_prospecting_control_sample(job, job.results)
         if job.lease_id:
             job_store.persist(job)
@@ -898,6 +902,10 @@ def run_job(job: Job) -> None:
             refreshed = job_store.get(job.id)
             if refreshed is None or job_store.is_stopped(job.id):
                 return
+            if job_store.reconcile_catch_all_conflicts(job.id):
+                refreshed = job_store.get(job.id)
+                if refreshed is None:
+                    return
             protected = apply_prospecting_receiver_protection(refreshed, control_probes)
             if protected is not None:
                 job = protected
