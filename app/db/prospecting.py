@@ -277,6 +277,26 @@ class ProspectingStore:
             for row in rows
         ]
 
+    def candidate_page(
+        self, run_id: str, *, offset: int = 0, limit: int = 100,
+    ) -> tuple[int, list[dict[str, Any]]]:
+        """Return the generated beta candidates for catalogue-quality review."""
+        self.initialize()
+        with closing(self._connect()) as connection:
+            total = int(connection.execute(
+                "SELECT COUNT(*) FROM prospecting_candidates WHERE run_id=?", (run_id,)
+            ).fetchone()[0])
+            rows = connection.execute("""
+                SELECT original_index, email, category, pattern, rank, source
+                FROM prospecting_candidates WHERE run_id=?
+                ORDER BY original_index LIMIT ? OFFSET ?
+            """, (run_id, limit, offset)).fetchall()
+        return total, [
+            {"original_index": int(row[0]), "email": row[1], "category": row[2],
+             "pattern": row[3], "rank": int(row[4]), "source": row[5]}
+            for row in rows
+        ]
+
     def result_count(self, run_id: str) -> int:
         self.initialize()
         with closing(self._connect()) as connection:

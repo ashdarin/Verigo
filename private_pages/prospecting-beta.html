@@ -89,6 +89,18 @@
       <p id="run-error" class="error" role="alert"></p>
     </section>
 
+    <section id="candidates-panel" class="results hidden" aria-labelledby="candidates-title">
+      <div class="results-heading"><div><p class="eyebrow">内测检查</p><h2 id="candidates-title">本任务生成的姓名候选</h2></div><span id="candidate-count" class="limit">0</span></div>
+      <p class="profile-copy">仅供内测检查姓名库质量；这里显示本次实际提交验证的候选，不代表已确认联系人。</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>序号</th><th>生成的邮箱 / 姓名组合</th><th>类别</th><th>邮箱格式</th><th>来源</th></tr></thead>
+          <tbody id="candidates-body"></tbody>
+        </table>
+      </div>
+      <div class="saved-pagination"><button id="candidate-previous" class="secondary" type="button">上一页</button><button id="candidate-next" class="secondary" type="button">下一页</button></div>
+    </section>
+
     <section id="results-panel" class="results hidden" aria-labelledby="results-title">
       <div class="results-heading"><div><p class="eyebrow">结果</p><h2 id="results-title">已确认企业联系方式</h2></div><span id="result-count" class="limit">0</span></div>
       <div class="table-wrap">

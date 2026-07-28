@@ -2,6 +2,7 @@ const state = {
   run: null, timer: null, pollGeneration: 0,
   contacts: { domain: null, search: "", offset: 0, limit: 50, domainOffset: 0, domainLimit: 50, payload: null },
   results: { runId: null, offset: 0, limit: 50, payload: null },
+  candidates: { runId: null, offset: 0, limit: 100, payload: null },
   companies: { search: "", domainState: "all", offset: 0, limit: 50, payload: null },
 };
 const byId = (id) => document.getElementById(id);
@@ -20,6 +21,34 @@ function resultLabel(type) {
 
 function categoryLabel(category) {
   return category === "business_entry" ? "业务入口" : "个人格式候选";
+}
+
+function candidateSourceLabel(source) {
+  if (source === "role_catalogue") return "企业业务入口";
+  if (source === "user_selected_pattern") return "手动选择的格式";
+  if (source === "learned_domain_profile") return "已确认的域名格式";
+  if (source.includes(":derived")) return "扩展国家姓名库";
+  return "内置姓名库";
+}
+
+function renderCandidates(payload) {
+  state.candidates.payload = payload;
+  const body = byId("candidates-body"); body.replaceChildren();
+  byId("candidate-count").textContent = `${payload.total} 条`;
+  byId("candidate-previous").disabled = payload.offset === 0;
+  byId("candidate-next").disabled = payload.offset + payload.items.length >= payload.total;
+  payload.items.forEach((item) => {
+    const row = document.createElement("tr");
+    [item.rank, item.email, categoryLabel(item.category), item.pattern, candidateSourceLabel(item.source)].forEach((value) => {
+      const cell = document.createElement("td"); cell.textContent = String(value); row.append(cell);
+    });
+    body.append(row);
+  });
+}
+
+async function refreshCandidates(run) {
+  const payload = await api(`/api/prospecting-beta/runs/${run.id}/candidates?offset=${state.candidates.offset}&limit=${state.candidates.limit}`);
+  if (state.run?.id === run.id) renderCandidates(payload);
 }
 
 function renderSavedContacts(payload) {
@@ -172,9 +201,10 @@ async function refreshRunResults(run) {
 function renderRun(run) {
   if (state.run?.id !== run.id) {
     state.results = { runId: run.id, offset: 0, limit: 50, payload: null };
+    state.candidates = { runId: run.id, offset: 0, limit: 100, payload: null };
   }
   state.run = run;
-  byId("run-panel").classList.remove("hidden"); byId("results-panel").classList.remove("hidden");
+  byId("run-panel").classList.remove("hidden"); byId("candidates-panel").classList.remove("hidden"); byId("results-panel").classList.remove("hidden");
   byId("run-domain").textContent = `${run.domain} (${run.country})`;
   const status = byId("run-status"); status.textContent = labels[run.status] || run.status; status.className = `status ${run.status}`;
   const active = run.status === "queued" || run.status === "running";
@@ -196,6 +226,7 @@ function renderRun(run) {
   byId("run-protection").classList.toggle("hidden", !protectionCopy && !protection.message);
   byId("run-error").textContent = run.error || "";
   refreshRunResults(run).catch((error) => { byId("run-error").textContent = error.message; });
+  refreshCandidates(run).catch((error) => { byId("run-error").textContent = error.message; });
   refreshSavedContacts().catch((error) => { byId("run-error").textContent = error.message; });
 }
 
@@ -273,6 +304,15 @@ byId("result-next").addEventListener("click", () => {
   const payload = state.results.payload;
   if (!state.run || !payload || payload.offset + payload.items.length >= payload.total) return;
   state.results.offset += state.results.limit; refreshRunResults(state.run);
+});
+byId("candidate-previous").addEventListener("click", () => {
+  if (!state.run) return;
+  state.candidates.offset = Math.max(0, state.candidates.offset - state.candidates.limit); refreshCandidates(state.run);
+});
+byId("candidate-next").addEventListener("click", () => {
+  const payload = state.candidates.payload;
+  if (!state.run || !payload || payload.offset + payload.items.length >= payload.total) return;
+  state.candidates.offset += state.candidates.limit; refreshCandidates(state.run);
 });
 
 byId("company-import").addEventListener("click", async () => {

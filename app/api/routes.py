@@ -1066,6 +1066,21 @@ def list_prospecting_run_results(
     return ProspectingResultsResponse(total=total, offset=offset, limit=limit, items=items)
 
 
+@router.get("/prospecting-beta/runs/{run_id}/candidates")
+def list_prospecting_run_candidates(
+    run_id: str,
+    user: Annotated[User, Depends(require_prospecting_beta)],
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=100, ge=1, le=200),
+) -> dict[str, Any]:
+    """Private-beta visibility into the exact generated names for review."""
+    run = prospecting_store.get(run_id, user.id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Prospecting run does not exist")
+    total, items = prospecting_store.candidate_page(run.id, offset=offset, limit=limit)
+    return {"total": total, "offset": offset, "limit": limit, "items": items}
+
+
 @router.get("/prospecting-beta/saved-contacts", response_model=SavedProspectingContactsResponse)
 def list_saved_prospecting_contacts(
     user: Annotated[User, Depends(require_prospecting_beta)],

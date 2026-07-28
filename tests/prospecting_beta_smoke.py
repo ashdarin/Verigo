@@ -140,6 +140,11 @@ with TestClient(app) as client:
     personal = next(item for item in candidates if item["category"] == "personal_candidate")
     assert personal["pattern"] == "last.first"
     assert personal["source"] == "user_selected_pattern"
+    candidate_page = client.get(f"/api/prospecting-beta/runs/{run['id']}/candidates?limit=2")
+    assert candidate_page.status_code == 200, candidate_page.text
+    assert candidate_page.json()["total"] == 128
+    assert len(candidate_page.json()["items"]) == 2
+    assert candidate_page.json()["items"][0]["email"] == candidates[0]["email"]
     job = job_store.get(run["verification_job_id"])
     assert job is not None
     assert job.worker_count == settings.max_workers_per_job
