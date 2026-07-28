@@ -226,11 +226,13 @@ def import_world_names(
         encoding = detect_encoding(path)
         totals = Counter()
         if encoding is None:
-            totals["skipped_unreadable_encoding"] += 1
-            results[country] = dict(totals)
-            continue
+            # Some country files contain a small number of damaged rows. The
+            # CSV contract is still known; replacement characters cause only
+            # those non-Roman rows to be rejected by romanize().
+            encoding = "utf-8"
+            totals["lossy_utf8_fallback"] += 1
         batch: list[tuple[str, str, str, str, int]] = []
-        with path.open("r", encoding=encoding, errors="strict", newline="") as handle:
+        with path.open("r", encoding=encoding, errors="replace", newline="") as handle:
             for row in csv.reader(handle):
                 if max_rows_per_file and totals["seen"] >= max_rows_per_file:
                     totals["stopped_at_row_limit"] += 1

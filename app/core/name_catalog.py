@@ -9,6 +9,12 @@ from collections.abc import Iterator
 from app.config import settings
 
 
+# The supplied World Name dataset has no AU file and "OTHER" is an
+# application-level option. Use the closest broad Latin-name catalogues rather
+# than falling back to a few hard-coded entries.
+CATALOGUE_COUNTRY_FALLBACKS = {"AU": "GB", "OTHER": "US"}
+
+
 def _names(country: str, kind: str) -> tuple[str, ...]:
     """Return the most common usable spellings for a country and name kind."""
     path = settings.name_catalog_path
@@ -23,7 +29,7 @@ def _names(country: str, kind: str) -> tuple[str, ...]:
                 ORDER BY weight DESC, romanized
                 LIMIT ?
                 """,
-                (country, kind, settings.name_catalog_pool_size),
+                (CATALOGUE_COUNTRY_FALLBACKS.get(country, country), kind, settings.name_catalog_pool_size),
             ).fetchall()
     except sqlite3.Error:
         # A missing or mid-replacement derived catalogue must not stop discovery.

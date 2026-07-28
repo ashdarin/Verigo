@@ -13,6 +13,7 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 os.environ["VERIGO_DATABASE_PATH"] = str(temp_dir / "verigo.db")
 os.environ["VERIGO_RESULTS_DIR"] = str(temp_dir / "results")
+os.environ["VERIGO_NAME_CATALOG_PATH"] = str(temp_dir / "name_catalog.db")
 os.environ["VERIGO_SECURE_COOKIES"] = "false"
 os.environ["VERIGO_MAX_PENDING_JOBS"] = "50"
 os.environ["VERIGO_PROSPECTING_BETA_ENABLED"] = "true"
