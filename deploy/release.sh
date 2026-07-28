@@ -247,6 +247,7 @@ fi
 for setting in \
     'VERIGO_DATABASE_PATH=/opt/verigo/data/verigo.db' \
     'VERIGO_RESULTS_DIR=/opt/verigo/data/results' \
+    'VERIGO_NAME_CATALOG_PATH=/opt/verigo/data/name_catalog.db' \
     'VERIGO_SMTP_LIMITER_PATH=/opt/verigo/data/smtp_limiter.db' \
     'VERIGO_DOMAIN_CACHE_PATH=/opt/verigo/data/domain_type_cache.json' \
     'VERIGO_MAX_EMAILS=0' \
