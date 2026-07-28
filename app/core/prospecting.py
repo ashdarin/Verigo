@@ -213,6 +213,8 @@ class ProspectingCandidate:
     pattern: str
     rank: int
     source: str
+    # Stable across email naming patterns, unlike the rendered local part.
+    name_key: str | None = None
 
 
 def normalize_company_domain(value: str) -> str:
@@ -347,7 +349,9 @@ def generate_candidates(
     candidates: list[ProspectingCandidate] = []
     seen: set[str] = set()
 
-    def append(local: str, category: str, pattern: str, source: str) -> None:
+    def append(
+        local: str, category: str, pattern: str, source: str, name_key: str | None = None,
+    ) -> None:
         email = f"{local}@{normalized_domain}"
         if email in seen or len(candidates) >= max_candidates:
             return
@@ -358,6 +362,7 @@ def generate_candidates(
             pattern=pattern,
             rank=len(candidates) + 1,
             source=source,
+            name_key=name_key,
         ))
 
     for local in ROLE_LOCAL_PARTS:
@@ -376,7 +381,10 @@ def generate_candidates(
                 else "learned_domain_profile" if pattern in learned
                 else name_source
             )
-            append(_render_personal(pattern, first, last), "personal_candidate", pattern, source)
+            append(
+                _render_personal(pattern, first, last), "personal_candidate", pattern, source,
+                f"{first}:{last}",
+            )
             if len(candidates) >= max_candidates:
                 return candidates
     return candidates

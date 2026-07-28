@@ -244,6 +244,20 @@ with TestClient(app) as client:
     assert {item["email"] for item in candidates}.isdisjoint(
         {item["email"] for item in second_candidates}
     )
+    with sqlite3.connect(settings.database_path) as connection:
+        first_name_keys = {
+            row[0] for row in connection.execute(
+                "SELECT name_key FROM prospecting_candidates WHERE run_id=? AND name_key IS NOT NULL",
+                (run["id"],),
+            )
+        }
+        second_name_keys = {
+            row[0] for row in connection.execute(
+                "SELECT name_key FROM prospecting_candidates WHERE run_id=? AND name_key IS NOT NULL",
+                (second_run["id"],),
+            )
+        }
+    assert first_name_keys.isdisjoint(second_name_keys)
     assert {item["pattern"] for item in second_candidates if item["category"] == "personal_candidate"} == {"last.first"}
 
     # The configured catalogue is intentionally one batch. Existing candidates

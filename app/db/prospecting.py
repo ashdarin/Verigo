@@ -69,10 +69,15 @@ class ProspectingStore:
                     CREATE TABLE IF NOT EXISTS prospecting_candidates (
                         run_id TEXT NOT NULL, original_index INTEGER NOT NULL, email TEXT NOT NULL,
                         category TEXT NOT NULL, pattern TEXT NOT NULL, rank INTEGER NOT NULL,
-                        source TEXT NOT NULL, PRIMARY KEY(run_id, original_index),
+                        source TEXT NOT NULL, name_key TEXT, PRIMARY KEY(run_id, original_index),
                         FOREIGN KEY(run_id) REFERENCES prospecting_runs(id) ON DELETE CASCADE
                     )
                 """)
+                candidate_columns = {
+                    row[1] for row in connection.execute("PRAGMA table_info(prospecting_candidates)")
+                }
+                if "name_key" not in candidate_columns:
+                    connection.execute("ALTER TABLE prospecting_candidates ADD COLUMN name_key TEXT")
                 connection.execute("""
                     CREATE TABLE IF NOT EXISTS prospecting_domain_profiles (
                         domain TEXT NOT NULL, pattern TEXT NOT NULL, confirmed_count INTEGER NOT NULL DEFAULT 0,
@@ -127,6 +132,7 @@ class ProspectingStore:
                 connection.execute("CREATE INDEX IF NOT EXISTS idx_prospecting_runs_owner ON prospecting_runs(owner_id, created_at DESC)")
                 connection.execute("CREATE INDEX IF NOT EXISTS idx_prospecting_runs_owner_domain ON prospecting_runs(owner_id, domain)")
                 connection.execute("CREATE INDEX IF NOT EXISTS idx_prospecting_candidates_run ON prospecting_candidates(run_id, original_index)")
+                connection.execute("CREATE INDEX IF NOT EXISTS idx_prospecting_candidates_name_key ON prospecting_candidates(name_key)")
                 connection.execute("CREATE INDEX IF NOT EXISTS idx_prospecting_saved_contacts_owner ON prospecting_saved_contacts(owner_id, saved_at DESC)")
                 connection.execute("CREATE INDEX IF NOT EXISTS idx_prospecting_saved_contacts_owner_domain ON prospecting_saved_contacts(owner_id, domain, saved_at DESC)")
                 connection.execute("""
@@ -211,10 +217,11 @@ class ProspectingStore:
                     run.candidate_count, json.dumps(run.profile_patterns), run.created_at.isoformat(),
                 ))
                 connection.executemany("""
-                    INSERT INTO prospecting_candidates(run_id, original_index, email, category, pattern, rank, source)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO prospecting_candidates(
+                        run_id, original_index, email, category, pattern, rank, source, name_key
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """, [
-                    (run.id, index, item.email, item.category, item.pattern, item.rank, item.source)
+                    (run.id, index, item.email, item.category, item.pattern, item.rank, item.source, item.name_key)
                     for index, item in enumerate(candidates)
                 ])
                 connection.execute("COMMIT")
@@ -253,16 +260,20 @@ class ProspectingStore:
             """, (owner_id, limit)).fetchall()
         return [self._run_from_row(row) for row in rows]
 
-    def issued_emails(self, owner_id: str, domain: str) -> set[str]:
+    def issued_candidate_keys(self, domain: str) -> tuple[set[str], set[str]]:
+        """Return globally spent emails and personal-name pairs for one company."""
         self.initialize()
         with closing(self._connect()) as connection:
             rows = connection.execute("""
-                SELECT candidate.email
+                SELECT candidate.email, candidate.name_key
                 FROM prospecting_candidates AS candidate
                 JOIN prospecting_runs AS run ON run.id=candidate.run_id
-                WHERE run.owner_id=? AND run.domain=?
-            """, (owner_id, domain)).fetchall()
-        return {str(row[0]) for row in rows}
+                WHERE run.domain=?
+            """, (domain,)).fetchall()
+        return (
+            {str(row[0]) for row in rows},
+            {str(row[1]) for row in rows if row[1]},
+        )
 
     def candidates(self, run_id: str) -> list[dict[str, Any]]:
         self.initialize()

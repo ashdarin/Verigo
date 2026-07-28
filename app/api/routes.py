@@ -894,12 +894,12 @@ def submit_prospecting_run(
             known_email = payload.known_email.strip().lower()
             prospecting_store.record_provided_pattern(user.id, domain, known_pattern)
         learned_patterns = prospecting_store.domain_patterns(user.id, domain)
-        issued = prospecting_store.issued_emails(user.id, domain)
+        issued_emails, issued_name_keys = prospecting_store.issued_candidate_keys(domain)
         # Keep enough catalogue entries beyond prior runs that filtering cannot
         # prematurely exhaust the selected or verified naming convention.
         catalogue_budget = max(
             settings.prospecting_beta_catalogue_candidates,
-            len(issued) + settings.prospecting_beta_max_candidates + 1,
+            len(issued_emails) + len(issued_name_keys) + settings.prospecting_beta_max_candidates + 1,
         )
         catalogue = generate_candidates(
             domain,
@@ -910,7 +910,9 @@ def submit_prospecting_run(
         )
         candidates = rerank_candidates(
             candidate for candidate in catalogue
-            if candidate.email not in issued and candidate.email != known_email
+            if candidate.email not in issued_emails
+            and candidate.email != known_email
+            and (candidate.name_key is None or candidate.name_key not in issued_name_keys)
         )[:settings.prospecting_beta_max_candidates]
         if business_entry_only:
             candidates = candidates[:1]
