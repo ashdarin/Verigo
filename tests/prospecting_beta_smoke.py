@@ -232,6 +232,14 @@ with TestClient(app) as client:
     exported = client.get("/api/prospecting-beta/saved-contacts/export?domain=example.com")
     assert exported.status_code == 200 and "text/csv" in exported.headers["content-type"]
 
+    # Another verified buyer only receives shared confirmations after explicitly
+    # creating a discovery request for this exact company; they cannot browse
+    # the first buyer's saved-contact workspace.
+    object.__setattr__(settings, "prospecting_beta_allowed_emails", frozenset({
+        "4671793@qq.com", "buyer@example.net",
+    }))
+    buyer_session = verified_session("buyer@example.net")
+    client.cookies.set("verigo_session", buyer_session)
     second = client.post("/api/prospecting-beta/runs", json={
         "domain": "example.com", "country": "DE",
         "known_first_name": "John", "known_last_name": "Smith",
@@ -240,6 +248,15 @@ with TestClient(app) as client:
     assert second.status_code == 202, second.text
     second_run = second.json()
     assert second_run["requested_pattern"] == "last.first"
+    shared_results = client.get(f"/api/prospecting-beta/runs/{second_run['id']}/results")
+    assert shared_results.status_code == 200, shared_results.text
+    assert {item["email"] for item in shared_results.json()["items"]} >= {
+        candidates[0]["email"], personal["email"],
+    }
+    assert all(item["result_type"] == "verified" for item in shared_results.json()["items"])
+    assert all(item["verification"]["smtp_result"] == "250 accepted" for item in shared_results.json()["items"])
+    buyer_contacts = client.get("/api/prospecting-beta/saved-contacts")
+    assert buyer_contacts.status_code == 200 and buyer_contacts.json()["total"] == 0
     second_candidates = prospecting_store.candidates(second_run["id"])
     assert {item["email"] for item in candidates}.isdisjoint(
         {item["email"] for item in second_candidates}
@@ -259,6 +276,9 @@ with TestClient(app) as client:
         }
     assert first_name_keys.isdisjoint(second_name_keys)
     assert {item["pattern"] for item in second_candidates if item["category"] == "personal_candidate"} == {"last.first"}
+
+    # Continue the receiver-protection case in the original owner's workspace.
+    client.cookies.set("verigo_session", beta_session)
 
     # The configured catalogue is intentionally one batch. Existing candidates
     # must expand it so a later run still reserves a fresh batch.

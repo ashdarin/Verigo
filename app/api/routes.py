@@ -870,6 +870,21 @@ def serialize_prospecting_run(run: ProspectingRun) -> ProspectingRunResponse:
     )
 
 
+def prospecting_results_page(
+    run: ProspectingRun, user: User, *, offset: int, limit: int,
+) -> tuple[int, list[dict[str, Any]]]:
+    """Place demand-gated shared confirmations ahead of this run's new work."""
+    shared_total, shared = prospecting_store.shared_confirmed_contacts(
+        run.domain, exclude_owner_id=user.id, offset=offset, limit=limit,
+    )
+    local_offset = max(0, offset - shared_total)
+    local_limit = max(0, limit - len(shared))
+    local_total, local = prospecting_store.result_page(
+        run, offset=local_offset, limit=local_limit,
+    ) if local_limit else (prospecting_store.result_count(run.id), [])
+    return shared_total + local_total, [*shared, *local]
+
+
 def submit_prospecting_run(
     payload: ProspectingRunRequest,
     user: User,
@@ -1064,7 +1079,9 @@ def list_prospecting_run_results(
     run = prospecting_store.get(run_id, user.id)
     if run is None:
         raise HTTPException(status_code=404, detail="Prospecting run does not exist")
-    total, items = prospecting_store.result_page(run, offset=offset, limit=limit)
+    # This route is only reachable after a user has requested this company
+    # through the verified private-beta workflow; it is not a browseable pool.
+    total, items = prospecting_results_page(run, user, offset=offset, limit=limit)
     return ProspectingResultsResponse(total=total, offset=offset, limit=limit, items=items)
 
 

@@ -345,6 +345,45 @@ class ProspectingStore:
             })
         return total, items
 
+    def shared_confirmed_contacts(
+        self, domain: str, *, exclude_owner_id: str, offset: int = 0, limit: int = 100,
+    ) -> tuple[int, list[dict[str, Any]]]:
+        """Reuse confirmed contacts only after a user requests their domain."""
+        self.initialize()
+        with closing(self._connect()) as connection:
+            total = int(connection.execute("""
+                SELECT COUNT(DISTINCT email) FROM prospecting_saved_contacts
+                WHERE domain=? AND owner_id<>?
+            """, (domain, exclude_owner_id)).fetchone()[0])
+            rows = connection.execute("""
+                SELECT contact.email, contact.domain, contact.category, contact.pattern,
+                       contact.last_verified_at, contact.confidence
+                FROM prospecting_saved_contacts AS contact
+                JOIN (
+                    SELECT email, MAX(last_verified_at) AS newest_verified_at
+                    FROM prospecting_saved_contacts
+                    WHERE domain=? AND owner_id<>?
+                    GROUP BY email
+                ) AS newest
+                    ON newest.email=contact.email
+                    AND newest.newest_verified_at=contact.last_verified_at
+                WHERE contact.domain=? AND contact.owner_id<>?
+                GROUP BY contact.email, contact.domain
+                ORDER BY contact.last_verified_at DESC, contact.confidence DESC, contact.email ASC
+                LIMIT ? OFFSET ?
+            """, (domain, exclude_owner_id, domain, exclude_owner_id, limit, offset)).fetchall()
+        return total, [
+            {
+                "email": row[0], "domain": row[1], "category": row[2], "pattern": row[3],
+                "last_verified_at": row[4], "confidence": int(row[5] or 0),
+                # A historical 250 remains a real verified result. Deliberately
+                # omit its prior owner, run, source, notes, and private labels.
+                "result_type": "verified",
+                "verification": {"smtp_result": "250 accepted", "checks": {"smtp": True}},
+            }
+            for row in rows
+        ]
+
     def domain_patterns(self, owner_id: str, domain: str) -> list[str]:
         self.initialize()
         with closing(self._connect()) as connection:
