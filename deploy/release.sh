@@ -55,6 +55,8 @@ rollback() {
         activate_release "$previous_release"
         systemctl restart verigo || true
         systemctl restart verigo-supervisor || true
+        systemctl restart verigo-worker@1.service || true
+        systemctl restart verigo-worker@2.service || true
     fi
     set_service_mode active || true
     exit "$status"
@@ -318,6 +320,10 @@ systemctl restart verigo
 for _ in {1..20}; do
     if curl -fsS http://127.0.0.1:8000/api/health >/dev/null; then
         systemctl restart verigo-supervisor.service
+        # Jobs were drained before activation, so workers can safely reload
+        # the release instead of retaining modules from the old symlink target.
+        systemctl restart verigo-worker@1.service
+        systemctl restart verigo-worker@2.service
         set_service_mode active
         trap - ERR
         printf 'Verigo release %s health check passed\n' "$release_version"
