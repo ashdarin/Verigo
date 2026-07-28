@@ -322,7 +322,7 @@ connection.close()
 # A single company discovery is shared among idle worker pools. Small leases
 # distribute it across nodes, while the MX scheduler still caps total probes.
 shared_discovery = Job(
-    id="prospecting-shared", emails=[f"person-{index}@prospecting-shared.test" for index in range(8)],
+    id="prospecting-shared", emails=[f"person-{index}@prospecting-shared.test" for index in range(16)],
     worker_count=8, execution_target="local",
 )
 store.add(shared_discovery)
@@ -332,24 +332,24 @@ connection.execute(
 )
 connection.close()
 local_discovery_lease = store.claim_remote_lease(
-    "local-discovery", "local", shard_size=25, prospecting_shard_size=1,
+    "local-discovery", "local", shard_size=25, prospecting_shard_size=4,
 )
 gmail_discovery_lease = store.claim_remote_lease(
     "gmail-discovery", "gmail", shard_size=25, allow_local_fallback=True,
-    prospecting_shard_size=1,
+    prospecting_shard_size=4,
 )
 domestic_discovery_lease = store.claim_remote_lease(
     "domestic-discovery", "cloudstudio_domestic", shard_size=25, allow_local_fallback=True,
-    prospecting_shard_size=1,
+    prospecting_shard_size=4,
 )
 qq_discovery_lease = store.claim_remote_lease(
     "qq-discovery", "tencent_qq", shard_size=25, allow_local_fallback=True,
-    prospecting_shard_size=1,
+    prospecting_shard_size=4,
 )
-assert local_discovery_lease is not None and local_discovery_lease.pending_indices == [0]
-assert gmail_discovery_lease is not None and gmail_discovery_lease.pending_indices == [1]
-assert domestic_discovery_lease is not None and domestic_discovery_lease.pending_indices == [2]
-assert qq_discovery_lease is not None and qq_discovery_lease.pending_indices == [3]
+assert local_discovery_lease is not None and local_discovery_lease.pending_indices == [0, 1, 2, 3]
+assert gmail_discovery_lease is not None and gmail_discovery_lease.pending_indices == [4, 5, 6, 7]
+assert domestic_discovery_lease is not None and domestic_discovery_lease.pending_indices == [8, 9, 10, 11]
+assert qq_discovery_lease is not None and qq_discovery_lease.pending_indices == [12, 13, 14, 15]
 assert store.get(shared_discovery.id).execution_target == "local"
 assert store.abandon_lease(shared_discovery.id, "local-discovery", local_discovery_lease.lease_id or "")
 assert store.abandon_lease(shared_discovery.id, "gmail-discovery", gmail_discovery_lease.lease_id or "")

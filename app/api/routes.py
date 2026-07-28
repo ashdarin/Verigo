@@ -920,23 +920,24 @@ def submit_prospecting_run(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     job: Job | None = None
     try:
-        job = submit_routed_job(
+        # Keep company discovery in the shared local pool. Remote nodes may
+        # steal its small leases when idle, but no single target owns the run.
+        job = verification_tasks.submit(
             [candidate.email for candidate in candidates],
             worker_count=settings.max_workers_per_job,
             owner_id=user.id,
-            owner_email=user.email,
             stop_on_deliverable=False,
             job_id=uuid.uuid4().hex[:12],
+            execution_target="local",
         )
-        # Discovery is a shared-pool workload. Its small leases can be picked
-        # up by local, Cloud Shell, and Cloud Studio workers at the same time.
-        if job.execution_target == "local":
-            worker_lifecycle.notify_job_queued()
-            domestic_worker_lifecycle.notify_job_queued()
-            notify_cloudshell_job_queued()
         run = prospecting_store.create_run(
             user.id, domain, payload.country, known_pattern or payload.email_pattern, job.id, candidates, learned_patterns
         )
+        # The run is now registered, so all worker pools can apply the
+        # discovery-specific MX ceiling before they start claiming shards.
+        worker_lifecycle.notify_job_queued()
+        domestic_worker_lifecycle.notify_job_queued()
+        notify_cloudshell_job_queued()
     except RuntimeError as exc:
         if job is not None:
             job_store.stop(job.id)
