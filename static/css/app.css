@@ -50,6 +50,7 @@ button { cursor: pointer; }
 .notification-button { position: relative; min-height: 34px; padding: 0 9px; border: 1px solid var(--line); border-radius: 5px; background: #fff; color: var(--ink); font-size: 12px; font-weight: 700; }
 .notification-button:hover { border-color: var(--accent); color: var(--accent); }.notification-count { display: inline-grid; min-width: 16px; height: 16px; margin-left: 4px; place-items: center; border-radius: 8px; background: var(--bad); color: #fff; font-size: 10px; font-variant-numeric: tabular-nums; }
 .notification-menu { position: absolute; z-index: 20; top: 43px; right: 84px; width: min(360px, calc(100vw - 32px)); max-height: 380px; overflow: auto; border: 1px solid var(--line); border-radius: 6px; background: #fff; box-shadow: var(--shadow); color: var(--ink); }.notification-list { display: grid; }.notification-item { padding: 12px 13px; border-bottom: 1px solid var(--line); }.notification-item:last-child { border-bottom: 0; }.notification-item strong { display: block; font-size: 13px; }.notification-item p { margin: 5px 0 0; color: var(--muted); font-size: 12px; line-height: 1.45; }.notification-item time { display: block; margin-top: 6px; color: var(--muted); font-size: 10px; }.notification-empty { padding: 18px 13px; color: var(--muted); font-size: 12px; }
+.notification-item.targeted { cursor: pointer; }.notification-item.targeted:hover { background: #fff8f5; }.result-email-update { display: inline-block; width: 8px; height: 8px; margin-left: 7px; border-radius: 50%; background: var(--bad); vertical-align: middle; }
 .confirm-delete { display: flex; align-items: flex-start; gap: 8px; margin: 16px 0; font-weight: 500; line-height: 1.45; }
 .confirm-delete input { width: auto; min-height: 0; margin-top: 3px; }
 .danger-primary { background: var(--bad); }
@@ -152,7 +153,12 @@ textarea:focus, input:focus, select:focus { border-color: var(--accent); box-sha
 .stop-action:hover { background: #fbeeed; }
 .table-wrap { overflow: auto; border: 1px solid var(--line); border-radius: 7px; }
 .pagination { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; color: var(--muted); font-size: 12px; }
-.pagination > div { display: flex; gap: 6px; }
+.pagination > div, .page-numbers { display: flex; gap: 6px; align-items: center; }
+.page-numbers { display: inline-flex; }
+.page-number { min-width: 30px; height: 30px; padding: 0 7px; border: 1px solid var(--line); border-radius: 5px; background: #fff; color: var(--ink); font-size: 12px; }
+.page-number:hover, .page-number.active { border-color: var(--accent); color: var(--accent); }
+.page-number.active { background: #fff4f1; font-weight: 700; }
+.page-gap { color: var(--muted); padding: 0 2px; }
 .page-button { min-width: 64px; min-height: 32px; padding: 0 9px; border: 1px solid var(--line-strong); border-radius: 5px; background: #fff; color: var(--ink); font-size: 12px; }
 .page-button:disabled { border-color: var(--line); color: #9aa49f; cursor: not-allowed; }
 table { width: 100%; min-width: 850px; border-collapse: collapse; table-layout: fixed; }

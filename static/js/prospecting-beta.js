@@ -4,6 +4,7 @@ const state = {
   results: { runId: null, offset: 0, limit: 50, payload: null },
   candidates: { runId: null, offset: 0, limit: 100, payload: null },
   companies: { search: "", domainState: "all", offset: 0, limit: 50, payload: null },
+  runs: { offset: 0, limit: 20, payload: null },
 };
 const byId = (id) => document.getElementById(id);
 const labels = { queued: "排队中", running: "验证中", completed: "已完成", failed: "失败", stopped: "已停止" };
@@ -13,6 +14,31 @@ async function api(path, options = {}) {
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(payload.detail || "请求失败");
   return payload;
+}
+
+function pageWindow(current, total) {
+  if (total <= 7) return Array.from({ length: total }, (_, index) => index);
+  const pages = new Set([0, 1, total - 2, total - 1, current - 1, current, current + 1]);
+  return [...pages].filter((page) => page >= 0 && page < total).sort((a, b) => a - b);
+}
+
+function renderPageNumbers(id, current, total, onPage) {
+  const container = byId(id); container.replaceChildren();
+  let previous = -1;
+  pageWindow(current, total).forEach((page) => {
+    if (page - previous > 1) {
+      const gap = document.createElement("span"); gap.className = "page-gap"; gap.textContent = "…"; container.append(gap);
+    }
+    const button = document.createElement("button"); button.type = "button";
+    button.className = `page-number${page === current ? " active" : ""}`;
+    button.textContent = String(page + 1); button.disabled = page === current;
+    button.addEventListener("click", () => onPage(page)); container.append(button); previous = page;
+  });
+}
+
+function renderPager(id, payload, onPage) {
+  const current = Math.floor(payload.offset / payload.limit);
+  renderPageNumbers(id, current, Math.max(1, Math.ceil(payload.total / payload.limit)), onPage);
 }
 
 function resultLabel(type) {
@@ -37,6 +63,9 @@ function renderCandidates(payload) {
   byId("candidate-count").textContent = `${payload.total} 条`;
   byId("candidate-previous").disabled = payload.offset === 0;
   byId("candidate-next").disabled = payload.offset + payload.items.length >= payload.total;
+  renderPager("candidate-pages", payload, (page) => {
+    state.candidates.offset = page * state.candidates.limit; refreshCandidates(state.run);
+  });
   payload.items.forEach((item) => {
     const row = document.createElement("tr");
     [item.rank, item.email, categoryLabel(item.category), item.pattern, candidateSourceLabel(item.source)].forEach((value) => {
@@ -63,6 +92,15 @@ function renderSavedContacts(payload) {
   byId("saved-domain-count").textContent = `${payload.domain_total} 个域名`;
   byId("saved-domain-previous").disabled = payload.domain_offset === 0;
   byId("saved-domain-next").disabled = payload.domain_offset + payload.domains.length >= payload.domain_total;
+  renderPager("saved-pages", payload, (page) => {
+    state.contacts.offset = page * state.contacts.limit; refreshSavedContacts();
+  });
+  renderPageNumbers(
+    "saved-domain-pages", Math.floor(payload.domain_offset / payload.domain_limit),
+    Math.max(1, Math.ceil(payload.domain_total / payload.domain_limit)), (page) => {
+      state.contacts.domainOffset = page * state.contacts.domainLimit; refreshSavedContacts();
+    },
+  );
 
   const domains = byId("saved-domain-list");
   domains.replaceChildren();
@@ -132,6 +170,9 @@ function renderCompanies(payload) {
   byId("company-count").textContent = `${payload.total} 家`;
   byId("companies-previous").disabled = payload.offset === 0;
   byId("companies-next").disabled = payload.offset + payload.items.length >= payload.total;
+  renderPager("companies-pages", payload, (page) => {
+    state.companies.offset = page * state.companies.limit; refreshCompanies();
+  });
   const body = byId("companies-body"); body.replaceChildren();
   if (!payload.items.length) {
     const row = document.createElement("tr"); row.className = "empty";
@@ -167,6 +208,9 @@ function renderResults(payload, status) {
   byId("result-count").textContent = `${payload.total} 条`;
   byId("result-previous").disabled = payload.offset === 0;
   byId("result-next").disabled = payload.offset + payload.items.length >= payload.total;
+  renderPager("result-pages", payload, (page) => {
+    state.results.offset = page * state.results.limit; refreshRunResults(state.run);
+  });
   if (!payload.items.length) {
     const row = document.createElement("tr"); row.className = "empty";
     const cell = document.createElement("td"); cell.colSpan = 5;
@@ -325,7 +369,7 @@ byId("company-discover").addEventListener("click", async () => {
   const selected = (state.companies.payload?.items || []).filter((item) => item.selected).map((item) => item.id);
   if (!selected.length) { byId("company-error").textContent = "先在当前页勾选有官网的企业。"; return; }
   const button = byId("company-discover"); button.disabled = true; byId("company-error").textContent = "";
-  try { const result = await api("/api/prospecting-beta/companies/discover", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ company_ids: selected, country: byId("country").value || "OTHER" }) }); byId("company-error").textContent = `已创建 ${result.runs.length} 个低风险发现任务${result.skipped.length ? `；${result.skipped.length} 家跳过` : ""}。`; await refreshCompanies(); if (result.runs.length) { const runs = await api("/api/prospecting-beta/runs"); if (runs.length) { renderRun(runs[0]); if (["queued", "running"].includes(runs[0].status)) poll(); } } }
+  try { const result = await api("/api/prospecting-beta/companies/discover", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ company_ids: selected, country: byId("country").value || "OTHER" }) }); byId("company-error").textContent = `已创建 ${result.runs.length} 个低风险发现任务${result.skipped.length ? `；${result.skipped.length} 家跳过` : ""}。`; await refreshCompanies(); if (result.runs.length) { const page = await api("/api/prospecting-beta/runs?offset=0&limit=20"); if (page.items.length) { renderRun(page.items[0]); if (["queued", "running"].includes(page.items[0].status)) poll(); } } }
   catch (error) { byId("company-error").textContent = error.message; } finally { button.disabled = false; }
 });
 let companySearchTimer = null;
@@ -335,6 +379,6 @@ byId("companies-previous").addEventListener("click", () => { state.companies.off
 byId("companies-next").addEventListener("click", () => { const payload = state.companies.payload; if (!payload || payload.offset + payload.items.length >= payload.total) return; state.companies.offset += state.companies.limit; refreshCompanies(); });
 
 (async () => {
-  try { await Promise.all([refreshSavedContacts(), refreshCompanies()]); const runs = await api("/api/prospecting-beta/runs"); if (runs.length) { renderRun(runs[0]); if (["queued", "running"].includes(runs[0].status)) poll(); } }
+  try { await Promise.all([refreshSavedContacts(), refreshCompanies()]); const page = await api("/api/prospecting-beta/runs?offset=0&limit=20"); if (page.items.length) { renderRun(page.items[0]); if (["queued", "running"].includes(page.items[0].status)) poll(); } }
   catch (error) { byId("form-error").textContent = error.message; }
 })();

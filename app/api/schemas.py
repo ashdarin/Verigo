@@ -129,6 +129,13 @@ class ProspectingRunResponse(BaseModel):
     protection: dict[str, Any]
 
 
+class ProspectingRunPageResponse(BaseModel):
+    total: int
+    offset: int
+    limit: int
+    items: list[ProspectingRunResponse]
+
+
 class ProspectingResultsResponse(BaseModel):
     total: int
     offset: int
@@ -241,11 +248,17 @@ class NotificationResponse(BaseModel):
     body: str
     created_at: str
     read_at: str | None
+    target_job_id: str | None
+    target_email: str | None
+    target_result_index: int | None
 
 
 class NotificationListResponse(BaseModel):
     items: list[NotificationResponse]
     unread_count: int
+    total: int
+    offset: int
+    limit: int
 
 
 class WorkerResultsRequest(BaseModel):

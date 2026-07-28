@@ -779,6 +779,25 @@ class JobStore:
             results.append(result)
         return available, results
 
+    def clear_result_review_update(self, job_id: str, result_index: int) -> bool:
+        """Clear the unread-review marker for one result, never its siblings."""
+        self.initialize()
+        with self._lock, closing(self._connect()) as connection:
+            row = connection.execute(
+                "SELECT result_json FROM job_results WHERE job_id=? AND original_index=?",
+                (job_id, result_index),
+            ).fetchone()
+            if row is None:
+                return False
+            result = json.loads(row[0])
+            if not result.pop("retry_updated", None):
+                return True
+            connection.execute(
+                "UPDATE job_results SET result_json=?, retry_updated=0 WHERE job_id=? AND original_index=?",
+                (json.dumps(result, ensure_ascii=False, default=str), job_id, result_index),
+            )
+        return True
+
     def result_overview(self, job_id: str) -> ResultOverview:
         """Return the task counters used by status polling without loading result JSON."""
         self.initialize()
@@ -905,6 +924,24 @@ class JobStore:
             ).fetchall()
         jobs = [self._job_from_row(row) for row in rows]
         return [self._hydrate_results(job) for job in jobs] if include_results else jobs
+
+    def page_for_owner(
+        self, owner_id: str, *, offset: int = 0, limit: int = 20,
+    ) -> tuple[int, list[Job]]:
+        """Return paginated top-level task history without hydrating results."""
+        self.initialize()
+        with closing(self._connect()) as connection:
+            total = int(connection.execute("""
+                SELECT COUNT(*) FROM jobs WHERE owner_id=?
+                AND parent_id IS NULL AND retry_parent_id IS NULL
+            """, (owner_id,)).fetchone()[0])
+            rows = connection.execute(
+                f"""SELECT {self._select_columns()} FROM jobs WHERE owner_id=?
+                AND parent_id IS NULL AND retry_parent_id IS NULL
+                ORDER BY created_at DESC LIMIT ? OFFSET ?""",
+                (owner_id, limit, offset),
+            ).fetchall()
+        return total, [self._job_from_row(row) for row in rows]
 
     def recent_completed_single_jobs(self, since: datetime) -> list[Job]:
         """Return standalone single-address jobs eligible for a narrow repair pass."""

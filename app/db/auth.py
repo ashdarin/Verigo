@@ -61,13 +61,21 @@ class AuthStore:
         title: str,
         body: str,
         created_at: str,
+        target_job_id: str | None = None,
+        target_email: str | None = None,
+        target_result_index: int | None = None,
     ) -> None:
         connection.execute(
             """
-            INSERT INTO notifications(id, user_id, kind, title, body, created_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO notifications(
+                id, user_id, kind, title, body, created_at,
+                target_job_id, target_email, target_result_index
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (uuid.uuid4().hex, user_id, kind, title, body, created_at),
+            (
+                uuid.uuid4().hex, user_id, kind, title, body, created_at,
+                target_job_id, target_email, target_result_index,
+            ),
         )
 
     def initialize(self) -> None:
@@ -306,10 +314,23 @@ class AuthStore:
                         body TEXT NOT NULL,
                         created_at TEXT NOT NULL,
                         read_at TEXT,
+                        target_job_id TEXT,
+                        target_email TEXT,
+                        target_result_index INTEGER,
                         FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
                     )
                     """
                 )
+                notification_columns = {
+                    row[1] for row in connection.execute("PRAGMA table_info(notifications)")
+                }
+                for name, definition in (
+                    ("target_job_id", "TEXT"),
+                    ("target_email", "TEXT"),
+                    ("target_result_index", "INTEGER"),
+                ):
+                    if name not in notification_columns:
+                        connection.execute(f"ALTER TABLE notifications ADD COLUMN {name} {definition}")
                 connection.execute(
                     "CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, read_at, created_at DESC)"
                 )
@@ -858,25 +879,36 @@ class AuthStore:
         }
         return ([{"email":str(r[1]),"email_verified":bool(r[2]),"paid_verifications":int(r[3]),"trial_verifications":int(r[5]),"used_verifications":int(r[6]),"created_at":str(r[4])} for r in rows], total, summary)
 
-    def create_notification(self, user_id: str, kind: str, title: str, body: str) -> None:
+    def create_notification(
+        self, user_id: str, kind: str, title: str, body: str, *,
+        target_job_id: str | None = None, target_email: str | None = None,
+        target_result_index: int | None = None,
+    ) -> None:
         """Record a user-facing event for payment and other future workflows."""
         self.initialize()
         with closing(self._connect()) as connection:
             self._insert_notification(
-                connection, user_id, kind, title, body, utc_now().isoformat()
+                connection, user_id, kind, title, body, utc_now().isoformat(),
+                target_job_id, target_email, target_result_index,
             )
 
-    def list_notifications(self, user_id: str, limit: int = 30) -> tuple[list[dict[str, str | None]], int]:
+    def list_notifications(
+        self, user_id: str, *, offset: int = 0, limit: int = 30,
+    ) -> tuple[list[dict[str, str | None]], int, int]:
         self.initialize()
         with closing(self._connect()) as connection:
             rows = connection.execute(
                 """
-                SELECT id, kind, title, body, created_at, read_at
+                SELECT id, kind, title, body, created_at, read_at,
+                       target_job_id, target_email, target_result_index
                 FROM notifications WHERE user_id=?
-                ORDER BY created_at DESC, id DESC LIMIT ?
+                ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?
                 """,
-                (user_id, limit),
+                (user_id, limit, offset),
             ).fetchall()
+            total = connection.execute(
+                "SELECT COUNT(*) FROM notifications WHERE user_id=?", (user_id,)
+            ).fetchone()[0]
             unread = connection.execute(
                 "SELECT COUNT(*) FROM notifications WHERE user_id=? AND read_at IS NULL",
                 (user_id,),
@@ -886,9 +918,12 @@ class AuthStore:
                 "id": str(row[0]), "kind": str(row[1]), "title": str(row[2]),
                 "body": str(row[3]), "created_at": str(row[4]),
                 "read_at": str(row[5]) if row[5] else None,
+                "target_job_id": str(row[6]) if row[6] else None,
+                "target_email": str(row[7]) if row[7] else None,
+                "target_result_index": int(row[8]) if row[8] is not None else None,
             }
             for row in rows
-        ], int(unread)
+        ], int(unread), int(total)
 
     def mark_notifications_read(self, user_id: str) -> None:
         self.initialize()
@@ -896,6 +931,24 @@ class AuthStore:
             connection.execute(
                 "UPDATE notifications SET read_at=? WHERE user_id=? AND read_at IS NULL",
                 (utc_now().isoformat(), user_id),
+            )
+
+    def mark_notification_read(self, user_id: str, notification_id: str) -> bool:
+        self.initialize()
+        with closing(self._connect()) as connection:
+            changed = connection.execute(
+                "UPDATE notifications SET read_at=? WHERE id=? AND user_id=? AND read_at IS NULL",
+                (utc_now().isoformat(), notification_id, user_id),
+            ).rowcount
+        return bool(changed)
+
+    def mark_result_notifications_read(self, user_id: str, job_id: str, result_index: int) -> None:
+        self.initialize()
+        with closing(self._connect()) as connection:
+            connection.execute(
+                """UPDATE notifications SET read_at=? WHERE user_id=? AND target_job_id=?
+                AND target_result_index=? AND read_at IS NULL""",
+                (utc_now().isoformat(), user_id, job_id, result_index),
             )
 
     def refund_credits(self, user_id: str, amount: int, reference: str) -> None:
@@ -1218,6 +1271,25 @@ class AuthStore:
                 connection.execute(
                     f"DELETE FROM jobs WHERE id IN ({placeholders})", job_ids
                 )
+            # Prospecting workspaces are user-private. Platform-level verified
+            # contact facts intentionally remain available only for a future
+            # on-demand lookup of the same domain.
+            prospecting_tables = (
+                "prospecting_contact_events",
+                "prospecting_control_samples",
+                "prospecting_owner_domain_profiles",
+                "prospecting_companies",
+                "prospecting_saved_contacts",
+                "prospecting_runs",
+            )
+            existing_tables = {
+                str(row[0]) for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            }
+            for table in prospecting_tables:
+                if table in existing_tables:
+                    connection.execute(f"DELETE FROM {table} WHERE owner_id=?", (user_id,))
             debit_references = [
                 str(row[0])
                 for row in connection.execute(

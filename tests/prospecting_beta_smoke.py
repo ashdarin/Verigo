@@ -159,6 +159,10 @@ with TestClient(app) as client:
     assert run["country"] == "DE"
     assert run["requested_pattern"] == "last.first"
     assert run["summary"]["verified"] == 0
+    run_page = client.get("/api/prospecting-beta/runs?offset=0&limit=1")
+    assert run_page.status_code == 200, run_page.text
+    assert run_page.json()["total"] == 1
+    assert run_page.json()["items"][0]["id"] == run["id"]
 
     candidates = prospecting_store.candidates(run["id"])
     assert candidates[0]["category"] == "business_entry"

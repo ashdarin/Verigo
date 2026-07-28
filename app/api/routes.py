@@ -26,6 +26,7 @@ from app.api.schemas import (
     PaymentOrderResponse,
     ProspectingRunRequest,
     ProspectingRunResponse,
+    ProspectingRunPageResponse,
     ProspectingResultsResponse,
     ProspectingContactUpdateRequest,
     ProspectingCompanyDiscoverRequest,
@@ -780,14 +781,27 @@ def admin_feature_usage(_: Annotated[User, Depends(require_admin)]) -> dict[str,
 
 
 @router.get("/notifications", response_model=NotificationListResponse)
-def list_notifications(user: Annotated[User, Depends(require_user)]) -> NotificationListResponse:
-    items, unread_count = auth_store.list_notifications(user.id)
-    return NotificationListResponse(items=items, unread_count=unread_count)
+def list_notifications(
+    user: Annotated[User, Depends(require_user)],
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=30, ge=1, le=100),
+) -> NotificationListResponse:
+    items, unread_count, total = auth_store.list_notifications(user.id, offset=offset, limit=limit)
+    return NotificationListResponse(
+        items=items, unread_count=unread_count, total=total, offset=offset, limit=limit,
+    )
 
 
 @router.post("/notifications/read", status_code=204)
 def mark_notifications_read(user: Annotated[User, Depends(require_user)]) -> None:
     auth_store.mark_notifications_read(user.id)
+
+
+@router.post("/notifications/{notification_id}/read", status_code=204)
+def mark_notification_read(
+    notification_id: str, user: Annotated[User, Depends(require_user)],
+) -> None:
+    auth_store.mark_notification_read(user.id, notification_id)
 
 @router.get("/wallet")
 def wallet_snapshot(user: Annotated[User, Depends(require_user)]) -> dict[str, object]:
@@ -874,8 +888,9 @@ def prospecting_results_page(
     run: ProspectingRun, user: User, *, offset: int, limit: int,
 ) -> tuple[int, list[dict[str, Any]]]:
     """Place demand-gated shared confirmations ahead of this run's new work."""
-    shared_total, shared = prospecting_store.shared_confirmed_contacts(
-        run.domain, exclude_owner_id=user.id, offset=offset, limit=limit,
+    current_candidate_emails = {item["email"] for item in prospecting_store.candidates(run.id)}
+    shared_total, shared = prospecting_store.confirmed_contacts_for_requested_domain(
+        run.domain, exclude_emails=current_candidate_emails, offset=offset, limit=limit,
     )
     local_offset = max(0, offset - shared_total)
     local_limit = max(0, limit - len(shared))
@@ -1194,11 +1209,17 @@ def export_saved_prospecting_contacts(
         output.getvalue().encode("utf-8-sig"), media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
-@router.get("/prospecting-beta/runs", response_model=list[ProspectingRunResponse])
+@router.get("/prospecting-beta/runs", response_model=ProspectingRunPageResponse)
 def list_prospecting_runs(
     user: Annotated[User, Depends(require_prospecting_beta)],
-) -> list[ProspectingRunResponse]:
-    return [serialize_prospecting_run(run) for run in prospecting_store.recent(user.id)]
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=20, ge=1, le=50),
+) -> ProspectingRunPageResponse:
+    total, runs = prospecting_store.page_for_owner(user.id, offset=offset, limit=limit)
+    return ProspectingRunPageResponse(
+        total=total, offset=offset, limit=limit,
+        items=[serialize_prospecting_run(run) for run in runs],
+    )
 
 
 @router.get("/prospecting-beta/runs/{run_id}", response_model=ProspectingRunResponse)
@@ -1304,12 +1325,17 @@ def create_payment_order(
     return PaymentOrderResponse(**order)
 
 
-@router.get("/jobs", response_model=list[JobResponse])
+@router.get("/jobs")
 def list_jobs(
     user: Annotated[User, Depends(require_user)],
-    limit: int = Query(default=10, ge=1, le=50),
-) -> list[JobResponse]:
-    return [serialize_job(job) for job in job_store.list_recent(user.id, limit)]
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=20, ge=1, le=50),
+) -> dict[str, object]:
+    total, jobs = job_store.page_for_owner(user.id, offset=offset, limit=limit)
+    return {
+        "total": total, "offset": offset, "limit": limit,
+        "items": [serialize_job(job) for job in jobs],
+    }
 
 
 @router.get("/jobs/{job_id}", response_model=JobResponse)
@@ -1393,6 +1419,21 @@ def get_results(
         limit=limit,
         items=[normalize_result(result) for result in page],
     )
+
+
+@router.post("/jobs/{job_id}/results/{result_index}/reviewed", status_code=204)
+def mark_result_reviewed(
+    job_id: str,
+    result_index: int,
+    user: Annotated[User | None, Depends(optional_user)],
+    guest_token: Annotated[str | None, Header(alias="X-Job-Token")] = None,
+) -> None:
+    job = require_job_access(require_job(job_id, include_results=False), user, guest_token)
+    if result_index < 0 or result_index >= len(job.emails):
+        raise HTTPException(status_code=404, detail="Verification result does not exist")
+    job_store.clear_result_review_update(job.id, result_index)
+    if user is not None:
+        auth_store.mark_result_notifications_read(user.id, job.id, result_index)
 
 
 @router.get("/jobs/{job_id}/download")

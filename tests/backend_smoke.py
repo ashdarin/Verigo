@@ -421,8 +421,9 @@ job_store.add(exhausted_dns_job)
 assert requeue_recent_single_temporary_jobs() == 0
 assert not job_store.retry_children(exhausted_dns_job.id)
 
+retry_notice_owner = auth_store.create_user("retry-notice@example.com", "correct-horse-2026")
 background_parent = Job(
-    id="smokebackground01", emails=["later@example.com"], worker_count=1,
+    id="smokebackground01", emails=["later@example.com"], worker_count=1, owner_id=retry_notice_owner.id,
     status="running", results=[normalize_result({
         "email": "later@example.com", "deliverable": None,
         "smtp_result": "452 temporary SMTP failure",
@@ -448,6 +449,18 @@ assert background_parent.results[0]["deliverable"] is False
 assert background_parent.results[0]["retry_updated"] is True
 assert background_parent.results[0]["retry_state"] == "completed"
 assert "retry_at" not in background_parent.results[0]
+assert retry_notice_owner.id == background_parent.owner_id
+retry_notifications, retry_unread, _ = auth_store.list_notifications(
+    background_parent.owner_id or "", limit=10
+)
+assert retry_unread >= 1
+retry_notice = next(item for item in retry_notifications if item["kind"] == "verification_review")
+assert retry_notice["target_job_id"] == background_parent.id
+assert retry_notice["target_email"] == "later@example.com"
+assert retry_notice["target_result_index"] == 0
+assert job_store.clear_result_review_update(background_parent.id, 0) is True
+auth_store.mark_result_notifications_read(background_parent.owner_id or "", background_parent.id, 0)
+assert job_store.get(background_parent.id).results[0].get("retry_updated") is None
 
 failed_retry_parent = Job(
     id="smokebackground02", emails=["retry-failure@example.com"], worker_count=1,
@@ -1021,9 +1034,10 @@ with TestClient(app) as account:
     assert account.get("/api/auth/me").json()["credits"] == 10
 
     job_store.add(completed_job("ownedjob0001", owner_id=user_id))
-    jobs = account.get("/api/jobs")
+    jobs = account.get("/api/jobs?offset=0&limit=20")
     assert jobs.status_code == 200
-    assert "ownedjob0001" in [job["id"] for job in jobs.json()]
+    assert jobs.json()["total"] >= 1
+    assert "ownedjob0001" in [job["id"] for job in jobs.json()["items"]]
     assert account.get("/api/jobs/ownedjob0001").status_code == 200
 
     assert account.post("/api/auth/logout").status_code == 204
@@ -1114,8 +1128,9 @@ with TestClient(app) as admin_account:
         "/api/admin/credits/deduct",
         json={"email": "manual-credit@example.com", "credits": 19},
     ).status_code == 422
-    notifications, unread_count = auth_store.list_notifications(credit_target.id)
+    notifications, unread_count, notification_total = auth_store.list_notifications(credit_target.id)
     assert unread_count == 2
+    assert notification_total == 2
     assert [item["kind"] for item in notifications] == ["credit_deduction", "credit_grant"]
     with TestClient(app) as credited_account:
         logged_in = credited_account.post(

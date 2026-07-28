@@ -19,11 +19,33 @@ const state = {
   turnstileWidgetId: null,
   notifications: [],
   notificationTimer: null,
+  recentJobs: { offset: 0, limit: 8, total: 0 },
   adminAccountOffset: 0,
   retryCountdownTimer: null,
 };
 
 const pageSize = 50;
+
+function pageWindow(current, pageCount) {
+  const pages = new Set([0, pageCount - 1]);
+  for (let page = Math.max(0, current - 2); page <= Math.min(pageCount - 1, current + 2); page += 1) pages.add(page);
+  return [...pages].sort((left, right) => left - right);
+}
+
+function renderPageNumbers(container, current, pageCount, onSelect) {
+  container.replaceChildren();
+  let previous = -1;
+  pageWindow(current, pageCount).forEach((page) => {
+    if (page > previous + 1) {
+      const gap = document.createElement("span"); gap.className = "page-gap"; gap.textContent = "…"; container.append(gap);
+    }
+    const button = document.createElement("button"); button.type = "button";
+    button.className = `page-number${page === current ? " active" : ""}`;
+    button.textContent = String(page + 1); button.disabled = page === current;
+    button.addEventListener("click", () => onSelect(page)); container.append(button);
+    previous = page;
+  });
+}
 
 const el = (id) => document.getElementById(id);
 const batchInput = el("email-input");
@@ -527,7 +549,7 @@ function renderResults() {
     const [label, className] = resultMeta(item);
     const row = document.createElement("tr");
     const values = [
-      item.email,
+      null,
       null,
       item.domain_type || "-",
       VerigoI18n.resultValue(item.verification_method || item.strategy || "-"),
@@ -542,7 +564,17 @@ function renderResults() {
     ];
     values.forEach((value, index) => {
       const cell = document.createElement("td");
-      if (index === 1) {
+      if (index === 0) {
+        cell.textContent = item.email;
+        if (item.retry_updated) {
+          const dot = document.createElement("i"); dot.className = "result-email-update";
+          dot.title = VerigoI18n.text("该邮箱的复核结果已更新"); cell.append(dot);
+          row.addEventListener("click", async () => {
+            await api(`/api/jobs/${state.jobId}/results/${item.original_index}/reviewed`, { method: "POST" });
+            item.retry_updated = false; renderResults(); await loadRecentJobs();
+          }, { once: true });
+        }
+      } else if (index === 1) {
         const pill = document.createElement("span");
         pill.className = `result-pill ${className}`;
         pill.textContent = label;
@@ -565,6 +597,9 @@ function renderPagination() {
   el("results-page-info").textContent = available ? `已显示 ${start}-${end}，共 ${available} 个邮箱` : "等待验证结果";
   el("previous-page").disabled = state.page === 0;
   el("next-page").disabled = (state.page + 1) * pageSize >= available;
+  renderPageNumbers(el("results-pages"), state.page, Math.max(1, Math.ceil(available / pageSize)), async (page) => {
+    state.page = page; await loadResults();
+  });
 }
 
 let searchTimer = null;
@@ -857,13 +892,17 @@ el("discovery-stop-button").addEventListener("click", async () => {
 async function loadRecentJobs() {
   if (!state.user) return;
   try {
-    const jobs = await api("/api/jobs?limit=8");
+    const { items: jobs, total } = await api(
+      `/api/jobs?offset=${state.recentJobs.offset}&limit=${state.recentJobs.limit}`
+    );
+    state.recentJobs.total = total;
     const container = el("recent-jobs");
     container.replaceChildren();
     if (!jobs.length) {
       const empty = document.createElement("small");
       empty.textContent = VerigoI18n.text("暂无任务");
       container.append(empty);
+      el("recent-jobs-pagination").classList.add("hidden");
       return;
     }
     jobs.forEach((job) => {
@@ -899,6 +938,13 @@ async function loadRecentJobs() {
         if (job.status !== "completed" && job.status !== "failed") schedulePoll(300);
       });
       container.append(button);
+    });
+    const pager = el("recent-jobs-pagination");
+    pager.classList.toggle("hidden", total <= state.recentJobs.limit);
+    const page = Math.floor(state.recentJobs.offset / state.recentJobs.limit);
+    el("recent-jobs-page-info").textContent = `第 ${page + 1} / ${Math.max(1, Math.ceil(total / state.recentJobs.limit))} 页，共 ${total} 个任务`;
+    renderPageNumbers(el("recent-jobs-pages"), page, Math.max(1, Math.ceil(total / state.recentJobs.limit)), async (nextPage) => {
+      state.recentJobs.offset = nextPage * state.recentJobs.limit; await loadRecentJobs();
     });
   } catch (error) {
     errorBox.textContent = error.message;
@@ -953,7 +999,7 @@ async function loadAccount() {
 el("dashboard-refresh").addEventListener("click", loadDashboardMetrics);
 async function loadWallet() { const data = await api("/api/wallet"); const set=(id,v)=>el(id).textContent=Number(v||0).toLocaleString("zh-CN"); set("wallet-available",data.available_verifications); el("wallet-paid").textContent=`${Number(data.paid_verifications||0).toLocaleString("zh-CN")} 次`; el("wallet-used").textContent=`${Number(data.paid_verifications_used||0).toLocaleString("zh-CN")} 次`; el("wallet-recharged").textContent=`¥${(Number(data.cumulative_recharge_fen||0)/100).toFixed(2)}`; el("wallet-value").textContent=`¥${Number(data.remaining_paid_value_yuan||0).toFixed(2)}`; el("wallet-spent").textContent=`¥${Number(data.paid_used_value_yuan||0).toFixed(2)}`; el("wallet-price").textContent=`100 次 ¥${(data.price_fen_per_100/100).toFixed(2)}`; el("wallet-trial-note").textContent=data.trial_verifications?`另有 ${data.trial_verifications} 体验次数`:"不含体验次数"; el("wallet-updated").textContent=`更新于 ${new Date().toLocaleString("zh-CN")}`; const days=data.usage_daily||[]; const max=Math.max(1,...days.map(x=>x.verifications)); el("wallet-usage-chart").innerHTML=days.map(x=>`<div class="wallet-bar" style="height:${Math.max(4,x.verifications/max*180)}px"><span>${x.verifications}</span></div>`).join(""); el("wallet-transactions").innerHTML=(data.transactions||[]).map(x=>`<div class="wallet-transaction"><div><strong>${x.title}</strong><small>${x.credits>0?"+":""}${x.credits} 次 ${x.note||""}</small></div><div><strong>${x.amount_fen==null?"—":`${x.credits<0?"-":"+"}¥${(x.amount_fen/100).toFixed(2)}`}</strong><small>${new Date(x.created_at).toLocaleString("zh-CN")}</small></div></div>`).join("")||"暂无资金流水"; }
 el("wallet-refresh").addEventListener("click", loadWallet);
-async function loadAdminAccounts(){try{const data=await api(`/api/admin/accounts/list?offset=${state.adminAccountOffset}&limit=50`),rows=data.items,summary=data.summary||{};el("admin-metric-users").textContent=data.total.toLocaleString("zh-CN");el("admin-metric-paid").textContent=Number(summary.paid_verifications||0).toLocaleString("zh-CN");el("admin-metric-trial").textContent=Number(summary.trial_verifications||0).toLocaleString("zh-CN");el("admin-metric-used").textContent=Number(summary.used_verifications||0).toLocaleString("zh-CN");el("admin-accounts-meta").textContent=`共 ${data.total} 个账户，按注册时间排序`;el("admin-accounts-list").innerHTML=rows.map(r=>`<button class="admin-account-row" data-email="${r.email}" type="button"><strong>${r.email}</strong><span>付费 ${r.paid_verifications}</span><span>体验 ${r.trial_verifications}</span><span>已用 ${r.used_verifications}</span></button>`).join("")||"暂无账户";el("admin-accounts-page").textContent=`${data.offset+1}-${Math.min(data.offset+data.limit,data.total)} / ${data.total}`;el("admin-accounts-prev").disabled=!data.offset;el("admin-accounts-next").disabled=data.offset+data.limit>=data.total;document.querySelectorAll(".admin-account-row").forEach(b=>b.addEventListener("click",()=>{el("admin-credit-email").value=b.dataset.email;el("admin-account-lookup").click();}));}catch(error){["admin-metric-users","admin-metric-paid","admin-metric-trial","admin-metric-used"].forEach(id=>el(id).textContent="—");el("admin-accounts-meta").textContent=`账户数据加载失败：${error.message}`;el("admin-accounts-list").textContent="请刷新后重试";}}
+async function loadAdminAccounts(){try{const data=await api(`/api/admin/accounts/list?offset=${state.adminAccountOffset}&limit=50`),rows=data.items,summary=data.summary||{};el("admin-metric-users").textContent=data.total.toLocaleString("zh-CN");el("admin-metric-paid").textContent=Number(summary.paid_verifications||0).toLocaleString("zh-CN");el("admin-metric-trial").textContent=Number(summary.trial_verifications||0).toLocaleString("zh-CN");el("admin-metric-used").textContent=Number(summary.used_verifications||0).toLocaleString("zh-CN");el("admin-accounts-meta").textContent=`共 ${data.total} 个账户，按注册时间排序`;el("admin-accounts-list").innerHTML=rows.map(r=>`<button class="admin-account-row" data-email="${r.email}" type="button"><strong>${r.email}</strong><span>付费 ${r.paid_verifications}</span><span>体验 ${r.trial_verifications}</span><span>已用 ${r.used_verifications}</span></button>`).join("")||"暂无账户";el("admin-accounts-page").textContent=`${data.offset+1}-${Math.min(data.offset+data.limit,data.total)} / ${data.total}`;el("admin-accounts-prev").disabled=!data.offset;el("admin-accounts-next").disabled=data.offset+data.limit>=data.total;const page=Math.floor(data.offset/data.limit);renderPageNumbers(el("admin-accounts-pages"),page,Math.max(1,Math.ceil(data.total/data.limit)),nextPage=>{state.adminAccountOffset=nextPage*data.limit;loadAdminAccounts();});document.querySelectorAll(".admin-account-row").forEach(b=>b.addEventListener("click",()=>{el("admin-credit-email").value=b.dataset.email;el("admin-account-lookup").click();}));}catch(error){["admin-metric-users","admin-metric-paid","admin-metric-trial","admin-metric-used"].forEach(id=>el(id).textContent="—");el("admin-accounts-meta").textContent=`账户数据加载失败：${error.message}`;el("admin-accounts-list").textContent="请刷新后重试";}}
 async function loadAdminFeatureUsage(){const data=await api("/api/admin/feature-usage");const days=data.daily||[];const width=620,height=350,p={top:18,right:12,bottom:30,left:30},max=Math.max(1,...days.flatMap(day=>[day.single,day.batch,day.discovery]));const x=index=>p.left+(days.length>1?index*(width-p.left-p.right)/(days.length-1):(width-p.left-p.right)/2),point=(value,index)=>`${x(index)},${p.top+(height-p.top-p.bottom)*(1-value/max)}`;const series=[["single","single"],["batch","batch"],["discovery","discovery"]];const grid=[0,.5,1].map(step=>{const y=p.top+(height-p.top-p.bottom)*step;return `<line class="admin-feature-grid" x1="${p.left}" y1="${y}" x2="${width-p.right}" y2="${y}"/><text class="admin-feature-axis" x="0" y="${y+4}">${Math.round(max*(1-step))}</text>`;}).join("");const labels=days.map((day,index)=>index%2&&days.length>8?"":`<text class="admin-feature-axis" text-anchor="middle" x="${x(index)}" y="${height-8}">${day.day.slice(5).replace("-","/")}</text>`).join("");const lines=series.map(([key,name])=>`<polyline class="admin-feature-line-${name}" points="${days.map((day,index)=>point(day[key],index)).join(" ")}" fill="none" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>${days.map((day,index)=>{const [px,py]=point(day[key],index).split(",");return `<circle cx="${px}" cy="${py}" r="3" fill="currentColor" class="admin-feature-line-${name}"><title>${day.day} ${key} ${day[key]}</title></circle>`;}).join("")}`).join("");el("admin-feature-chart").innerHTML=`<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="功能使用趋势">${grid}${lines}${labels}</svg>`;el("admin-feature-legend").innerHTML=`<span>单个 ${data.totals.single}</span><span>批量 ${data.totals.batch}</span><span>查找 ${data.totals.discovery}</span>`;}
 el("admin-accounts-refresh").addEventListener("click",()=>{state.adminAccountOffset=0;loadAdminAccounts();});el("admin-accounts-prev").addEventListener("click",()=>{state.adminAccountOffset=Math.max(0,state.adminAccountOffset-50);loadAdminAccounts();});el("admin-accounts-next").addEventListener("click",()=>{state.adminAccountOffset+=50;loadAdminAccounts();});
 el("admin-account-lookup").addEventListener("click", async()=>{try{await api(`/api/admin/accounts?email=${encodeURIComponent(el("admin-credit-email").value)}`);}catch(error){el("admin-credit-result").textContent=error.message;}});
@@ -970,6 +1016,25 @@ function renderNotifications() {
   state.notifications.forEach((notification) => {
     const item = document.createElement("article");
     item.className = "notification-item";
+    if (notification.target_job_id && notification.target_result_index !== null) {
+      item.classList.add("targeted");
+      item.title = notification.target_email || "查看对应邮箱";
+      item.addEventListener("click", async () => {
+        try {
+          state.jobId = notification.target_job_id;
+          state.guestToken = null;
+          sessionStorage.setItem("verigo_job_id", state.jobId);
+          const job = await api(`/api/jobs/${state.jobId}`);
+          state.page = Math.floor((notification.target_result_index || 0) / pageSize);
+          showJob(job); await loadResults();
+          await api(`/api/notifications/${notification.id}/read`, { method: "POST" });
+          await api(`/api/jobs/${state.jobId}/results/${notification.target_result_index}/reviewed`, { method: "POST" });
+          await loadNotifications();
+        } catch (error) {
+          errorBox.textContent = error.message;
+        }
+      });
+    }
     const title = document.createElement("strong");
     title.textContent = VerigoI18n.notificationTitle(notification);
     const body = document.createElement("p");
@@ -1004,10 +1069,6 @@ el("notification-button").addEventListener("click", async () => {
   el("account-menu").classList.add("hidden");
   if (!opening) return;
   await loadNotifications();
-  if (!el("notification-count").classList.contains("hidden")) {
-    await api("/api/notifications/read", { method: "POST" });
-    await loadNotifications();
-  }
 });
 document.addEventListener("click", (event) => {
   if (!el("notification-menu").contains(event.target) && !el("notification-button").contains(event.target)) el("notification-menu").classList.add("hidden");

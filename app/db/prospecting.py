@@ -136,6 +136,27 @@ class ProspectingStore:
                 connection.execute("CREATE INDEX IF NOT EXISTS idx_prospecting_saved_contacts_owner ON prospecting_saved_contacts(owner_id, saved_at DESC)")
                 connection.execute("CREATE INDEX IF NOT EXISTS idx_prospecting_saved_contacts_owner_domain ON prospecting_saved_contacts(owner_id, domain, saved_at DESC)")
                 connection.execute("""
+                    CREATE TABLE IF NOT EXISTS prospecting_verified_contacts (
+                        email TEXT PRIMARY KEY, domain TEXT NOT NULL, category TEXT NOT NULL,
+                        pattern TEXT NOT NULL, last_verified_at TEXT NOT NULL,
+                        verification_method TEXT, verification_detail TEXT,
+                        confidence INTEGER NOT NULL
+                    )
+                """)
+                connection.execute("""
+                    INSERT INTO prospecting_verified_contacts(
+                        email, domain, category, pattern, last_verified_at,
+                        verification_method, verification_detail, confidence
+                    ) SELECT email, domain, category, pattern,
+                        COALESCE(last_verified_at, saved_at), verification_method,
+                        verification_detail, confidence
+                    FROM prospecting_saved_contacts WHERE 1
+                    ON CONFLICT(email) DO UPDATE SET
+                        last_verified_at=MAX(prospecting_verified_contacts.last_verified_at, excluded.last_verified_at),
+                        confidence=MAX(prospecting_verified_contacts.confidence, excluded.confidence)
+                """)
+                connection.execute("CREATE INDEX IF NOT EXISTS idx_prospecting_verified_contacts_domain ON prospecting_verified_contacts(domain, last_verified_at DESC)")
+                connection.execute("""
                     CREATE TABLE IF NOT EXISTS prospecting_companies (
                         id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, import_id TEXT NOT NULL,
                         name TEXT NOT NULL, domain TEXT, country TEXT, industry TEXT,
@@ -260,6 +281,23 @@ class ProspectingStore:
             """, (owner_id, limit)).fetchall()
         return [self._run_from_row(row) for row in rows]
 
+    def page_for_owner(
+        self, owner_id: str, *, offset: int = 0, limit: int = 20,
+    ) -> tuple[int, list[ProspectingRun]]:
+        """Return paged discovery history rather than silently truncating it."""
+        self.initialize()
+        with closing(self._connect()) as connection:
+            total = int(connection.execute(
+                "SELECT COUNT(*) FROM prospecting_runs WHERE owner_id=?", (owner_id,)
+            ).fetchone()[0])
+            rows = connection.execute("""
+                SELECT id, owner_id, domain, country, requested_pattern, verification_job_id, candidate_count, created_at,
+                       profile_patterns_json, profiles_recorded_at
+                FROM prospecting_runs WHERE owner_id=? ORDER BY created_at DESC
+                LIMIT ? OFFSET ?
+            """, (owner_id, limit, offset)).fetchall()
+        return total, [self._run_from_row(row) for row in rows]
+
     def issued_candidate_keys(self, domain: str) -> tuple[set[str], set[str]]:
         """Return globally spent emails and personal-name pairs for one company."""
         self.initialize()
@@ -345,33 +383,30 @@ class ProspectingStore:
             })
         return total, items
 
-    def shared_confirmed_contacts(
-        self, domain: str, *, exclude_owner_id: str, offset: int = 0, limit: int = 100,
+    def confirmed_contacts_for_requested_domain(
+        self, domain: str, *, exclude_emails: set[str] | None = None,
+        offset: int = 0, limit: int = 100,
     ) -> tuple[int, list[dict[str, Any]]]:
         """Reuse confirmed contacts only after a user requests their domain."""
         self.initialize()
+        exclude_emails = {email.lower() for email in (exclude_emails or set())}
+        exclusion = ""
+        parameters: list[Any] = [domain]
+        if exclude_emails:
+            placeholders = ", ".join("?" for _ in exclude_emails)
+            exclusion = f" AND email NOT IN ({placeholders})"
+            parameters.extend(sorted(exclude_emails))
         with closing(self._connect()) as connection:
-            total = int(connection.execute("""
-                SELECT COUNT(DISTINCT email) FROM prospecting_saved_contacts
-                WHERE domain=? AND owner_id<>?
-            """, (domain, exclude_owner_id)).fetchone()[0])
+            total = int(connection.execute(
+                "SELECT COUNT(*) FROM prospecting_verified_contacts WHERE domain=?" + exclusion,
+                parameters,
+            ).fetchone()[0])
             rows = connection.execute("""
-                SELECT contact.email, contact.domain, contact.category, contact.pattern,
-                       contact.last_verified_at, contact.confidence
-                FROM prospecting_saved_contacts AS contact
-                JOIN (
-                    SELECT email, MAX(last_verified_at) AS newest_verified_at
-                    FROM prospecting_saved_contacts
-                    WHERE domain=? AND owner_id<>?
-                    GROUP BY email
-                ) AS newest
-                    ON newest.email=contact.email
-                    AND newest.newest_verified_at=contact.last_verified_at
-                WHERE contact.domain=? AND contact.owner_id<>?
-                GROUP BY contact.email, contact.domain
-                ORDER BY contact.last_verified_at DESC, contact.confidence DESC, contact.email ASC
+                SELECT email, domain, category, pattern, last_verified_at, confidence
+                FROM prospecting_verified_contacts WHERE domain=?""" + exclusion + """
+                ORDER BY last_verified_at DESC, confidence DESC, email ASC
                 LIMIT ? OFFSET ?
-            """, (domain, exclude_owner_id, domain, exclude_owner_id, limit, offset)).fetchall()
+            """, [*parameters, limit, offset]).fetchall()
         return total, [
             {
                 "email": row[0], "domain": row[1], "category": row[2], "pattern": row[3],
@@ -447,7 +482,15 @@ class ProspectingStore:
         with closing(self._connect()) as connection:
             begin_immediate(connection)
             try:
-                before = connection.total_changes
+                candidate_emails = [row[1] for row in rows]
+                placeholders = ", ".join("?" for _ in candidate_emails)
+                existing = {
+                    str(row[0]) for row in connection.execute(
+                        f"SELECT email FROM prospecting_saved_contacts WHERE owner_id=? "
+                        f"AND email IN ({placeholders})",
+                        [run.owner_id, *candidate_emails],
+                    ).fetchall()
+                }
                 connection.executemany("""
                     INSERT INTO prospecting_saved_contacts(
                         owner_id, email, domain, category, pattern, source, run_id, saved_at,
@@ -461,7 +504,24 @@ class ProspectingStore:
                         verification_detail=excluded.verification_detail,
                         confidence=MAX(prospecting_saved_contacts.confidence, excluded.confidence)
                 """, rows)
-                inserted = connection.total_changes - before
+                # Count ownership rows only; platform facts and audit events must
+                # not inflate the number reported as newly saved contacts.
+                inserted = len(set(candidate_emails) - existing)
+                connection.executemany("""
+                    INSERT INTO prospecting_verified_contacts(
+                        email, domain, category, pattern, last_verified_at,
+                        verification_method, verification_detail, confidence
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(email) DO UPDATE SET
+                        domain=excluded.domain, category=excluded.category, pattern=excluded.pattern,
+                        last_verified_at=MAX(prospecting_verified_contacts.last_verified_at, excluded.last_verified_at),
+                        verification_method=excluded.verification_method,
+                        verification_detail=excluded.verification_detail,
+                        confidence=MAX(prospecting_verified_contacts.confidence, excluded.confidence)
+                """, [
+                    (row[1], row[2], row[3], row[4], row[8], row[9], row[10], row[11])
+                    for row in rows
+                ])
                 connection.executemany("""
                     INSERT INTO prospecting_contact_events(
                         owner_id, email, run_id, verified_at, verification_method,

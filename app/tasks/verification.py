@@ -479,6 +479,7 @@ def finish_background_retry(job: Job) -> Job | None:
     }
     next_retry: list[str] = []
     changed = 0
+    changed_results: list[dict[str, Any]] = []
     for raw_result in job.results:
         result = normalize_result(raw_result)
         email = str(result.get("email", ""))
@@ -498,6 +499,7 @@ def finish_background_retry(job: Job) -> Job | None:
         ):
             changed += 1
             result["retry_updated"] = True
+            changed_results.append(result)
         existing[email.lower()] = result
     parent.results = [
         existing[email.lower()] for email in parent.emails if email.lower() in existing
@@ -509,12 +511,22 @@ def finish_background_retry(job: Job) -> Job | None:
     if next_retry:
         enqueue_background_retry(parent, job, next_retry, job.temporary_retry_attempts + 1)
     if changed and parent.owner_id:
-        auth_store.create_notification(
-            parent.owner_id,
-            "verification_review",
-            "任务复核结果已更新",
-            f"{changed} 个邮箱的复核结果已更新",
-        )
+        result_index_by_email = {
+            email.lower(): index for index, email in enumerate(parent.emails)
+        }
+        for result in changed_results:
+            email = str(result.get("email") or "邮箱")
+            auth_store.create_notification(
+                parent.owner_id,
+                "verification_review",
+                "邮箱复核结果已更新",
+                f"{email} 的复核结果已更新",
+                target_job_id=parent.id,
+                target_email=email,
+                target_result_index=int(result.get(
+                    "original_index", result_index_by_email.get(email.lower(), -1)
+                )),
+            )
     return parent
 
 
@@ -534,6 +546,7 @@ def finish_background_retry_failure(job: Job, error: str) -> Job | None:
         return parent
 
     changed = 0
+    changed_results: list[dict[str, Any]] = []
     for result in parent.results:
         if str(result.get("email", "")).lower() not in affected:
             continue
@@ -546,16 +559,27 @@ def finish_background_retry_failure(job: Job, error: str) -> Job | None:
         result["message"] = "邮件服务器暂时无法复核，最终状态仍待确认"
         result["retry_updated"] = True
         changed += 1
+        changed_results.append(result)
     job_store.cache_results(parent.results)
     write_csv(parent)
     job_store.persist(parent)
     if changed and parent.owner_id:
-        auth_store.create_notification(
-            parent.owner_id,
-            "verification_review",
-            "任务复核未完成",
-            f"{changed} 个邮箱暂时无法完成复核，最终状态仍待确认。",
-        )
+        result_index_by_email = {
+            email.lower(): index for index, email in enumerate(parent.emails)
+        }
+        for result in changed_results:
+            email = str(result.get("email") or "邮箱")
+            auth_store.create_notification(
+                parent.owner_id,
+                "verification_review",
+                "邮箱复核暂未完成",
+                f"{email} 暂时无法完成复核，最终状态仍待确认。",
+                target_job_id=parent.id,
+                target_email=email,
+                target_result_index=int(result.get(
+                    "original_index", result_index_by_email.get(email.lower(), -1)
+                )),
+            )
     logger.warning("Deferred retry %s failed: %s", job.id, error)
     return parent
 

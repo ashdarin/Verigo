@@ -98,7 +98,7 @@
           <tbody id="candidates-body"></tbody>
         </table>
       </div>
-      <div class="saved-pagination"><button id="candidate-previous" class="secondary" type="button">上一页</button><button id="candidate-next" class="secondary" type="button">下一页</button></div>
+      <div class="saved-pagination"><button id="candidate-previous" class="secondary" type="button">上一页</button><div id="candidate-pages" class="page-numbers"></div><button id="candidate-next" class="secondary" type="button">下一页</button></div>
     </section>
 
     <section id="results-panel" class="results hidden" aria-labelledby="results-title">
@@ -109,7 +109,7 @@
           <tbody id="results-body"></tbody>
         </table>
       </div>
-      <div class="saved-pagination"><button id="result-previous" class="secondary" type="button">上一页</button><button id="result-next" class="secondary" type="button">下一页</button></div>
+      <div class="saved-pagination"><button id="result-previous" class="secondary" type="button">上一页</button><div id="result-pages" class="page-numbers"></div><button id="result-next" class="secondary" type="button">下一页</button></div>
     </section>
 
     <section id="company-list-panel" class="results" aria-labelledby="company-list-title">
@@ -122,7 +122,7 @@
       <div class="saved-controls"><label class="saved-search"><span>搜索企业、域名或行业</span><input id="company-search" type="search" autocomplete="off"></label><label class="saved-search"><span>官网状态</span><select id="company-domain-state"><option value="all">全部</option><option value="ready">有官网</option><option value="missing">待补官网</option></select></label></div>
       <p id="company-error" class="error" role="alert"></p>
       <div class="table-wrap"><table><thead><tr><th>选择</th><th>企业</th><th>官网域名</th><th>国家</th><th>行业</th><th>状态</th></tr></thead><tbody id="companies-body"></tbody></table></div>
-      <div class="saved-pagination"><button id="companies-previous" class="secondary" type="button">上一页</button><button id="companies-next" class="secondary" type="button">下一页</button></div>
+      <div class="saved-pagination"><button id="companies-previous" class="secondary" type="button">上一页</button><div id="companies-pages" class="page-numbers"></div><button id="companies-next" class="secondary" type="button">下一页</button></div>
     </section>
 
     <section id="saved-contacts-panel" class="results" aria-labelledby="saved-contacts-title">
@@ -133,7 +133,7 @@
         <div class="saved-actions"><button id="saved-show-all" class="secondary" type="button">全部域名</button><button id="saved-export" class="secondary" type="button">导出 CSV</button></div>
       </div>
       <div id="saved-domain-list" class="saved-domain-list" aria-label="按域名查看联系人"></div>
-      <div class="directory-pagination"><span id="saved-domain-count" class="directory-count"></span><div><button id="saved-domain-previous" class="secondary" type="button">上一页</button><button id="saved-domain-next" class="secondary" type="button">下一页</button></div></div>
+      <div class="directory-pagination"><span id="saved-domain-count" class="directory-count"></span><div><button id="saved-domain-previous" class="secondary" type="button">上一页</button><span id="saved-domain-pages" class="page-numbers"></span><button id="saved-domain-next" class="secondary" type="button">下一页</button></div></div>
       <p id="saved-company-meta" class="profile-copy hidden"></p>
       <div class="saved-table-heading"><div><h3 id="saved-contact-view-title">全部已保存联系人</h3></div><span id="saved-contact-view-count" class="limit">0</span></div>
       <div class="table-wrap">
@@ -142,7 +142,7 @@
           <tbody id="saved-contacts-body"></tbody>
         </table>
       </div>
-      <div class="saved-pagination"><button id="saved-previous" class="secondary" type="button">上一页</button><button id="saved-next" class="secondary" type="button">下一页</button></div>
+      <div class="saved-pagination"><button id="saved-previous" class="secondary" type="button">上一页</button><div id="saved-pages" class="page-numbers"></div><button id="saved-next" class="secondary" type="button">下一页</button></div>
     </section>
   </main>
   <script src="/static/js/prospecting-beta.js"></script>

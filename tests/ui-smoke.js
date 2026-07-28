@@ -215,7 +215,7 @@ async function checkEnglishDiscoveryAndDocs(browser) {
       needs_email_binding: false, is_admin: false,
     }),
   }));
-  await page.route("**/api/jobs?limit=8", (route) => route.fulfill({ contentType: "application/json", body: "[]" }));
+  await page.route("**/api/jobs?offset=0&limit=8", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ total: 0, offset: 0, limit: 8, items: [] }) }));
   await page.route("**/api/notifications", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: [], unread_count: 0 }) }));
   await page.goto("http://127.0.0.1:8000", { waitUntil: "networkidle" });
   await page.click("#locale-toggle");
@@ -264,7 +264,7 @@ async function checkEnglishDesktopHeadingAndApiKeys(browser) {
       needs_email_binding: false, is_admin: false,
     }),
   }));
-  await page.route("**/api/jobs?limit=8", (route) => route.fulfill({ contentType: "application/json", body: "[]" }));
+  await page.route("**/api/jobs?offset=0&limit=8", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ total: 0, offset: 0, limit: 8, items: [] }) }));
   await page.route("**/api/notifications", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: [], unread_count: 0 }) }));
   await page.route("**/api/auth/api-keys", (route) => route.fulfill({
     contentType: "application/json",

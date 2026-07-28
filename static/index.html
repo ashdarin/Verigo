@@ -110,6 +110,9 @@
           <button id="refresh-jobs" class="icon-button" type="button" title="刷新" aria-label="刷新任务">↻</button>
         </div>
         <div id="recent-jobs" class="recent-jobs"></div>
+        <div id="recent-jobs-pagination" class="pagination hidden" aria-label="任务历史分页">
+          <span id="recent-jobs-page-info"></span><div id="recent-jobs-pages"></div>
+        </div>
       </section>
     </aside>
 
@@ -163,6 +166,7 @@
         <span id="results-page-info">等待验证结果</span>
         <div>
           <button id="previous-page" class="page-button" type="button" disabled>上一页</button>
+          <span id="results-pages" class="page-numbers" aria-label="结果页码"></span>
           <button id="next-page" class="page-button" type="button" disabled>下一页</button>
         </div>
       </div>
@@ -306,7 +310,7 @@
         <button id="admin-credit-submit" class="primary-action" type="submit">确认授予</button>
       </form>
       <section id="admin-account-summary" class="admin-account-summary"><div class="report-card-heading"><div><h2>功能使用趋势</h2><p>单个验证、批量验证与工作邮箱查找</p></div></div><div id="admin-feature-chart" class="admin-feature-chart"></div><div id="admin-feature-legend" class="report-legend"></div></section>
-      <section class="admin-accounts-section"><div class="report-card-heading"><div><h2>全部账户</h2><p id="admin-accounts-meta">按注册时间排序</p></div><button id="admin-accounts-refresh" class="download-action" type="button">刷新</button></div><div id="admin-accounts-list" class="admin-accounts-list"></div><div class="pagination"><span id="admin-accounts-page"></span><div><button id="admin-accounts-prev" class="page-button" type="button">上一页</button><button id="admin-accounts-next" class="page-button" type="button">下一页</button></div></div></section>
+      <section class="admin-accounts-section"><div class="report-card-heading"><div><h2>全部账户</h2><p id="admin-accounts-meta">按注册时间排序</p></div><button id="admin-accounts-refresh" class="download-action" type="button">刷新</button></div><div id="admin-accounts-list" class="admin-accounts-list"></div><div class="pagination"><span id="admin-accounts-page"></span><div><button id="admin-accounts-prev" class="page-button" type="button">上一页</button><span id="admin-accounts-pages" class="page-numbers"></span><button id="admin-accounts-next" class="page-button" type="button">下一页</button></div></div></section>
     </section>
   </main>
 
