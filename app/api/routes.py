@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import csv
+import hashlib
 import hmac
 import json
 import time
 import uuid
 from io import StringIO
 from typing import Annotated
+from urllib.parse import quote
 
 from fastapi import APIRouter, Body, Depends, File, Header, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, Response
@@ -1312,6 +1314,8 @@ def verify_single_email(
             owner_email=user.email if user else None,
             job_id=uuid.uuid4().hex[:12],
         )
+        if user and user.onboarding_required and user.email_verified and not user.activation_completed_at:
+            auth_store.record_activation_job(user.id, job.id)
     except RuntimeError as exc:
         if not yahoo_only:
             metrics_store.release_free_single(request_network_hash(request))
@@ -1326,8 +1330,45 @@ def verify_single_email(
 def create_payment_order(
     payload: PaymentOrderRequest, user: Annotated[User, Depends(require_user)]
 ) -> PaymentOrderResponse:
+    if not settings.payment_checkout_url or not settings.payment_webhook_token:
+        raise HTTPException(status_code=503, detail="支付通道暂未配置，请稍后再试")
     order = auth_store.create_payment_order(user.id, payload.packages)
-    return PaymentOrderResponse(**order)
+    checkout_url = None
+    if settings.payment_checkout_url:
+        checkout_url = settings.payment_checkout_url.format(
+            order_id=quote(str(order["id"]), safe=""),
+            amount_fen=quote(str(order["amount_fen"]), safe=""),
+            credits=quote(str(order["credits"]), safe=""),
+            return_url=quote("https://verigo.site/wallet", safe=""),
+        )
+    return PaymentOrderResponse(
+        **order, checkout_url=checkout_url, payment_enabled=bool(checkout_url)
+    )
+
+
+@router.post("/billing/webhook", include_in_schema=False)
+async def payment_webhook(
+    request: Request,
+    signature: Annotated[str | None, Header(alias="X-Verigo-Payment-Signature")] = None,
+) -> dict[str, object]:
+    """Payment-gateway callback. The gateway signs the exact JSON request body."""
+    if not settings.payment_webhook_token:
+        raise HTTPException(status_code=404, detail="支付回调未配置")
+    body = await request.body()
+    expected = hmac.new(
+        settings.payment_webhook_token.encode("utf-8"), body, hashlib.sha256
+    ).hexdigest()
+    if not signature or not hmac.compare_digest(signature, expected):
+        raise HTTPException(status_code=401, detail="支付回调签名无效")
+    try:
+        payload = json.loads(body)
+        order_id = str(payload["order_id"])
+    except (json.JSONDecodeError, KeyError, TypeError) as exc:
+        raise HTTPException(status_code=422, detail="支付回调缺少订单号") from exc
+    try:
+        return auth_store.complete_payment_order(order_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.get("/jobs")

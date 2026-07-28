@@ -22,6 +22,7 @@ from app.core.mailer import (
     send_password_reset_email,
 )
 from app.db.auth import User, auth_store
+from app.db.jobs import job_store
 
 
 auth_router = APIRouter(prefix="/api/auth")
@@ -109,6 +110,8 @@ class UserResponse(BaseModel):
     trial_credit_expires_at: str | None
     needs_email_binding: bool
     is_admin: bool
+    onboarding_step: str
+    activation_job_id: str | None
 
 
 class ApiKeyCreateRequest(BaseModel):
@@ -182,6 +185,13 @@ def verify_turnstile(token: str | None, request: Request) -> None:
 
 
 def serialize_user(user: User) -> UserResponse:
+    onboarding_step = "completed"
+    if user.onboarding_required:
+        onboarding_step = (
+            "verify_email" if not user.email_verified else
+            "completed" if user.activation_completed_at else
+            "verification_in_progress" if user.activation_job_id else "first_verification"
+        )
     return UserResponse(
         id=user.id,
         email=user.email or user.username,
@@ -196,6 +206,8 @@ def serialize_user(user: User) -> UserResponse:
             and user.email
             and user.email.lower() in settings.admin_emails
         ),
+        onboarding_step=onboarding_step,
+        activation_job_id=user.activation_job_id,
     )
 
 
@@ -277,6 +289,12 @@ def register(payload: RegistrationCredentials, request: Request, response: Respo
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     set_session_cookie(response, auth_store.create_session(user.id))
+    # Registration should lead directly into account confirmation. A mail
+    # outage must not discard the just-created account; the dialog can resend.
+    try:
+        send_email_verification(user.email, auth_store.create_email_verification(user.id))
+    except (MailNotConfiguredError, MailDeliveryError):
+        pass
     return serialize_user(user)
 
 
@@ -320,6 +338,24 @@ def confirm_email_verification(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return serialize_user(verified)
+
+
+class ActivationCompleteRequest(BaseModel):
+    job_id: str = Field(min_length=8, max_length=64)
+
+
+@auth_router.post("/onboarding/activation/complete", response_model=UserResponse)
+def complete_onboarding_activation(
+    payload: ActivationCompleteRequest,
+    user: Annotated[User, Depends(require_user)],
+) -> UserResponse:
+    job = job_store.get(payload.job_id, include_results=False)
+    if job is None or job.owner_id != user.id or job.status != "completed":
+        raise HTTPException(status_code=422, detail="请先完成本次邮箱验证")
+    try:
+        return serialize_user(auth_store.complete_activation(user.id, payload.job_id))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @auth_router.post("/email-binding/request", status_code=204)

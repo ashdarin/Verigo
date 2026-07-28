@@ -218,6 +218,8 @@ class PaymentOrderResponse(BaseModel):
     credits: int
     amount_fen: int
     status: str
+    checkout_url: str | None = None
+    payment_enabled: bool = False
 
 
 class AdminCreditGrantRequest(BaseModel):

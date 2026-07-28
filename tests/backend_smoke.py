@@ -961,6 +961,10 @@ with TestClient(app) as account:
     assert verified_user["trial_credits"] == 10
     assert verified_user["trial_credit_expires_at"]
 
+    # New registrations must stay in the guided activation flow until one
+    # actual single-email verification has completed.
+    assert verified_user["onboarding_step"] == "first_verification"
+
     candidates = account.post(
         "/api/discovery/candidates",
         json={"first_name": "Ming", "last_name": "Wang", "domain": "example.com"},
@@ -1009,6 +1013,19 @@ with TestClient(app) as account:
         "/api/verify/single", json={"email": "third@example.com"}
     )
     assert third_free.status_code == 202, third_free.text
+    activation_job_id = first_free.json()["id"]
+    activation_user = account.get("/api/auth/me").json()
+    assert activation_user["onboarding_step"] == "verification_in_progress"
+    assert activation_user["activation_job_id"] == activation_job_id
+    activation_job = job_store.get(activation_job_id)
+    assert activation_job is not None
+    activation_job.status = "completed"
+    job_store.persist(activation_job)
+    activated = account.post(
+        "/api/auth/onboarding/activation/complete", json={"job_id": activation_job_id}
+    )
+    assert activated.status_code == 200, activated.text
+    assert activated.json()["onboarding_step"] == "completed"
 
     paid = account.post(
         "/api/jobs",
@@ -1032,6 +1049,15 @@ with TestClient(app) as account:
     assert job_store.get(paid.json()["id"]).status == "stopped"
     auth_store.refund_credits(user_id, 2, f"verification:{paid.json()['id']}")
     assert account.get("/api/auth/me").json()["credits"] == 10
+
+    payment_order = auth_store.create_payment_order(user_id, 2)
+    before_payment = account.get("/api/auth/me").json()["paid_credits"]
+    paid_order = auth_store.complete_payment_order(payment_order["id"])
+    assert paid_order["status"] == "paid"
+    assert account.get("/api/auth/me").json()["paid_credits"] == before_payment + 200
+    # A gateway retry must be idempotent and never credit the order twice.
+    assert auth_store.complete_payment_order(payment_order["id"])["status"] == "paid"
+    assert account.get("/api/auth/me").json()["paid_credits"] == before_payment + 200
 
     job_store.add(completed_job("ownedjob0001", owner_id=user_id))
     legacy_jobs = account.get("/api/jobs?limit=20")

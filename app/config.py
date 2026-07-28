@@ -157,6 +157,11 @@ class Settings:
     verification_price_fen_per_100: int = max(
         1, int(os.getenv("VERIGO_VERIFICATION_PRICE_FEN_PER_100", "50"))
     )
+    # A merchant-hosted checkout URL. It may contain {order_id}, {amount_fen},
+    # {credits}, and {return_url}; payment confirmation remains the provider's
+    # signed server-to-server responsibility.
+    payment_checkout_url: str = os.getenv("VERIGO_PAYMENT_CHECKOUT_URL", "").strip()
+    payment_webhook_token: str = os.getenv("VERIGO_PAYMENT_WEBHOOK_TOKEN", "")
     max_pending_jobs: int = int(os.getenv("VERIGO_MAX_PENDING_JOBS", "20"))
     qq_smtp_per_mx: int = max(1, int(os.getenv("VERIGO_QQ_SMTP_PER_MX", "1")))
     qq_smtp_wait_seconds: float = max(

@@ -17,7 +17,7 @@
   <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"Organization","name":"Verigo","url":"https://verigo.site/","logo":"https://verigo.site/static/favicon.svg"},{"@type":"WebApplication","name":"Verigo","url":"https://verigo.site/","applicationCategory":"BusinessApplication","operatingSystem":"Web","description":"面向销售、招聘与出海团队的邮箱验证、名单清洗和企业邮箱查找工具。","offers":{"@type":"Offer","price":"0.50","priceCurrency":"CNY","description":"100 次批量验证"}},{"@type":"FAQPage","mainEntity":[{"@type":"Question","name":"Catch-all 邮箱是什么意思？","acceptedAnswer":{"@type":"Answer","text":"Catch-all 是企业邮箱域名的一种设置：发往该域名的任意前缀都可能被服务器接收或转发，因此无法仅凭服务器响应确认某个具体收件人真实存在。"}},{"@type":"Question","name":"企业邮箱查找和普通验证有什么区别？","acceptedAnswer":{"@type":"Answer","text":"普通验证用于确认已有邮箱是否可用；企业邮箱查找用于获取目标企业的业务联络邮箱，适合销售开发、招聘和商务合作。"}}]}]}</script>
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" referrerpolicy="no-referrer">
-  <link rel="stylesheet" href="/static/css/app.css?v=commercial-v1">
+  <link rel="stylesheet" href="/static/css/app.css?v=commercial-v2">
 </head>
 <body>
   <header class="topbar">
@@ -347,6 +347,7 @@
   <main id="wallet-workspace" class="wallet-workspace hidden">
     <section class="report-heading"><div><p class="eyebrow">账户中心</p><h1>资金与使用</h1><p id="wallet-updated" class="report-updated"></p></div><div class="report-actions"><span id="wallet-price" class="report-period"></span><button id="wallet-refresh" class="download-action" type="button">刷新</button></div></section>
     <section class="report-scorecards"><article class="report-scorecard"><span>累计充值</span><strong id="wallet-recharged">¥0.00</strong><small>实收金额</small></article><article class="report-scorecard"><span>付费余额价值</span><strong id="wallet-value">¥0.00</strong><small id="wallet-paid">0 次</small></article><article class="report-scorecard"><span>已用于验证</span><strong id="wallet-spent">¥0.00</strong><small id="wallet-used">0 次</small></article><article class="report-scorecard"><span>可用验证次数</span><strong id="wallet-available">0</strong><small id="wallet-trial-note">含体验次数</small></article></section>
+    <section class="wallet-purchase"><div><p class="eyebrow">购买验证额度</p><h2>按需充值，立即用于批量验证</h2><p>100 次 ¥0.50。购买完成后额度自动进入账户。</p></div><div class="purchase-actions"><label for="purchase-packages">购买份数（每份 100 次）</label><div><input id="purchase-packages" type="number" min="1" max="1000" value="1"><button id="purchase-button" class="primary-action" type="button">购买 100 次 · ¥0.50</button></div><p id="purchase-status" class="purchase-status" role="status"></p></div></section>
     <section class="report-secondary-grid"><section class="report-card"><div class="report-card-heading"><div><h2>验证使用趋势</h2><p>最近 14 天</p></div></div><div id="wallet-usage-chart" class="wallet-usage-chart"></div></section><section class="report-card"><div class="report-card-heading"><div><h2>资金流水</h2><p>实收、退款和管理员调整</p></div></div><div id="wallet-transactions" class="wallet-transactions"></div></section></section>
   </main>
 
@@ -417,6 +418,32 @@
     </form>
   </dialog>
 
+  <dialog id="onboarding-dialog" class="auth-dialog onboarding-dialog">
+    <section class="onboarding-step" data-onboarding-step="verify_email">
+      <div class="dialog-heading"><div><p class="eyebrow">开始使用 Verigo</p><h2>确认你的工作邮箱</h2></div><button class="dialog-close" type="button" data-close-onboarding aria-label="关闭">×</button></div>
+      <p class="dialog-copy">验证码已发送到你的注册邮箱。确认后即可获得体验额度并开始验证。</p>
+      <form id="onboarding-email-form"><label for="onboarding-email-code">六位验证码</label><input id="onboarding-email-code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required><p id="onboarding-email-error" class="form-error" role="alert"></p><button class="primary-action" type="submit">确认邮箱并继续</button></form>
+      <button id="onboarding-resend" class="text-action" type="button">重新发送验证码</button>
+    </section>
+    <section class="onboarding-step hidden" data-onboarding-step="first_verification">
+      <div class="dialog-heading"><div><p class="eyebrow">已获得体验额度</p><h2>完成第一次真实验证</h2></div><button class="dialog-close" type="button" data-close-onboarding aria-label="关闭">×</button></div>
+      <p class="dialog-copy">输入一个你需要确认的真实邮箱地址，立即查看验证结果。</p>
+      <form id="onboarding-check-form"><label for="onboarding-check-email">邮箱地址</label><input id="onboarding-check-email" type="email" autocomplete="email" placeholder="name@company.com" required><p id="onboarding-check-error" class="form-error" role="alert"></p><button class="primary-action" type="submit">开始验证</button></form>
+    </section>
+    <section class="onboarding-step hidden" data-onboarding-step="verification_in_progress">
+      <div class="dialog-heading"><div><p class="eyebrow">正在验证</p><h2>首次验证已提交</h2></div><button class="dialog-close" type="button" data-close-onboarding aria-label="关闭">×</button></div>
+      <p class="dialog-copy">验证完成后，这里会自动更新。你也可以关闭窗口，在任务工作台查看进度。</p><p id="onboarding-job-status" class="onboarding-job-status"></p>
+    </section>
+    <section class="onboarding-step hidden" data-onboarding-step="completed">
+      <div class="dialog-heading"><div><p class="eyebrow">账户已就绪</p><h2>现在可以处理你的名单</h2></div><button class="dialog-close" type="button" data-close-onboarding aria-label="关闭">×</button></div>
+      <p class="dialog-copy">体验额度已到账。需要批量验证时，可以直接购买额度。</p><div class="onboarding-actions"><button id="onboarding-go-wallet" class="primary-action" type="button">购买验证额度</button><button id="onboarding-finish" class="secondary-action" type="button">先去验证邮箱</button></div>
+    </section>
+  </dialog>
+
+  <dialog id="purchase-dialog" class="auth-dialog">
+    <section><div class="dialog-heading"><div><p class="eyebrow">购买验证额度</p><h2>订单已创建</h2></div><button id="close-purchase" class="dialog-close" type="button" aria-label="关闭">×</button></div><p id="purchase-dialog-copy" class="dialog-copy"></p><p id="purchase-dialog-status" class="form-error" role="alert"></p><div id="purchase-dialog-actions"></div></section>
+  </dialog>
+
   <dialog id="delete-account-dialog" class="auth-dialog">
     <form id="delete-account-form" method="dialog">
       <div class="dialog-heading"><div><p class="eyebrow">账户与数据</p><h2>删除账户</h2></div><button id="close-delete-account" class="dialog-close" type="button" aria-label="关闭">×</button></div>
@@ -480,6 +507,6 @@
   </dialog>
 
   <script src="/static/js/i18n.js?v=locale-v1" defer></script>
-  <script src="/static/js/app.js?v=commercial-v1" defer></script>
+  <script src="/static/js/app.js?v=commercial-v2" defer></script>
 </body>
 </html>

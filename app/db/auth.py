@@ -27,6 +27,9 @@ class User:
     paid_credits: int = 0
     trial_credits: int = 0
     trial_credit_expires_at: str | None = None
+    activation_job_id: str | None = None
+    activation_completed_at: str | None = None
+    onboarding_required: bool = False
 
 
 @dataclass(frozen=True)
@@ -104,6 +107,14 @@ class AuthStore:
                     connection.execute("ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 0")
                 if "credits" not in columns:
                     connection.execute("ALTER TABLE users ADD COLUMN credits INTEGER NOT NULL DEFAULT 0")
+                if "activation_job_id" not in columns:
+                    connection.execute("ALTER TABLE users ADD COLUMN activation_job_id TEXT")
+                if "activation_completed_at" not in columns:
+                    connection.execute("ALTER TABLE users ADD COLUMN activation_completed_at TEXT")
+                if "onboarding_required" not in columns:
+                    # Existing customers should never be forced through a new
+                    # activation flow when this migration is deployed.
+                    connection.execute("ALTER TABLE users ADD COLUMN onboarding_required INTEGER NOT NULL DEFAULT 0")
                 connection.execute(
                     """
                     CREATE TABLE IF NOT EXISTS email_verifications (
@@ -384,6 +395,9 @@ class AuthStore:
 
     def _user_from_row(self, connection: sqlite3.Connection, row: tuple[object, ...]) -> User:
         trial_credits, trial_expires_at = self._trial_credit_summary(connection, str(row[0]))
+        activation = connection.execute(
+            "SELECT activation_job_id, activation_completed_at, onboarding_required FROM users WHERE id=?", (str(row[0]),)
+        ).fetchone()
         paid_credits = int(row[4])
         return User(
             id=str(row[0]),
@@ -394,18 +408,72 @@ class AuthStore:
             paid_credits=paid_credits,
             trial_credits=trial_credits,
             trial_credit_expires_at=trial_expires_at,
+            activation_job_id=str(activation[0]) if activation and activation[0] else None,
+            activation_completed_at=str(activation[1]) if activation and activation[1] else None,
+            onboarding_required=bool(activation[2]) if activation else False,
             created_at=str(row[5]),
         )
+
+    def record_activation_job(self, user_id: str, job_id: str) -> User:
+        """Attach the first post-verification single check to the activation flow."""
+        self.initialize()
+        with closing(self._connect()) as connection:
+            begin_immediate(connection)
+            row = connection.execute(
+                "SELECT id, username, email, email_verified, credits, created_at, activation_job_id, activation_completed_at, onboarding_required "
+                "FROM users WHERE id=?", (user_id,)
+            ).fetchone()
+            if row is None:
+                connection.rollback()
+                raise ValueError("账户不存在")
+            if not row[3] or not row[8] or row[7] or row[6]:
+                connection.rollback()
+                return self._user_from_row(connection, row[:6])
+            connection.execute(
+                "UPDATE users SET activation_job_id=? WHERE id=?", (job_id, user_id)
+            )
+            refreshed = connection.execute(
+                "SELECT id, username, email, email_verified, credits, created_at FROM users WHERE id=?", (user_id,)
+            ).fetchone()
+            connection.commit()
+            return self._user_from_row(connection, refreshed)
+
+    def complete_activation(self, user_id: str, job_id: str) -> User:
+        self.initialize()
+        with closing(self._connect()) as connection:
+            begin_immediate(connection)
+            row = connection.execute(
+                "SELECT id, username, email, email_verified, credits, created_at, activation_job_id "
+                "FROM users WHERE id=?", (user_id,)
+            ).fetchone()
+            if row is None or not row[3]:
+                connection.rollback()
+                raise ValueError("请先验证注册邮箱")
+            if row[6] != job_id:
+                connection.rollback()
+                raise ValueError("该验证任务不属于当前激活流程")
+            connection.execute(
+                "UPDATE users SET activation_completed_at=?, onboarding_required=0 WHERE id=? AND activation_completed_at IS NULL",
+                (utc_now().isoformat(), user_id),
+            )
+            refreshed = connection.execute(
+                "SELECT id, username, email, email_verified, credits, created_at FROM users WHERE id=?", (user_id,)
+            ).fetchone()
+            connection.commit()
+            return self._user_from_row(connection, refreshed)
 
     def create_user(self, email: str, password: str) -> User:
         self.initialize()
         now = utc_now().isoformat()
         normalized_email = email.lower()
-        user = User(id=uuid.uuid4().hex, username=normalized_email, email=normalized_email, created_at=now)
+        user = User(
+            id=uuid.uuid4().hex, username=normalized_email, email=normalized_email,
+            created_at=now, onboarding_required=True,
+        )
         try:
             with closing(self._connect()) as connection:
                 connection.execute(
-                    "INSERT INTO users (id, username, email, password_hash, created_at) VALUES (?, ?, ?, ?, ?)",
+                    "INSERT INTO users (id, username, email, password_hash, created_at, onboarding_required) VALUES (?, ?, ?, ?, ?, 1)",
                     (user.id, user.username, user.email, hash_password(password), user.created_at),
                 )
         except sqlite3.IntegrityError as exc:
@@ -1052,6 +1120,41 @@ class AuthStore:
         with closing(self._connect()) as connection:
             connection.execute("INSERT INTO payment_orders(id,user_id,credits,amount_fen,status,created_at) VALUES (?,?,?,?, 'pending', ?)", (order_id,user_id,credits,amount_fen,utc_now().isoformat()))
         return {"id": order_id, "credits": credits, "amount_fen": amount_fen, "status": "pending"}
+
+    def complete_payment_order(self, order_id: str) -> dict[str, int | str]:
+        """Credit a paid order exactly once; invoked only by a trusted payment callback."""
+        self.initialize()
+        now = utc_now().isoformat()
+        with closing(self._connect()) as connection:
+            begin_immediate(connection)
+            order = connection.execute(
+                "SELECT user_id, credits, amount_fen, status FROM payment_orders WHERE id=?", (order_id,)
+            ).fetchone()
+            if order is None:
+                connection.rollback()
+                raise ValueError("订单不存在")
+            if order[3] == "paid":
+                connection.rollback()
+                return {"id": order_id, "credits": int(order[1]), "amount_fen": int(order[2]), "status": "paid"}
+            if order[3] != "pending":
+                connection.rollback()
+                raise ValueError("订单状态无法完成支付")
+            connection.execute(
+                "UPDATE payment_orders SET status='paid', paid_at=? WHERE id=?", (now, order_id)
+            )
+            connection.execute(
+                "UPDATE users SET credits=credits+? WHERE id=?", (int(order[1]), order[0])
+            )
+            connection.execute(
+                "INSERT INTO credit_ledger(user_id, delta, kind, reference, created_at) VALUES (?, ?, 'payment', ?, ?)",
+                (order[0], int(order[1]), f"payment:{order_id}", now),
+            )
+            self._insert_notification(
+                connection, str(order[0]), "payment", "充值到账",
+                f"已到账 {int(order[1])} 次验证额度。", now,
+            )
+            connection.commit()
+        return {"id": order_id, "credits": int(order[1]), "amount_fen": int(order[2]), "status": "paid"}
 
     def reset_password(self, email: str, code: str, password: str) -> None:
         self.initialize()
