@@ -66,4 +66,17 @@ assert stored is not None
 assert stored.results[0]["domain_type"] == "inconclusive"
 assert stored.results[0]["deliverable"] is None
 assert stored.results[1]["deliverable"] is True
+
+# A Catch-all shard must also be reconciled with a 550 recorded in a
+# different job for the same domain.
+rejection_job = Job(id="catch-all-rejection", emails=["missing@shared.test"], worker_count=1)
+rejection_job.results = [dict(result("missing@shared.test", catch_all=False, rejected=True), original_index=0)]
+job_store.add(rejection_job)
+catch_all_job = Job(id="catch-all-stale", emails=["sales@shared.test"], worker_count=1)
+catch_all_job.results = [dict(result("sales@shared.test", catch_all=True), original_index=0)]
+job_store.add(catch_all_job)
+assert job_store.reconcile_catch_all_conflicts(catch_all_job.id) == 1
+stored = job_store.get(catch_all_job.id)
+assert stored is not None
+assert stored.results[0]["domain_type"] == "inconclusive"
 print("catch-all conflict smoke: ok")

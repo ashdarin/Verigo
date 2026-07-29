@@ -23,6 +23,15 @@ def _has_explicit_550_rejection(result: dict[str, Any]) -> bool:
     return re.search(r"(?<!\d)550(?!\d)", detail) is not None
 
 
+def catch_all_domains(results: Iterable[dict[str, Any]]) -> set[str]:
+    """Return domains currently represented by a Catch-all result."""
+    return {
+        _domain(result)
+        for result in results
+        if result.get("domain_type") == "catch-all" and _domain(result)
+    }
+
+
 def reconcile_catch_all_conflicts(results: Iterable[dict[str, Any]]) -> set[str]:
     """Downgrade Catch-all verdicts contradicted by SMTP recipient evidence."""
     items = list(results)
@@ -33,18 +42,14 @@ def reconcile_catch_all_conflicts(results: Iterable[dict[str, Any]]) -> set[str]
         and result.get("domain_type") != "catch-all"
         and _domain(result)
     }
-    catch_all_domains = {
-        _domain(result)
-        for result in items
-        if result.get("domain_type") == "catch-all" and _domain(result)
-    }
+    detected_catch_all_domains = catch_all_domains(items)
     rejected_domains = {
         _domain(result)
         for result in items
         if _has_explicit_550_rejection(result) and _domain(result)
     }
     # A real 250 and a real 550 both disprove a domain-wide Catch-all claim.
-    conflicts = (accepted_domains | rejected_domains) & catch_all_domains
+    conflicts = (accepted_domains | rejected_domains) & detected_catch_all_domains
     if not conflicts:
         return set()
 

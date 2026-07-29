@@ -900,7 +900,7 @@ class JobStore:
 
     def reconcile_catch_all_conflicts(self, job_id: str) -> int:
         """Keep a domain from exposing Catch-all beside contradictory SMTP verdicts."""
-        from app.core.catch_all import reconcile_catch_all_conflicts
+        from app.core.catch_all import catch_all_domains, reconcile_catch_all_conflicts
 
         self.initialize()
         with self._lock, closing(self._connect()) as connection:
@@ -920,6 +920,28 @@ class JobStore:
                 result["original_index"] = int(index)
                 results.append(result)
             conflicts = reconcile_catch_all_conflicts(results)
+            # A job can be a small shard of one domain. Include earlier,
+            # explicit SMTP rejections for its Catch-all domains so a stale
+            # probe verdict cannot survive merely because it landed on a
+            # different worker or user task.
+            domains = catch_all_domains(results)
+            if domains:
+                placeholders = ", ".join("?" for _ in domains)
+                evidence_rows = connection.execute(
+                    f"""SELECT result_json FROM job_results
+                    WHERE deliverability=0
+                    AND lower(substr(email, instr(email, '@') + 1)) IN ({placeholders})""",
+                    tuple(sorted(domains)),
+                ).fetchall()
+                evidence: list[dict[str, Any]] = []
+                for (raw,) in evidence_rows:
+                    try:
+                        result = json.loads(raw)
+                    except (TypeError, json.JSONDecodeError):
+                        continue
+                    if isinstance(result, dict):
+                        evidence.append(result)
+                conflicts |= reconcile_catch_all_conflicts([*results, *evidence])
             if not conflicts:
                 connection.commit()
                 return 0
