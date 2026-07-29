@@ -899,7 +899,7 @@ class JobStore:
             connection.commit()
 
     def reconcile_catch_all_conflicts(self, job_id: str) -> int:
-        """Keep a domain from exposing conflicting Catch-all and 250 verdicts."""
+        """Keep a domain from exposing Catch-all beside contradictory SMTP verdicts."""
         from app.core.catch_all import reconcile_catch_all_conflicts
 
         self.initialize()

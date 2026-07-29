@@ -16,15 +16,15 @@ from app.core.catch_all import reconcile_catch_all_conflicts
 from app.db.jobs import Job, job_store
 
 
-def result(email: str, *, catch_all: bool) -> dict[str, object]:
+def result(email: str, *, catch_all: bool, rejected: bool = False) -> dict[str, object]:
     return {
         "email": email,
         "progress_state": "completed",
         "domain_type": "catch-all" if catch_all else "normal",
-        "deliverable": None if catch_all else True,
-        "valid": True,
+        "deliverable": None if catch_all else not rejected,
+        "valid": not rejected,
         "verification_method": "catch-all_detected" if catch_all else "standard",
-        "smtp_result": "250 可投递" if not catch_all else "无法确认",
+        "smtp_result": "550 recipient rejected" if rejected else ("250 accepted" if not catch_all else "inconclusive"),
         "checks": {"smtp": True},
     }
 
@@ -38,6 +38,21 @@ assert items[0]["domain_type"] == "inconclusive"
 assert items[0]["deliverable"] is None
 assert items[1]["deliverable"] is True
 
+# A clear recipient rejection is also incompatible with a domain-wide
+# Catch-all claim. This is the BMW regression: stale Catch-all and 550.
+items = [
+    result("sales@example.test", catch_all=True),
+    result("missing@example.test", catch_all=False, rejected=True),
+]
+assert reconcile_catch_all_conflicts(items) == {"example.test"}
+assert items[0]["domain_type"] == "inconclusive"
+assert items[1]["deliverable"] is False
+
+# Start the persistence scenario with the original confirmed-250 conflict.
+items = [
+    result("sales@example.test", catch_all=True),
+    result("press@example.test", catch_all=False),
+]
 job = Job(id="catch-all-conflict", emails=["sales@example.test", "press@example.test"], worker_count=1)
 job.results = [dict(items[0], original_index=0), dict(items[1], original_index=1)]
 job_store.add(job)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
 from typing import Any
 
@@ -11,8 +12,19 @@ def _domain(result: dict[str, Any]) -> str:
     return email.rsplit("@", 1)[1].lower()
 
 
+def _has_explicit_550_rejection(result: dict[str, Any]) -> bool:
+    """A recipient-level 550 is stronger evidence than a prior probe verdict."""
+    if result.get("deliverable") is not False:
+        return False
+    detail = " ".join(
+        str(result.get(key) or "")
+        for key in ("smtp_code", "smtp_result", "smtp_raw_result", "message")
+    )
+    return re.search(r"(?<!\d)550(?!\d)", detail) is not None
+
+
 def reconcile_catch_all_conflicts(results: Iterable[dict[str, Any]]) -> set[str]:
-    """Downgrade contradictory catch-all results to an inconclusive state."""
+    """Downgrade Catch-all verdicts contradicted by SMTP recipient evidence."""
     items = list(results)
     accepted_domains = {
         _domain(result)
@@ -26,7 +38,13 @@ def reconcile_catch_all_conflicts(results: Iterable[dict[str, Any]]) -> set[str]
         for result in items
         if result.get("domain_type") == "catch-all" and _domain(result)
     }
-    conflicts = accepted_domains & catch_all_domains
+    rejected_domains = {
+        _domain(result)
+        for result in items
+        if _has_explicit_550_rejection(result) and _domain(result)
+    }
+    # A real 250 and a real 550 both disprove a domain-wide Catch-all claim.
+    conflicts = (accepted_domains | rejected_domains) & catch_all_domains
     if not conflicts:
         return set()
 
