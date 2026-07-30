@@ -321,6 +321,14 @@ class Settings:
     sqlite_write_retry_delay_ms: int = max(
         10, int(os.getenv("VERIGO_SQLITE_WRITE_RETRY_DELAY_MS", "100"))
     )
+    sqlite_synchronous: str = os.getenv("VERIGO_SQLITE_SYNCHRONOUS", "NORMAL")
+    sqlite_cache_size_kb: int = max(
+        2000, int(os.getenv("VERIGO_SQLITE_CACHE_SIZE_KB", "10240"))
+    )
+    sqlite_mmap_size: int = int(os.getenv("VERIGO_SQLITE_MMAP_SIZE", "134217728"))
+    sqlite_wal_autocheckpoint: int = max(
+        100, int(os.getenv("VERIGO_SQLITE_WAL_AUTOCHECKPOINT", "5000"))
+    )
     node_stale_seconds: int = max(
         30, int(os.getenv("VERIGO_NODE_STALE_SECONDS", "180"))
     )

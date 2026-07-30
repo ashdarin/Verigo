@@ -9,12 +9,17 @@ from app.config import settings
 
 
 def connect(database_path: Path, *, timeout_seconds: float = 30.0) -> sqlite3.Connection:
-    """Open a WAL connection with consistent integrity and lock-wait settings."""
+    """Open a WAL connection with tuned integrity, lock-wait and cache settings."""
     database_path.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(database_path, timeout=timeout_seconds, isolation_level=None)
     connection.execute("PRAGMA journal_mode=WAL")
     connection.execute("PRAGMA foreign_keys=ON")
     connection.execute(f"PRAGMA busy_timeout={settings.sqlite_busy_timeout_ms}")
+    connection.execute(f"PRAGMA synchronous={settings.sqlite_synchronous}")
+    connection.execute(f"PRAGMA cache_size=-{settings.sqlite_cache_size_kb}")
+    connection.execute("PRAGMA temp_store=MEMORY")
+    connection.execute(f"PRAGMA mmap_size={settings.sqlite_mmap_size}")
+    connection.execute(f"PRAGMA wal_autocheckpoint={settings.sqlite_wal_autocheckpoint}")
     return connection
 
 
