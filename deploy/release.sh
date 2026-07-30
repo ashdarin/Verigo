@@ -333,6 +333,13 @@ for _ in {1..20}; do
         systemctl restart verigo-worker@2.service
         set_service_mode active
         trap - ERR
+        # Keep only the 10 most recent releases to prevent disk accumulation.
+        ls -t "$releases_dir" | grep -v '^\.' | tail -n +11 | while read -r old_release; do
+            old_path="$releases_dir/$old_release"
+            if [ "$old_path" != "$(readlink -f "$current_link")" ]; then
+                rm -rf "$old_path"
+            fi
+        done
         printf 'Verigo release %s health check passed\n' "$release_version"
         exit 0
     fi

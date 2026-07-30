@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, fields as dc_fields
 from pathlib import Path
+from types import SimpleNamespace
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -362,6 +363,30 @@ class Settings:
     session_cookie_name: str = os.getenv("VERIGO_SESSION_COOKIE", "verigo_session")
     session_ttl_days: int = int(os.getenv("VERIGO_SESSION_TTL_DAYS", "30"))
     secure_cookies: bool = env_bool("VERIGO_SECURE_COOKIES", False)
+
+    def secondary_cloudstudio_namespace(self) -> SimpleNamespace:
+        """Build a config namespace for the secondary CloudStudio workspace.
+
+        Auto-maps cloudstudio_secondary_* fields to cloudstudio_* names so
+        new secondary settings are picked up without manual SimpleNamespace
+        updates in worker_lifecycle.py.
+        """
+        mapped: dict[str, object] = {}
+        for f in dc_fields(self):
+            if f.name.startswith("cloudstudio_secondary_"):
+                target = f.name.replace("cloudstudio_secondary_", "cloudstudio_")
+                mapped[target] = getattr(self, f.name)
+        mapped["tencent_qq_worker_enabled"] = self.cloudstudio_domestic_worker_enabled
+        mapped["tencent_qq_worker_token"] = self.cloudstudio_domestic_worker_token
+        mapped["cloudstudio_probe_token"] = self.cloudstudio_probe_token
+        mapped["cloudstudio_ssh_token_expiry_seconds"] = self.cloudstudio_ssh_token_expiry_seconds
+        mapped["cloudstudio_worker_online_seconds"] = self.cloudstudio_worker_online_seconds
+        mapped["cloudstudio_startup_timeout_seconds"] = self.cloudstudio_startup_timeout_seconds
+        mapped["cloudstudio_wake_max_attempts"] = self.cloudstudio_wake_max_attempts
+        mapped["cloudstudio_wake_retry_seconds"] = self.cloudstudio_wake_retry_seconds
+        mapped["cloudstudio_idle_stop_seconds"] = self.cloudstudio_idle_stop_seconds
+        mapped["cloudstudio_lifecycle_poll_seconds"] = self.cloudstudio_lifecycle_poll_seconds
+        return SimpleNamespace(**mapped)
 
 
 settings = Settings()

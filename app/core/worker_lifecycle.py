@@ -6,7 +6,6 @@ import subprocess
 import threading
 import urllib.parse
 from datetime import datetime, timedelta
-from types import SimpleNamespace
 from typing import Any, Protocol
 
 from tencentcloud.common import credential
@@ -522,26 +521,7 @@ class WorkerLifecycleCoordinator:
 
 worker_lifecycle = WorkerLifecycleCoordinator()
 
-secondary_cloudstudio_config = SimpleNamespace(
-    tencent_qq_worker_enabled=settings.cloudstudio_domestic_worker_enabled,
-    tencent_qq_worker_token=settings.cloudstudio_domestic_worker_token,
-    cloudstudio_probe_token=settings.cloudstudio_probe_token,
-    cloudstudio_lifecycle_enabled=settings.cloudstudio_secondary_lifecycle_enabled,
-    cloudstudio_secret_id=settings.cloudstudio_secondary_secret_id,
-    cloudstudio_secret_key=settings.cloudstudio_secondary_secret_key,
-    cloudstudio_region=settings.cloudstudio_secondary_region,
-    cloudstudio_space_key=settings.cloudstudio_secondary_space_key,
-    cloudstudio_ssh_enabled=settings.cloudstudio_secondary_ssh_enabled,
-    cloudstudio_ssh_key_path=settings.cloudstudio_secondary_ssh_key_path,
-    cloudstudio_ssh_known_hosts_path=settings.cloudstudio_secondary_ssh_known_hosts_path,
-    cloudstudio_ssh_token_expiry_seconds=settings.cloudstudio_ssh_token_expiry_seconds,
-    cloudstudio_worker_online_seconds=settings.cloudstudio_worker_online_seconds,
-    cloudstudio_startup_timeout_seconds=settings.cloudstudio_startup_timeout_seconds,
-    cloudstudio_wake_max_attempts=settings.cloudstudio_wake_max_attempts,
-    cloudstudio_wake_retry_seconds=settings.cloudstudio_wake_retry_seconds,
-    cloudstudio_idle_stop_seconds=settings.cloudstudio_idle_stop_seconds,
-    cloudstudio_lifecycle_poll_seconds=settings.cloudstudio_lifecycle_poll_seconds,
-)
+secondary_cloudstudio_config = settings.secondary_cloudstudio_namespace()
 domestic_worker_lifecycle = WorkerLifecycleCoordinator(
     config=secondary_cloudstudio_config,
     target=DOMESTIC_CLOUDSTUDIO_TARGET,

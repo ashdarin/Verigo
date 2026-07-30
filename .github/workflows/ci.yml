@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Compile check
+        run: |
+          python -m py_compile app/main.py
+          python -m py_compile 验证8.py
+          find app/ -name "*.py" -exec python -m py_compile {} +
+
+      - name: Run smoke tests
+        run: |
+          for test in tests/*_smoke.py; do
+            echo "::group::$test"
+            python "$test" || exit 1
+            echo "::endgroup::"
+          done
+
+  deploy:
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install SSH client
+        run: sudo apt-get install -y openssh-client
+
+      - name: Prepare SSH key
+        env:
+          DEPLOY_KEY: ${{ secrets.VERIGO_DEPLOY_KEY }}
+          KNOWN_HOSTS: ${{ secrets.VERIGO_KNOWN_HOSTS }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$DEPLOY_KEY" > ~/.ssh/verigo_deploy_ed25519
+          chmod 600 ~/.ssh/verigo_deploy_ed25519
+          echo "$KNOWN_HOSTS" > ~/.ssh/verigo_known_hosts
+
+      - name: Create release archive
+        run: |
+          VERSION=$(git rev-parse HEAD)
+          git archive --format=tar.gz --output=release.tar.gz HEAD
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+
+      - name: Upload and deploy
+        run: |
+          ssh -i ~/.ssh/verigo_deploy_ed25519 \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile=~/.ssh/verigo_known_hosts \
+            verigo-deploy@${{ secrets.VERIGO_VPS_HOST }} \
+            "sudo -n rm -rf -- /tmp/verigo-release; sudo -n install -d -m 700 -o verigo-deploy -g verigo-deploy /tmp/verigo-release"
+
+          scp -i ~/.ssh/verigo_deploy_ed25519 \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile=~/.ssh/verigo_known_hosts \
+            release.tar.gz \
+            verigo-deploy@${{ secrets.VERIGO_VPS_HOST }}:/tmp/verigo-release/release.tar.gz
+
+          ssh -i ~/.ssh/verigo_deploy_ed25519 \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile=~/.ssh/verigo_known_hosts \
+            verigo-deploy@${{ secrets.VERIGO_VPS_HOST }} \
+            "tar -xzf /tmp/verigo-release/release.tar.gz -C /tmp/verigo-release; printf '%s\n' ${{ env.VERSION }} > /tmp/verigo-release/.verigo-release; sudo -n env VERIGO_RELEASE_DIR=/tmp/verigo-release bash /tmp/verigo-release/deploy/release.sh"
