@@ -45,13 +45,6 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-from prometheus_fastapi_instrumentator import Instrumentator
-Instrumentator(
-    should_group_status_codes=True,
-    should_ignore_untemplated=True,
-    excluded_handlers=["/metrics"],
-).instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
-
 app.include_router(auth_router)
 app.include_router(router)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
