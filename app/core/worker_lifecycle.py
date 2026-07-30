@@ -93,13 +93,21 @@ class TencentCloudStudioApi:
             with sync_playwright() as playwright:
                 browser = playwright.chromium.launch(
                     headless=True,
-                    args=["--no-sandbox", "--disable-dev-shm-usage"],
+                    args=[
+                        "--no-sandbox",
+                        "--disable-dev-shm-usage",
+                        "--disable-gpu",
+                        "--disable-extensions",
+                        "--disable-background-timer-throttling",
+                        "--disable-renderer-backgrounding",
+                    ],
                 )
                 try:
                     page = browser.new_page()
                     page.goto(url, wait_until="domcontentloaded", timeout=60_000)
                     # The loader posts the token and establishes the remote sockets.
-                    page.wait_for_timeout(20_000)
+                    # Wait for the WebSocket to connect and trigger the Start hook.
+                    page.wait_for_timeout(15_000)
                 finally:
                     browser.close()
         except Exception as exc:
