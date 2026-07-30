@@ -29,10 +29,13 @@ jobs:
           find app/ -name "*.py" -exec python -m py_compile {} +
 
       - name: Run smoke tests
+        env:
+          PYTHONPATH: .
         run: |
+          ls tests/*_smoke.py
           for test in tests/*_smoke.py; do
             echo "::group::$test"
-            python "$test" || exit 1
+            python "$test" 2>&1 || { echo "::error::$test failed"; exit 1; }
             echo "::endgroup::"
           done
 
