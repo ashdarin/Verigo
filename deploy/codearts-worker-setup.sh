@@ -22,8 +22,16 @@ else
     git clone --depth=1 "$repo_url" "$worker_dir"
 fi
 
-python3 -m venv "$worker_dir/.venv"
-"$worker_dir/.venv/bin/pip" install --disable-pip-version-check --no-cache-dir -r "$worker_dir/requirements.txt"
+python_bin=python3
+if python3 -m venv "$worker_dir/.venv" 2>/dev/null; then
+    python_bin="$worker_dir/.venv/bin/python"
+    "$python_bin" -m pip install --disable-pip-version-check --no-cache-dir "dnspython>=2.6,<3"
+else
+    # CodeArts trial images commonly omit python3-venv. Install packages in
+    # the workspace user's site directory instead of requiring sudo access.
+    python3 -m pip install --user --disable-pip-version-check --no-cache-dir "dnspython>=2.6,<3"
+    echo "python3-venv is unavailable; using user-level Python packages."
+fi
 umask 077
 cat > "$worker_dir/.codearts-worker.env" <<EOF
 VERIGO_REMOTE_WORKER_TARGET=codearts
@@ -34,14 +42,14 @@ VERIGO_REMOTE_WORKER_CAPACITY=$worker_capacity
 VERIGO_TENCENT_QQ_POLL_SECONDS=0.25
 VERIGO_TENCENT_QQ_RETRY_SECONDS=5
 EOF
-cat > "$worker_dir/run-codearts-worker.sh" <<'EOF'
+cat > "$worker_dir/run-codearts-worker.sh" <<EOF
 #!/usr/bin/env bash
 set -Eeuo pipefail
-cd "$(dirname "$0")"
+cd "\$(dirname "\$0")"
 set -a
 . ./.codearts-worker.env
 set +a
-exec .venv/bin/python -m app.tencent_qq_worker
+exec "$python_bin" -m app.tencent_qq_worker
 EOF
 chmod 700 "$worker_dir/run-codearts-worker.sh"
 
