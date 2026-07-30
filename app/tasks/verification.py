@@ -41,6 +41,7 @@ from app.db.auth import auth_store
 
 
 logger = logging.getLogger(__name__)
+CODEARTS_TARGET = "codearts"
 EMAIL_CHARACTERS = re.compile(r"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+$")
 
 CSV_FIELDS = [
