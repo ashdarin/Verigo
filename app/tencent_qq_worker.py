@@ -25,7 +25,8 @@ WORKER_TARGET = os.getenv("VERIGO_REMOTE_WORKER_TARGET", "tencent-qq")
 SERVER_URL = os.getenv("VERIGO_REMOTE_WORKER_SERVER", os.getenv("VERIGO_TENCENT_QQ_SERVER", "https://verigo.site")).rstrip("/")
 TOKEN = os.getenv("VERIGO_REMOTE_WORKER_TOKEN", os.getenv("VERIGO_TENCENT_QQ_WORKER_TOKEN", ""))
 WORKER_ID = os.getenv(
-    "VERIGO_TENCENT_QQ_WORKER_ID", f"cloudstudio-{socket.gethostname()}-{os.getpid()}"
+    "VERIGO_REMOTE_WORKER_ID",
+    os.getenv("VERIGO_TENCENT_QQ_WORKER_ID", f"cloudstudio-{socket.gethostname()}-{os.getpid()}"),
 )
 POLL_SECONDS = max(0.1, float(os.getenv("VERIGO_TENCENT_QQ_POLL_SECONDS", "0.25")))
 RETRY_SECONDS = max(1.0, float(os.getenv("VERIGO_TENCENT_QQ_RETRY_SECONDS", "5")))
@@ -141,11 +142,12 @@ def _verify_job(job: dict[str, object], control: dict[str, object]) -> None:
         emails = [str(email) for email in job["emails"]]
         original_indices = list(range(len(emails)))
     lease_id = str(job.get("lease_id") or "") or None
-    remote_limit = (
-        settings.cloudshell_worker_max_workers
-        if WORKER_TARGET == "gmail"
-        else settings.cloudstudio_worker_max_workers
-    )
+    if WORKER_TARGET == "gmail":
+        remote_limit = settings.cloudshell_worker_max_workers
+    elif WORKER_TARGET == "codearts":
+        remote_limit = settings.codearts_worker_max_workers
+    else:
+        remote_limit = settings.cloudstudio_worker_max_workers
     worker_count = max(1, min(int(job.get("worker_count", 1)), remote_limit))
     if any(is_qq_email(email) for email in emails):
         worker_count = 1

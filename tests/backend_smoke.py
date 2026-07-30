@@ -30,6 +30,9 @@ os.environ["VERIGO_TENCENT_QQ_WORKER_ALLOWED_EMAILS"] = "smoke@example.com"
 os.environ["VERIGO_GMAIL_WORKER_TOKEN"] = "smoke-gmail-worker-token"
 os.environ["VERIGO_GMAIL_WORKER_ENABLED"] = "true"
 os.environ["VERIGO_GMAIL_WORKER_ALLOWED_EMAILS"] = "smoke@example.com"
+os.environ["VERIGO_CODEARTS_WORKER_TOKEN"] = "smoke-codearts-worker-token"
+os.environ["VERIGO_CODEARTS_WORKER_ENABLED"] = "true"
+os.environ["VERIGO_CODEARTS_WORKER_ALLOWED_EMAILS"] = "smoke@example.com"
 
 from fastapi.testclient import TestClient
 from openpyxl import Workbook
@@ -187,10 +190,11 @@ assert gmail_target(["person@company.de"], "smoke@example.com") == "gmail"
 assert gmail_target(["person@example.com"], "smoke@example.com") == "gmail"
 assert remote_worker_count("tencent_qq", 8) == 4
 assert remote_worker_count("gmail", 8) == 8
+assert remote_worker_count("codearts", 32) == 16
 object.__setattr__(settings, "cloudstudio_domestic_worker_enabled", True)
 assert email_execution_target("person@163.com", "smoke@example.com") == "cloudstudio_domestic"
 assert email_execution_target("person@qq.com", "smoke@example.com") == "tencent_qq"
-assert email_execution_target("sales@company.com", "smoke@example.com") == "gmail"
+assert email_execution_target("sales@company.com", "smoke@example.com") == "codearts"
 object.__setattr__(settings, "cloudstudio_domestic_worker_enabled", False)
 assert is_temporary_smtp_452({"smtp_result": "452 temporary mailbox failure"})
 assert is_temporary_smtp_452({"message": "452 暂时无法确认"})

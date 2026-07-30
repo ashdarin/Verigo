@@ -41,6 +41,9 @@ class Settings:
     cloudshell_worker_max_workers: int = max(
         1, int(os.getenv("VERIGO_CLOUDSHELL_MAX_WORKERS", "25"))
     )
+    codearts_worker_max_workers: int = max(
+        1, int(os.getenv("VERIGO_CODEARTS_MAX_WORKERS", "16"))
+    )
     # A remote worker process handles one lease at a time. Keep process count
     # separate from the per-shard verification parallelism above.
     cloudshell_worker_processes: int = min(
@@ -216,6 +219,13 @@ class Settings:
     cloudstudio_probe_token: str = os.getenv("VERIGO_CLOUDSTUDIO_PROBE_TOKEN", "")
     tencent_qq_worker_token: str = os.getenv("VERIGO_TENCENT_QQ_WORKER_TOKEN", "")
     gmail_worker_token: str = os.getenv("VERIGO_GMAIL_WORKER_TOKEN", "")
+    codearts_worker_enabled: bool = env_bool("VERIGO_CODEARTS_WORKER_ENABLED", False)
+    codearts_worker_allowed_emails: frozenset[str] = frozenset(
+        email.strip().lower()
+        for email in os.getenv("VERIGO_CODEARTS_WORKER_ALLOWED_EMAILS", "").split(",")
+        if email.strip()
+    )
+    codearts_worker_token: str = os.getenv("VERIGO_CODEARTS_WORKER_TOKEN", "")
     google_cloudshell_enabled: bool = env_bool("VERIGO_GOOGLE_CLOUDSHELL_ENABLED", False)
     google_cloudshell_user: str = os.getenv("VERIGO_GOOGLE_CLOUDSHELL_USER", "")
     google_cloudshell_quota_project: str = os.getenv("VERIGO_GOOGLE_CLOUDSHELL_QUOTA_PROJECT", "")

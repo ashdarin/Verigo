@@ -107,22 +107,25 @@ REMOTE_WORKERS = {
     "tencent-qq": "tencent_qq",
     "cloudstudio-domestic": DOMESTIC_CLOUDSTUDIO_TARGET,
     "gmail": "gmail",
+    "codearts": "codearts",
 }
 def remote_worker_label(execution_target: str) -> str:
     return {
         "tencent_qq": "腾讯 QQ 验证节点",
         DOMESTIC_CLOUDSTUDIO_TARGET: "国内邮箱 Cloud Studio 验证节点",
         GMAIL_TARGET: "Google Cloud Shell 验证节点",
+        "codearts": "Huawei CodeArts 验证节点",
     }.get(execution_target, "远程验证节点")
 
 
 def remote_worker_count(execution_target: str, requested_count: int) -> int:
     """Apply the target-specific concurrency cap before a remote job is queued."""
-    limit = (
-        settings.cloudshell_worker_max_workers
-        if execution_target == "gmail"
-        else settings.cloudstudio_worker_max_workers
-    )
+    if execution_target == "gmail":
+        limit = settings.cloudshell_worker_max_workers
+    elif execution_target == "codearts":
+        limit = settings.codearts_worker_max_workers
+    else:
+        limit = settings.cloudstudio_worker_max_workers
     return max(1, min(requested_count, limit))
 
 
@@ -198,6 +201,14 @@ def gmail_worker_allowed(owner_email: str | None) -> bool:
     )
 
 
+def codearts_worker_allowed(owner_email: str | None) -> bool:
+    allowed = settings.codearts_worker_allowed_emails
+    return bool(
+        settings.codearts_worker_enabled
+        and ("*" in allowed or (owner_email and owner_email.lower() in allowed))
+    )
+
+
 def domestic_worker_allowed(owner_email: str | None) -> bool:
     allowed = settings.tencent_qq_worker_allowed_emails
     return bool(
@@ -215,6 +226,8 @@ def email_execution_target(email: str, owner_email: str | None) -> str:
         return DOMESTIC_CLOUDSTUDIO_TARGET
     if is_domestic_email_domain(domain) and qq_worker_allowed(owner_email):
         return "tencent_qq"
+    if is_foreign_email_domain(domain) and codearts_worker_allowed(owner_email):
+        return "codearts"
     if is_foreign_email_domain(domain) and gmail_worker_allowed(owner_email):
         return "gmail"
     return "local"
@@ -225,7 +238,7 @@ def partition_target_emails(
 ) -> list[tuple[str, list[str], int]]:
     """Keep remote completion requests below their maximum supported payload."""
     partitions: list[tuple[str, list[str], int]] = []
-    remote_targets = {"tencent_qq", DOMESTIC_CLOUDSTUDIO_TARGET, "gmail"}
+    remote_targets = {"tencent_qq", DOMESTIC_CLOUDSTUDIO_TARGET, "gmail", "codearts"}
     for (target, child_worker_count), target_emails in targets.items():
         if target not in remote_targets:
             chunk_size = len(target_emails)
@@ -265,7 +278,7 @@ def submit_routed_job(
             1
             if is_qq_email(email)
             else remote_worker_count(target, worker_count)
-            if target in {"tencent_qq", DOMESTIC_CLOUDSTUDIO_TARGET, "gmail"}
+            if target in {"tencent_qq", DOMESTIC_CLOUDSTUDIO_TARGET, "gmail", "codearts"}
             else worker_count
         )
         targets.setdefault((target, child_worker_count), []).append(email)
@@ -341,25 +354,23 @@ def require_remote_worker(worker_target: str, token: str | None) -> str:
     execution_target = REMOTE_WORKERS.get(worker_target)
     if execution_target is None:
         raise HTTPException(status_code=404, detail="未知远程验证节点")
-    enabled = (
-        settings.tencent_qq_worker_enabled
-        if execution_target == "tencent_qq"
-        else settings.cloudstudio_domestic_worker_enabled
-        if execution_target == DOMESTIC_CLOUDSTUDIO_TARGET
-        else settings.gmail_worker_enabled
-    )
+    enabled = {
+        "tencent_qq": settings.tencent_qq_worker_enabled,
+        DOMESTIC_CLOUDSTUDIO_TARGET: settings.cloudstudio_domestic_worker_enabled,
+        "gmail": settings.gmail_worker_enabled,
+        "codearts": settings.codearts_worker_enabled,
+    }[execution_target]
     # A disabled target is a hard admission boundary. Existing remote processes
     # may still be alive after a maintenance pause, but they cannot claim,
     # heartbeat, or submit results until the operator explicitly re-enables it.
     if not enabled:
         raise HTTPException(status_code=503, detail="Remote verification node is disabled")
-    configured_token = (
-        settings.tencent_qq_worker_token
-        if execution_target == "tencent_qq"
-        else settings.cloudstudio_domestic_worker_token
-        if execution_target == DOMESTIC_CLOUDSTUDIO_TARGET
-        else settings.gmail_worker_token
-    )
+    configured_token = {
+        "tencent_qq": settings.tencent_qq_worker_token,
+        DOMESTIC_CLOUDSTUDIO_TARGET: settings.cloudstudio_domestic_worker_token,
+        "gmail": settings.gmail_worker_token,
+        "codearts": settings.codearts_worker_token,
+    }[execution_target]
     if not configured_token:
         raise HTTPException(status_code=503, detail="远程验证节点尚未配置")
     if not token or not hmac.compare_digest(token, configured_token):
@@ -378,7 +389,7 @@ def require_remote_job(job_id: str, worker_id: str, execution_target: str, lease
         worker_lifecycle.record_worker_seen(worker_id)
     elif execution_target == DOMESTIC_CLOUDSTUDIO_TARGET:
         domestic_worker_lifecycle.record_worker_seen(worker_id)
-    else:
+    elif execution_target == GMAIL_TARGET:
         cloudshell_lifecycle.record_worker_seen(worker_id)
     return job
 
