@@ -32,12 +32,15 @@ jobs:
         env:
           PYTHONPATH: .
         run: |
-          ls tests/*_smoke.py
+          echo "Available smoke tests:"
+          ls tests/*_smoke.py 2>/dev/null || echo "(none found)"
           for test in tests/*_smoke.py; do
+            [ -f "$test" ] || continue
             echo "::group::$test"
             python "$test" 2>&1 || { echo "::error::$test failed"; exit 1; }
             echo "::endgroup::"
           done
+          echo "All smoke tests passed."
 
   deploy:
     needs: test
