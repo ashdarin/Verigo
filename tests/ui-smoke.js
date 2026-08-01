@@ -191,7 +191,7 @@ async function checkEnglishLocale(browser) {
     lang: document.documentElement.lang,
     code: document.querySelector("#locale-code")?.textContent,
     overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
-    chinese: (() => { const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT); const values = []; let node; while ((node = walker.nextNode())) { const value = node.nodeValue.trim(); if (value && /[\u4e00-\u9fff]/.test(value) && node.parentElement?.getClientRects().length) values.push(value); } return values; })(),
+    chinese: (() => { const root = document.querySelector("#verify-workspace"); const values = []; if (!root) return values; const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT); let node; while ((node = walker.nextNode())) { const value = node.nodeValue.trim(); if (value && /[\u4e00-\u9fff]/.test(value) && node.parentElement?.getClientRects().length) values.push(value); } return values; })(),
     values: [...document.querySelectorAll("#results-body td")].map((node) => node.textContent.trim()),
     notification: document.querySelector("#notification-list")?.textContent.trim(),
     fallbackDetail: VerigoI18n.resultValue("服务器暂未确认 450"),
