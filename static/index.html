@@ -61,7 +61,7 @@
       <div class="hero-actions"><a class="hero-primary" href="#verify-workspace">免费验证邮箱</a><a class="hero-secondary" href="/pricing">查看价格与额度</a></div>
       <ul class="hero-points"><li>每天免费验证</li><li>无需信用卡</li><li>支持批量名单</li></ul>
     </div>
-    <aside class="hero-proof" aria-label="产品能力概览"><strong>减少无效触达</strong><span>在发信、导入 CRM 或联系候选人前，先识别明显不可用的邮箱。</span><hr><strong>直接找到企业邮箱</strong><span>输入公司域名，查找用于销售开发、招聘和合作联络的工作邮箱。</span><hr><strong>按量付费，先免费体验</strong><span>单个邮箱验证免费；批量验证低至 ¥0.50 / 100 次。</span></aside>
+    <aside class="hero-demo" aria-label="验证结果示例"><div class="hero-demo-heading"><span>邮箱</span><span>状态</span></div><div><span>john@company.com</span><strong class="demo-good">可投递</strong></div><div><span>hello@company.com</span><strong class="demo-good">可投递</strong></div><div><span>test@company.com</span><strong class="demo-bad">不可投递</strong></div><div><span>info@company.com</span><strong class="demo-warn">无法确认</strong></div></aside>
   </section>
 
   <main id="verify-workspace" class="workspace">
@@ -72,6 +72,11 @@
           <h1 id="verify-heading">验证单个收件地址</h1>
         </div>
         <span id="email-count" class="count">0</span>
+      </div>
+
+      <div class="segmented verification-type-tabs" role="tablist" aria-label="验证类型">
+        <button class="segment active" type="button" data-view="single" role="tab" aria-selected="true">单个邮箱</button>
+        <button class="segment" type="button" data-view="batch" role="tab" aria-selected="false">批量名单</button>
       </div>
 
       <section id="single-panel" class="input-mode">
@@ -139,9 +144,8 @@
         <div class="metric"><span>已出结果</span><strong data-key="total">0</strong></div>
         <div class="metric metric-good"><span>可投递</span><strong data-key="deliverable">0</strong></div>
         <div class="metric metric-bad"><span>不可投递</span><strong data-key="undeliverable">0</strong></div>
-        <div class="metric metric-warn"><span>待确认</span><strong data-key="unknown">0</strong></div>
-        <div class="metric"><span>Catch-all</span><strong data-key="catch_all">0</strong></div>
-      </section>
+        <div class="metric metric-warn"><span>无法确认</span><strong data-key="unknown">0</strong></div>
+              </section>
 
       <div class="table-toolbar">
         <div class="filters">
@@ -150,7 +154,7 @@
             <option value="all">全部结果</option>
             <option value="deliverable">可投递</option>
             <option value="undeliverable">不可投递</option>
-            <option value="unknown">待确认</option>
+            <option value="unknown">无法确认</option>
           </select>
         </div>
         <div class="table-actions"><button id="copy-deliverable-button" class="download-action" type="button" disabled>复制可投递</button><button id="copy-undeliverable-button" class="download-action" type="button" disabled>复制不可投递</button><button id="copy-unknown-button" class="download-action" type="button" disabled>复制无法确认</button><button id="copy-all-button" class="download-action" type="button" disabled>复制全部</button><button id="resume-job-button" class="download-action hidden" type="button">继续未完成验证</button><button id="stop-job-button" class="stop-action hidden" type="button">停止验证</button><button id="download-button" class="download-action" type="button" disabled>下载 CSV</button></div>
@@ -175,17 +179,17 @@
     </section>
   </main>
 
-  <section class="commercial-section" aria-labelledby="solutions-title">
+  <section class="commercial-section compact-marketing" aria-labelledby="solutions-title">
     <div class="commercial-heading"><p class="eyebrow">一条可行动的工作流</p><h2 id="solutions-title">从名单质量到目标企业邮箱</h2><p>选择你当前最需要完成的动作，几分钟内得到可用于下一步决策的结果。</p></div>
     <div class="solution-grid"><article><span>01</span><h3>验证单个邮箱</h3><p>在回复、邀请或导入 CRM 前，快速判断一个邮箱是否值得继续使用。</p><a href="#verify-workspace">立即验证</a></article><article><span>02</span><h3>批量清洗名单</h3><p>导入 CSV 或 Excel，识别明显不可用的地址，让营销和销售名单更干净。</p><a href="#verify-workspace" data-commercial-view="batch">批量清洗</a></article><article><span>03</span><h3>企业邮箱查找</h3><p>输入目标公司域名，找到适合销售开发、招聘和商务合作的工作邮箱。</p><a href="#verify-workspace" data-commercial-view="discovery">查找企业邮箱</a></article></div>
   </section>
 
-  <section class="commercial-section trust-section" aria-labelledby="trust-title">
+  <section class="commercial-section trust-section compact-marketing" aria-labelledby="trust-title">
     <div class="commercial-heading"><p class="eyebrow">为业务动作而设计</p><h2 id="trust-title">让下一封邮件、更值得发出去</h2></div>
     <div class="trust-grid"><article><h3>保护发信信誉</h3><p>在发送前排除明显无效邮箱，减少退信对发件域名和账号信誉的影响。</p></article><article><h3>更快启动企业开发</h3><p>不用先拿到姓名或猜邮箱格式；从目标企业域名开始，直接查找可联系的工作邮箱。</p></article><article><h3>适合团队工作流</h3><p>支持 Excel、CSV、批量任务和 API，可在 CRM 导入、活动发送或招聘触达前完成检查。</p></article></div>
   </section>
 
-  <section class="commercial-section faq-section" aria-labelledby="faq-title">
+  <section class="commercial-section faq-section compact-marketing" aria-labelledby="faq-title">
     <div class="commercial-heading"><p class="eyebrow">常见问题</p><h2 id="faq-title">购买或开始验证前，你需要知道这些</h2></div>
     <details><summary>批量验证怎么收费？</summary><p>批量验证按额度计费，当前公开价格为 ¥0.50 / 100 次。单个邮箱验证和企业邮箱查找可免费开始使用。</p></details>
     <details><summary>Catch-all 邮箱是什么意思？</summary><p>Catch-all 是企业邮箱域名的一种设置：例如对方公司启用它后，发往任意前缀的邮件都可能被服务器接收或转发。因此服务器的“接受”响应不能证明某个具体员工邮箱真实存在，建议单独处理。</p></details>
@@ -343,7 +347,7 @@
 
   <main id="history-workspace" class="history-workspace hidden">
     <section class="report-heading"><div><p class="eyebrow">账户</p><h1>历史记录</h1><p class="report-updated">按名单名称查看过去的验证任务</p></div><button id="history-refresh" class="download-action" type="button">刷新</button></section>
-    <section class="report-card history-card"><div class="table-toolbar"><input id="history-search" type="search" placeholder="搜索文件名或名单名称"><select id="history-filter" aria-label="筛选任务"><option value="all">全部</option><option value="completed">已完成</option><option value="running">验证中</option><option value="failed">失败</option></select></div><div id="history-list" class="history-list"></div><div class="pagination"><span id="history-page-info"></span><div><button id="history-prev" class="page-button" type="button">上一页</button><span id="history-pages" class="page-numbers"></span><button id="history-next" class="page-button" type="button">下一页</button></div></div></section>
+    <section class="report-card history-card"><div class="table-toolbar"><div class="history-search-controls"><input id="history-search" type="search" placeholder="搜索文件名或名单名称"><select id="history-filter" aria-label="筛选任务"><option value="all">全部</option><option value="completed">已完成</option><option value="running">验证中</option><option value="failed">失败</option><option value="stopped">已停止</option></select></div></div><div id="history-list" class="history-list"></div><div class="pagination"><span id="history-page-info"></span><div><button id="history-prev" class="page-button" type="button">上一页</button><span id="history-pages" class="page-numbers"></span><button id="history-next" class="page-button" type="button">下一页</button></div></div></section>
   </main>
 
   <footer class="site-footer">

@@ -34,15 +34,6 @@ def main() -> None:
                     settings.remote_worker_fallback_seconds,
                     f"{label} worker did not claim this task in time; reassigned to local verification",
                 )
-            # CodeArts is a peer worker, not a fallback chain. Its experience
-            # workspace can disappear without notifying Verigo, so release
-            # only unclaimed CodeArts jobs after the same bounded wait.
-            job_store.reroute_stale_queued_jobs(
-                "codearts",
-                "local",
-                settings.remote_worker_fallback_seconds,
-                "CodeArts worker did not claim this task in time; reassigned to local verification",
-            )
             next_node_reconcile = time.monotonic() + 30
     stop_cloudshell_lifecycles()
     worker_lifecycle.stop()

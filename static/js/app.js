@@ -1,7 +1,7 @@
 const state = {
   view: window.location.pathname === "/dashboard"
     ? "dashboard"
-    : window.location.pathname === "/admin/credits" ? "admin-credits" : window.location.pathname === "/wallet" ? "wallet" : "single",
+    : window.location.pathname === "/admin/credits" ? "admin-credits" : window.location.pathname === "/wallet" ? "wallet" : window.location.pathname === "/history" ? "history" : "single",
   mode: "paste",
   fileEmails: [],
   user: null,
@@ -24,6 +24,7 @@ const state = {
   retryCountdownTimer: null,
   onboardingTimer: null,
   history: { offset: 0, limit: 10, total: 0 },
+  historyTimer: null,
 };
 
 const pageSize = 50;
@@ -186,12 +187,13 @@ function switchView(view) {
   } else if (history) {
     document.title = "历史记录 | Verigo";
     if (!state.user) { el("auth-dialog").showModal(); return; }
+    if (window.location.pathname !== "/history") window.history.pushState({}, "", "/history");
     loadHistoryPage();
   } else {
     document.title = "Verigo";
     clearInterval(state.metricsTimer);
     state.metricsTimer = null;
-    if (["/dashboard", "/admin/credits", "/wallet", "/history"].includes(window.location.pathname)) window.history.replaceState({}, "", "/");
+    if (["/dashboard", "/admin/credits", "/wallet"].includes(window.location.pathname)) window.history.replaceState({}, "", "/");
   }
   updateCount();
 }
@@ -307,6 +309,16 @@ async function loadDashboardMetrics() {
 
 document.querySelectorAll("[data-view]").forEach((button) => {
   button.addEventListener("click", () => switchView(button.dataset.view));
+});
+
+document.querySelectorAll(".verification-type-tabs [data-view]").forEach((button) => {
+  button.addEventListener("click", () => {
+    document.querySelectorAll(".verification-type-tabs [data-view]").forEach((item) => {
+      const active = item === button;
+      item.classList.toggle("active", active);
+      item.setAttribute("aria-selected", active ? "true" : "false");
+    });
+  });
 });
 
 document.querySelectorAll("[data-commercial-view]").forEach((link) => {
@@ -540,7 +552,7 @@ function resultMeta(item) {
   if (item.skipped) return ["已停止", "result-skipped", "skipped"];
   if (item.deliverable === true) return ["可投递", "result-good", "deliverable"];
   if (item.deliverable === false) return ["不可投递", "result-bad", "undeliverable"];
-  return ["待确认", "result-unknown", "unknown"];
+  return ["无法确认", "result-unknown", "unknown"];
 }
 
 function renderResults() {
@@ -661,10 +673,11 @@ async function copySingleEmail(email, button) {
 }
 
 async function copyEmails(kind = "all") {
-  if (!state.jobId) return;
+  if (!state.jobId || state.copyInFlight) return;
+  state.copyInFlight = true;
   try {
     const items = [];
-    const limit = 100;
+    const limit = 500;
     for (let offset = 0; offset < Math.max(state.resultsAvailable, 1); offset += limit) {
       const data = await api(`/api/jobs/${state.jobId}/results?limit=${limit}&offset=${offset}&deliverability=all`);
       items.push(...(data.items || []));
@@ -677,7 +690,7 @@ async function copyEmails(kind = "all") {
     if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(text);
     else { const area = document.createElement("textarea"); area.value = text; document.body.append(area); area.select(); document.execCommand("copy"); area.remove(); }
     errorBox.textContent = `已复制 ${selected.length} 个邮箱`;
-  } catch (error) { errorBox.textContent = error.message; }
+  } catch (error) { errorBox.textContent = error.message; } finally { state.copyInFlight = false; }
 }
 
 el("close-result-detail")?.addEventListener("click", closeResultDetails);
@@ -1278,9 +1291,11 @@ el("notification-button").addEventListener("click", async () => {
 document.addEventListener("click", (event) => {
   if (!el("notification-menu").contains(event.target) && !el("notification-button").contains(event.target)) el("notification-menu").classList.add("hidden");
   if (!el("account-menu").contains(event.target) && !el("account-button").contains(event.target)) el("account-menu").classList.add("hidden");
+  const drawer = el("result-detail-drawer");
+  if (drawer?.classList.contains("open") && event.target === drawer) closeResultDetails();
 });
 document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape") { el("notification-menu").classList.add("hidden"); el("account-menu").classList.add("hidden"); }
+  if (event.key === "Escape") { el("notification-menu").classList.add("hidden"); el("account-menu").classList.add("hidden"); closeResultDetails(); }
 });
 el("admin-credit-grant-form").addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -1696,9 +1711,11 @@ el("refresh-jobs").addEventListener("click", loadRecentJobs);
   updateCount();
   await loadAccount();
   await loadPublicConfig();
-  if (["/dashboard", "/admin/credits", "/wallet"].includes(window.location.pathname)) {
+  if (["/dashboard", "/admin/credits", "/wallet", "/history"].includes(window.location.pathname)) {
     if (window.location.pathname === "/wallet" && state.user) {
       switchView("wallet");
+    } else if (window.location.pathname === "/history" && state.user) {
+      switchView("history");
     } else if (state.user?.is_admin) {
       switchView(window.location.pathname === "/admin/credits" ? "admin-credits" : "dashboard");
     } else if (state.user) {

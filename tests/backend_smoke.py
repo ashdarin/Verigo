@@ -1072,6 +1072,10 @@ with TestClient(app) as account:
     assert jobs.status_code == 200
     assert jobs.json()["total"] >= 1
     assert "ownedjob0001" in [job["id"] for job in jobs.json()["items"]]
+    completed_history = account.get("/api/jobs?offset=0&limit=20&status=completed&search=check@example.com")
+    assert completed_history.status_code == 200
+    assert "ownedjob0001" in [job["id"] for job in completed_history.json()["items"]]
+    assert account.get("/api/jobs?offset=0&limit=20&status=invalid").status_code == 422
     assert account.get("/api/jobs/ownedjob0001").status_code == 200
 
     assert account.post("/api/auth/logout").status_code == 204
