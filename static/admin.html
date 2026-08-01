@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Verigo Admin</title><link rel="stylesheet" href="/static/css/app.css?v=admin"></head><body class="admin-surface">  <header class="topbar">
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Verigo Admin</title><link rel="stylesheet" href="/static/css/app.css?v=surface"></head><body class="admin-surface">  <header class="topbar">
     <a class="brand" href="/" aria-label="Verigo 首页">
       <span class="brand-mark">V</span>
       <span>Verigo</span>
@@ -111,7 +111,6 @@
       </section>
     </section>
   </main>
-
   <main id="admin-credits-workspace" class="admin-credits-workspace hidden">
     <section class="report-heading admin-report-heading"><div><p class="eyebrow">账户运营</p><h1>验证次数管理</h1><p class="report-updated">账户、使用情况与调整记录</p></div><div class="report-actions"><span class="report-period">100 次 ¥0.50</span></div></section>
     <section class="report-scorecards admin-scorecards"><article class="report-scorecard"><span>账户总数</span><strong id="admin-metric-users">0</strong><small>已注册账户</small></article><article class="report-scorecard"><span>付费验证次数</span><strong id="admin-metric-paid">0</strong><small>全部账户</small></article><article class="report-scorecard"><span>体验验证次数</span><strong id="admin-metric-trial">0</strong><small>有效体验次数</small></article><article class="report-scorecard"><span>累计已验证</span><strong id="admin-metric-used">0</strong><small>全部账户</small></article></section>
@@ -136,4 +135,149 @@
       <section class="admin-accounts-section"><div class="report-card-heading"><div><h2>全部账户</h2><p id="admin-accounts-meta">按注册时间排序</p></div><button id="admin-accounts-refresh" class="download-action" type="button">刷新</button></div><div id="admin-accounts-list" class="admin-accounts-list"></div><div class="pagination"><span id="admin-accounts-page"></span><div><button id="admin-accounts-prev" class="page-button" type="button">上一页</button><span id="admin-accounts-pages" class="page-numbers"></span><button id="admin-accounts-next" class="page-button" type="button">下一页</button></div></div></section>
     </section>
   </main>
+  <dialog id="auth-dialog" class="auth-dialog">
+    <form id="auth-form" method="dialog">
+      <div class="dialog-heading">
+        <div><p class="eyebrow">Verigo 账户</p><h2 id="auth-title">登录</h2></div>
+        <button id="close-auth" class="dialog-close" type="button" aria-label="关闭">×</button>
+      </div>
+      <div class="segmented auth-tabs">
+        <button class="segment active" data-auth-mode="login" type="button">登录</button>
+        <button class="segment" data-auth-mode="register" type="button">注册</button>
+      </div>
+      <label for="auth-email" id="auth-account-label">邮箱或旧用户名</label>
+      <input id="auth-email" name="email" type="text" autocomplete="email" required>
+      <label for="auth-password">密码</label>
+      <input id="auth-password" name="password" type="password" autocomplete="current-password" minlength="6" maxlength="128" required>
+      <div id="turnstile-container" class="turnstile-container hidden"><div id="turnstile-widget"></div></div>
+      <button id="open-reset" class="text-action" type="button">忘记密码？</button>
+      <p id="auth-error" class="form-error" role="alert"></p>
+      <button id="auth-submit" class="primary-action" type="submit">登录</button>
+    </form>
+  </dialog>
+
+  <dialog id="bind-email-dialog" class="auth-dialog">
+    <form id="bind-email-request-form" method="dialog">
+      <div class="dialog-heading"><div><p class="eyebrow">旧账号迁移</p><h2>绑定邮箱</h2></div><button id="close-bind-email" class="dialog-close" type="button" aria-label="关闭">×</button></div>
+      <label for="bind-email">新邮箱</label>
+      <input id="bind-email" type="email" autocomplete="email" required>
+      <p id="bind-email-error" class="form-error" role="alert"></p>
+      <button class="primary-action" type="submit">发送验证码</button>
+    </form>
+    <form id="bind-email-confirm-form" method="dialog" class="hidden">
+      <div class="dialog-heading"><div><p class="eyebrow">旧账号迁移</p><h2>确认邮箱</h2></div><button class="dialog-close" type="button" data-close-bind-email aria-label="关闭">×</button></div>
+      <label for="bind-email-code">邮箱验证码</label>
+      <input id="bind-email-code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required>
+      <p id="bind-email-confirm-error" class="form-error" role="alert"></p>
+      <button class="primary-action" type="submit">完成绑定</button>
+    </form>
+  </dialog>
+
+  <dialog id="email-verification-dialog" class="auth-dialog">
+    <form id="email-verification-request-form" method="dialog">
+      <div class="dialog-heading"><div><p class="eyebrow">体验额度</p><h2>验证注册邮箱</h2></div><button id="close-email-verification" class="dialog-close" type="button" aria-label="关闭">×</button></div>
+      <p class="dialog-copy">验证后可领取 10 个体验额度，有效期为 7 天。</p>
+      <p id="email-verification-error" class="form-error" role="alert"></p>
+      <button class="primary-action" type="submit">发送验证码</button>
+    </form>
+    <form id="email-verification-confirm-form" method="dialog" class="hidden">
+      <div class="dialog-heading"><div><p class="eyebrow">体验额度</p><h2>输入邮箱验证码</h2></div><button class="dialog-close" type="button" data-close-email-verification aria-label="关闭">×</button></div>
+      <label for="email-verification-code">六位验证码</label>
+      <input id="email-verification-code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required>
+      <p id="email-verification-confirm-error" class="form-error" role="alert"></p>
+      <button class="primary-action" type="submit">完成验证并领取额度</button>
+    </form>
+  </dialog>
+
+  <dialog id="onboarding-dialog" class="auth-dialog onboarding-dialog">
+    <section class="onboarding-step" data-onboarding-step="verify_email">
+      <div class="dialog-heading"><div><p class="eyebrow">开始使用 Verigo</p><h2>确认你的工作邮箱</h2></div><button class="dialog-close" type="button" data-close-onboarding aria-label="关闭">×</button></div>
+      <p class="dialog-copy">验证码已发送到你的注册邮箱。确认后即可获得体验额度并开始验证。</p>
+      <form id="onboarding-email-form"><label for="onboarding-email-code">六位验证码</label><input id="onboarding-email-code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required><p id="onboarding-email-error" class="form-error" role="alert"></p><button class="primary-action" type="submit">确认邮箱并继续</button></form>
+      <button id="onboarding-resend" class="text-action" type="button">重新发送验证码</button>
+    </section>
+    <section class="onboarding-step hidden" data-onboarding-step="first_verification">
+      <div class="dialog-heading"><div><p class="eyebrow">已获得体验额度</p><h2>完成第一次真实验证</h2></div><button class="dialog-close" type="button" data-close-onboarding aria-label="关闭">×</button></div>
+      <p class="dialog-copy">输入一个你需要确认的真实邮箱地址，立即查看验证结果。</p>
+      <form id="onboarding-check-form"><label for="onboarding-check-email">邮箱地址</label><input id="onboarding-check-email" type="email" autocomplete="email" placeholder="name@company.com" required><p id="onboarding-check-error" class="form-error" role="alert"></p><button class="primary-action" type="submit">开始验证</button></form>
+    </section>
+    <section class="onboarding-step hidden" data-onboarding-step="verification_in_progress">
+      <div class="dialog-heading"><div><p class="eyebrow">正在验证</p><h2>首次验证已提交</h2></div><button class="dialog-close" type="button" data-close-onboarding aria-label="关闭">×</button></div>
+      <p class="dialog-copy">验证完成后，这里会自动更新。你也可以关闭窗口，在任务工作台查看进度。</p><p id="onboarding-job-status" class="onboarding-job-status"></p>
+    </section>
+    <section class="onboarding-step hidden" data-onboarding-step="completed">
+      <div class="dialog-heading"><div><p class="eyebrow">账户已就绪</p><h2>现在可以处理你的名单</h2></div><button class="dialog-close" type="button" data-close-onboarding aria-label="关闭">×</button></div>
+      <p class="dialog-copy">体验额度已到账。需要批量验证时，可以直接购买额度。</p><div class="onboarding-actions"><button id="onboarding-go-wallet" class="primary-action" type="button">购买验证额度</button><button id="onboarding-finish" class="secondary-action" type="button">先去验证邮箱</button></div>
+    </section>
+  </dialog>
+
+  <dialog id="purchase-dialog" class="auth-dialog">
+    <section><div class="dialog-heading"><div><p class="eyebrow">购买验证额度</p><h2>订单已创建</h2></div><button id="close-purchase" class="dialog-close" type="button" aria-label="关闭">×</button></div><p id="purchase-dialog-copy" class="dialog-copy"></p><p id="purchase-dialog-status" class="form-error" role="alert"></p><div id="purchase-dialog-actions"></div></section>
+  </dialog>
+
+  <dialog id="delete-account-dialog" class="auth-dialog">
+    <form id="delete-account-form" method="dialog">
+      <div class="dialog-heading"><div><p class="eyebrow">账户与数据</p><h2>删除账户</h2></div><button id="close-delete-account" class="dialog-close" type="button" aria-label="关闭">×</button></div>
+      <p class="dialog-copy">此操作会删除账户、任务记录、额度流水和可下载结果，无法撤销。正在处理的任务必须先完成。</p>
+      <label class="confirm-delete"><input id="delete-account-confirm" type="checkbox" required><span>我确认永久删除此账户及其数据</span></label>
+      <p id="delete-account-error" class="form-error" role="alert"></p>
+      <button class="primary-action danger-primary" type="submit">永久删除账户</button>
+    </form>
+  </dialog>
+
+  <dialog id="api-keys-dialog" class="auth-dialog">
+    <form id="api-key-create-form" method="dialog">
+      <div class="dialog-heading"><div><p class="eyebrow">Developer API</p><h2>API Key</h2></div><button id="close-api-keys" class="dialog-close" type="button" aria-label="关闭">×</button></div>
+      <p class="dialog-copy">使用 API Key 从你的应用提交邮箱验证任务。完整 Key 只会显示一次。</p>
+      <p class="api-doc-link"><a href="/api-docs" target="_blank" rel="noopener">查看 API 文档</a></p>
+      <label for="api-key-name">Key 名称</label>
+      <input id="api-key-name" type="text" maxlength="64" placeholder="例如：生产环境" required>
+      <p id="api-key-create-error" class="form-error" role="alert"></p>
+      <button id="api-key-create-submit" class="primary-action" type="submit">创建 API Key</button>
+    </form>
+    <section id="api-key-created" class="api-key-created hidden" aria-live="polite">
+      <strong>请立即复制并安全保存</strong>
+      <div class="api-key-token-row"><input id="api-key-token" type="text" readonly aria-label="新创建的 API Key"><button id="copy-api-key" class="secondary-action" type="button">复制</button></div>
+      <p>关闭此窗口后，完整 Key 不会再次显示。</p>
+    </section>
+    <section class="api-key-list-section">
+      <div class="api-key-list-heading"><h3>有效 Key</h3><button id="api-keys-refresh" class="text-action" type="button">刷新</button></div>
+      <div id="api-keys-list" class="api-keys-list" aria-live="polite"></div>
+    </section>
+  </dialog>
+
+  <dialog id="change-password-dialog" class="auth-dialog">
+    <form id="change-password-form" method="dialog">
+      <div class="dialog-heading"><div><p class="eyebrow">账户安全</p><h2>修改密码</h2></div><button id="close-change-password" class="dialog-close" type="button" aria-label="关闭">×</button></div>
+      <label for="current-password">原密码</label>
+      <input id="current-password" type="password" autocomplete="current-password" minlength="6" maxlength="128" required>
+      <label for="new-password">新密码</label>
+      <input id="new-password" type="password" autocomplete="new-password" minlength="6" maxlength="128" required>
+      <p id="change-password-error" class="form-error" role="alert"></p>
+      <button class="primary-action" type="submit">更新密码</button>
+    </form>
+  </dialog>
+
+  <dialog id="reset-dialog" class="auth-dialog">
+    <form id="reset-request-form" method="dialog">
+      <div class="dialog-heading"><div><p class="eyebrow">找回密码</p><h2>验证注册邮箱</h2></div><button id="close-reset" class="dialog-close" type="button" aria-label="关闭">×</button></div>
+      <label for="reset-email">注册邮箱</label>
+      <input id="reset-email" type="email" autocomplete="email" required>
+      <p id="reset-error" class="form-error" role="alert"></p>
+      <button class="primary-action" type="submit">发送验证码</button>
+    </form>
+    <form id="reset-confirm-form" method="dialog" class="hidden">
+      <div class="dialog-heading"><div><p class="eyebrow">找回密码</p><h2>设置新密码</h2></div><button class="dialog-close" type="button" data-close-reset aria-label="关闭">×</button></div>
+      <label for="reset-code">邮箱验证码</label>
+      <input id="reset-code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required>
+      <label for="reset-password">新密码</label>
+      <input id="reset-password" type="password" autocomplete="new-password" minlength="6" maxlength="128" required>
+      <p id="reset-confirm-error" class="form-error" role="alert"></p>
+      <button class="primary-action" type="submit">更新密码</button>
+    </form>
+  </dialog>
+
+  <script src="/static/js/i18n.js?v=locale-v1" defer></script>
+  <script src="/static/js/app.js?v=commercial-v2" defer></script>
+
 <script src="/static/js/i18n.js"></script><script src="/static/js/app.js"></script></body></html>
