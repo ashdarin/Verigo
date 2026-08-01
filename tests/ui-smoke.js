@@ -43,6 +43,7 @@ async function checkViewport(browser, name, width, height) {
 
 async function checkAccountAndImport(browser) {
   const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+  await page.setExtraHTTPHeaders({ "x-forwarded-for": `198.51.100.${Math.floor(Math.random() * 200) + 1}` });
   await page.goto(BASE_URL, { waitUntil: "networkidle" });
   await page.click("#account-button");
   await page.click('[data-auth-mode="register"]');
@@ -142,6 +143,7 @@ async function checkAccountAndImport(browser) {
 
 async function checkMobileTrialAction(browser) {
   const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  await page.setExtraHTTPHeaders({ "x-forwarded-for": `198.51.100.${Math.floor(Math.random() * 200) + 1}` });
   await page.goto(BASE_URL, { waitUntil: "networkidle" });
   await page.click("#account-button");
   await page.click('[data-auth-mode="register"]');
