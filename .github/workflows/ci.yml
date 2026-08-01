@@ -63,6 +63,8 @@ jobs:
           done
 
       - name: Run UI smoke test
+        env:
+          VERIGO_UI_SMOKE: "1"
         run: |
           npm install --no-save playwright@1.61.0
           npx playwright install --with-deps chromium

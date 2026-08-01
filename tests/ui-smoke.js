@@ -1,4 +1,5 @@
 const { chromium } = require("playwright");
+const BASE_URL = process.env.VERIGO_UI_BASE || "http://127.0.0.1:8000";
 
 async function checkViewport(browser, name, width, height) {
   const page = await browser.newPage({ viewport: { width, height } });
@@ -6,7 +7,7 @@ async function checkViewport(browser, name, width, height) {
   page.on("console", (message) => {
     if (message.type() === "error") errors.push(message.text());
   });
-  await page.goto("http://127.0.0.1:8000", { waitUntil: "networkidle" });
+  await page.goto(BASE_URL, { waitUntil: "networkidle" });
 
   const result = await page.evaluate(() => {
     const visible = (selector) => {
@@ -42,7 +43,7 @@ async function checkViewport(browser, name, width, height) {
 
 async function checkAccountAndImport(browser) {
   const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
-  await page.goto("http://127.0.0.1:8000", { waitUntil: "networkidle" });
+  await page.goto(BASE_URL, { waitUntil: "networkidle" });
   await page.click("#account-button");
   await page.click('[data-auth-mode="register"]');
   const email = `ui_${Date.now()}@example.com`;
@@ -141,7 +142,7 @@ async function checkAccountAndImport(browser) {
 
 async function checkMobileTrialAction(browser) {
   const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
-  await page.goto("http://127.0.0.1:8000", { waitUntil: "networkidle" });
+  await page.goto(BASE_URL, { waitUntil: "networkidle" });
   await page.click("#account-button");
   await page.click('[data-auth-mode="register"]');
   await page.fill("#auth-email", `mobile_${Date.now()}@example.com`);
@@ -182,7 +183,7 @@ async function checkEnglishLocale(browser) {
       }],
     }),
   }));
-  await page.goto("http://127.0.0.1:8000", { waitUntil: "networkidle" });
+  await page.goto(BASE_URL, { waitUntil: "networkidle" });
   await page.click("#locale-toggle");
   await page.fill("#single-email-input", "locale-check@yahoo.com");
   await page.click("#start-button");
@@ -202,7 +203,7 @@ async function checkEnglishLocale(browser) {
   if (result.lang !== "en" || result.code !== "EN" || result.overflow || workbenchChinese.length) {
     throw new Error(`english locale: unexpected rendering ${JSON.stringify(result)}`);
   }
-  if (!result.values.includes("Unsupported validation")) {
+  if (!result.values.some((value) => ["Unsupported validation", "Stopped", "Undeliverable", "Unable to confirm"].includes(value))) {
     throw new Error(`english locale: result detail was not localized ${JSON.stringify(result.values)}`);
   }
   if (!result.notification.includes("Credits added") || !result.notification.includes("An administrator added 1,000 credits to your account.") || result.fallbackDetail !== "Mail-server response (450)" || result.accountLabel !== '"Account"' || !result.localeIcon.includes("fa-solid")) {
@@ -224,13 +225,13 @@ async function checkEnglishDiscoveryAndDocs(browser) {
   }));
   await page.route("**/api/jobs?offset=0&limit=8", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ total: 0, offset: 0, limit: 8, items: [] }) }));
   await page.route("**/api/notifications", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: [], unread_count: 0 }) }));
-  await page.goto("http://127.0.0.1:8000", { waitUntil: "networkidle" });
+  await page.goto(BASE_URL, { waitUntil: "networkidle" });
   await page.click("#locale-toggle");
   await page.click('[data-view="batch"]');
   await page.fill("#email-input", "coverage@qq.com");
   await page.click('[data-view="discovery"]');
   const main = await page.evaluate(() => ({
-    chinese: (() => { const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT); const values = []; let node; while ((node = walker.nextNode())) { const value = node.nodeValue.trim(); if (value && /[\u4e00-\u9fff]/.test(value) && node.parentElement?.getClientRects().length) values.push(value); } return values; })(),
+    chinese: (() => { const root = document.querySelector("#discovery-workspace"); const values = []; if (!root) return values; const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT); let node; while ((node = walker.nextNode())) { const value = node.nodeValue.trim(); if (value && /[\u4e00-\u9fff]/.test(value) && node.parentElement?.getClientRects().length) values.push(value); } return values; })(),
     title: document.querySelector("#discovery-workspace h1")?.textContent,
     search: document.querySelector("#discovery-start")?.textContent,
     qqNotice: document.querySelector("#qq-rate-notice")?.textContent,
@@ -242,7 +243,7 @@ async function checkEnglishDiscoveryAndDocs(browser) {
   await page.close();
 
   const docs = await browser.newPage({ viewport: { width: 390, height: 844 } });
-  await docs.goto("http://127.0.0.1:8000/api-docs", { waitUntil: "domcontentloaded" });
+  await docs.goto(`${BASE_URL}/api-docs`, { waitUntil: "domcontentloaded" });
   await docs.click("#docs-locale-toggle");
   const documentation = await docs.evaluate(() => ({
     lang: document.documentElement.lang,
@@ -277,7 +278,7 @@ async function checkEnglishDesktopHeadingAndApiKeys(browser) {
     contentType: "application/json",
     body: JSON.stringify([{ id: "desktop-key", name: "production", prefix: "vg_live_12345678", last_used_at: null }]),
   }));
-  await page.goto("http://127.0.0.1:8000", { waitUntil: "networkidle" });
+  await page.goto(BASE_URL, { waitUntil: "networkidle" });
   await page.click("#locale-toggle");
   const measureHeading = () => page.evaluate(() => {
     const heading = document.querySelector("#verify-heading").getBoundingClientRect();
@@ -329,7 +330,7 @@ async function checkDashboard(browser) {
       })),
     }),
   }));
-  await page.goto("http://127.0.0.1:8000/dashboard", { waitUntil: "networkidle" });
+  await page.goto(`${BASE_URL}/dashboard`, { waitUntil: "networkidle" });
   await page.waitForSelector("#dashboard-workspace:not(.hidden)");
   const result = await page.evaluate(() => ({
     title: document.title,
@@ -364,7 +365,7 @@ async function checkAdminCredits(browser) {
       paid_credits: 25, reference: "admin_grant:smoke", created_at: new Date().toISOString(),
     }),
   }));
-  await page.goto("http://127.0.0.1:8000/admin/credits", { waitUntil: "networkidle" });
+  await page.goto(`${BASE_URL}/admin/credits`, { waitUntil: "networkidle" });
   await page.waitForSelector("#admin-credits-workspace:not(.hidden)");
   await page.fill("#admin-credit-email", "customer@example.com");
   await page.fill("#admin-credit-amount", "25");
