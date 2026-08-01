@@ -562,18 +562,33 @@ function renderResults() {
   rows.forEach((item) => {
     const [label, className] = resultMeta(item);
     const row = document.createElement("tr");
-    const values = [item.email, label, "详情"];
+    const values = [item.email, label, ""];
     values.forEach((value, index) => {
       const cell = document.createElement("td");
       if (index === 0) {
-        cell.textContent = item.email;
+        const copyButton = document.createElement("button");
+        copyButton.type = "button";
+        copyButton.className = "result-email-copy";
+        copyButton.title = "复制邮箱";
+        copyButton.setAttribute("aria-label", `复制 ${item.email}`);
+        const emailText = document.createElement("span");
+        emailText.textContent = item.email;
+        const copyIcon = document.createElement("i");
+        copyIcon.className = "fa-regular fa-copy";
+        copyIcon.setAttribute("aria-hidden", "true");
+        copyButton.append(emailText, copyIcon);
+        copyButton.addEventListener("click", async (event) => {
+          event.stopPropagation();
+          await copySingleEmail(item.email, copyButton);
+          if (item.retry_updated) {
+            await api(`/api/jobs/${state.jobId}/results/${item.original_index}/reviewed`, { method: "POST" });
+            item.retry_updated = false; await loadRecentJobs();
+          }
+        });
+        cell.append(copyButton);
         if (item.retry_updated) {
           const dot = document.createElement("i"); dot.className = "result-email-update";
           dot.title = VerigoI18n.text("该邮箱的复核结果已更新"); cell.append(dot);
-          row.addEventListener("click", async () => {
-            await api(`/api/jobs/${state.jobId}/results/${item.original_index}/reviewed`, { method: "POST" });
-            item.retry_updated = false; renderResults(); await loadRecentJobs();
-          }, { once: true });
         }
       } else if (index === 1) {
         const pill = document.createElement("span");
@@ -583,8 +598,10 @@ function renderResults() {
       } else if (index === 2) {
         const action = document.createElement("button");
         action.type = "button";
-        action.className = "text-action result-detail-action";
-        action.textContent = "查看详情";
+        action.className = "result-detail-action";
+        action.title = "查看详情";
+        action.setAttribute("aria-label", `查看 ${item.email} 的详情`);
+        action.innerHTML = '<i class="fa-solid fa-circle-info" aria-hidden="true"></i>';
         action.addEventListener("click", () => openResultDetails(item));
         cell.append(action);
       }
@@ -630,6 +647,17 @@ function openResultDetails(item) {
 function closeResultDetails() {
   const drawer = el("result-detail-drawer");
   drawer.classList.remove("open"); drawer.setAttribute("aria-hidden", "true");
+}
+
+async function copySingleEmail(email, button) {
+  try {
+    if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(email);
+    else { const area = document.createElement("textarea"); area.value = email; document.body.append(area); area.select(); document.execCommand("copy"); area.remove(); }
+    const icon = button.querySelector("i");
+    button.classList.add("copied");
+    if (icon) icon.className = "fa-solid fa-check";
+    window.setTimeout(() => { button.classList.remove("copied"); if (icon) icon.className = "fa-regular fa-copy"; }, 1200);
+  } catch (error) { errorBox.textContent = error.message; }
 }
 
 async function copyEmails(kind = "all") {
