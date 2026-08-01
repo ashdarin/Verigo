@@ -26,14 +26,14 @@
       <span>Verigo</span>
     </a>
     <nav class="product-nav" aria-label="产品导航">
-      <button class="nav-item active" type="button" data-view="single">单个验证</button>
-      <button class="nav-item" type="button" data-view="batch">批量验证</button>
-      <button class="nav-item" type="button" data-view="discovery">查找工作邮箱</button>
+      <button class="nav-item active" type="button" data-view="single">邮箱验证</button>
+      <button class="nav-item" type="button" data-view="discovery">邮箱查找</button>
+      <button class="nav-item" type="button" data-view="history">历史记录</button>
       <a class="nav-item nav-link" href="/pricing">价格</a>
-      <button id="api-nav" class="nav-item" type="button">Developer API</button>
+      <button id="api-nav" class="nav-item" type="button">API</button>
       <button id="dashboard-nav" class="nav-item hidden" type="button" data-view="dashboard">运营监控</button>
       <button id="admin-credits-nav" class="nav-item hidden" type="button" data-view="admin-credits">额度管理</button>
-      <button id="wallet-nav" class="nav-item hidden" type="button" data-view="wallet">资金与使用</button>
+      <button id="wallet-nav" class="nav-item hidden" type="button" data-view="wallet">额度与账单</button>
     </nav>
     <div class="account-area">
       <button id="locale-toggle" class="locale-toggle" type="button" aria-label="Switch to English" title="Switch to English"><i class="fa-solid fa-globe" aria-hidden="true"></i><span id="locale-code">CN</span></button>
@@ -55,11 +55,11 @@
 
   <section class="commercial-hero" aria-labelledby="commercial-hero-title">
     <div>
-      <p class="eyebrow">面向销售、招聘与出海团队</p>
-      <h1 id="commercial-hero-title">先验证名单，再找到能联系上的企业邮箱。</h1>
-      <p>Verigo 将邮箱验证、批量清洗和按域名联系人发现放在一条工作流中，帮助你减少退信、保护发信信誉，并更快触达目标企业。</p>
+      <p class="eyebrow">EMAIL VERIFICATION</p>
+      <h1 id="commercial-hero-title">验证邮箱是否可投递</h1>
+      <p>在发送邮件或导入客户名单前，快速识别无效邮箱，减少退信和无效触达。</p>
       <div class="hero-actions"><a class="hero-primary" href="#verify-workspace">免费验证邮箱</a><a class="hero-secondary" href="/pricing">查看价格与额度</a></div>
-      <ul class="hero-points"><li>单个验证每日免费 20 次</li><li>注册验证后赠 10 次体验额度</li><li>支持 CSV、Excel 与 API</li></ul>
+      <ul class="hero-points"><li>每天免费验证</li><li>无需信用卡</li><li>支持批量名单</li></ul>
     </div>
     <aside class="hero-proof" aria-label="产品能力概览"><strong>减少无效触达</strong><span>在发信、导入 CRM 或联系候选人前，先识别明显不可用的邮箱。</span><hr><strong>直接找到企业邮箱</strong><span>输入公司域名，查找用于销售开发、招聘和合作联络的工作邮箱。</span><hr><strong>按量付费，先免费体验</strong><span>单个邮箱验证免费；批量验证低至 ¥0.50 / 100 次。</span></aside>
   </section>
@@ -99,17 +99,7 @@
             <small id="file-meta">TXT · CSV · JSON · XLSX · XLSM · XLS</small>
           </label>
         </section>
-
-        <fieldset class="speed-control">
-          <legend>验证速度</legend>
-          <div class="speed-options">
-            <label><input type="radio" name="speed" value="1"><span>稳定</span></label>
-            <label><input type="radio" name="speed" value="2" checked><span>标准</span></label>
-            <label><input type="radio" name="speed" value="4"><span>快速</span></label>
-            <label><input type="radio" name="speed" value="8"><span>极速</span></label>
-          </div>
-        </fieldset>
-      </section>
+</section>
 
       <button id="start-button" class="primary-action" type="button">免费验证</button>
       <p id="qq-rate-notice" class="provider-notice hidden" role="status"></p>
@@ -163,14 +153,14 @@
             <option value="unknown">待确认</option>
           </select>
         </div>
-        <div class="table-actions"><button id="resume-job-button" class="download-action hidden" type="button">继续未完成验证</button><button id="stop-job-button" class="stop-action hidden" type="button">停止验证</button><button id="download-button" class="download-action" type="button" disabled>下载 CSV</button></div>
+        <div class="table-actions"><button id="copy-deliverable-button" class="download-action" type="button" disabled>复制可投递</button><button id="copy-undeliverable-button" class="download-action" type="button" disabled>复制不可投递</button><button id="copy-unknown-button" class="download-action" type="button" disabled>复制无法确认</button><button id="copy-all-button" class="download-action" type="button" disabled>复制全部</button><button id="resume-job-button" class="download-action hidden" type="button">继续未完成验证</button><button id="stop-job-button" class="stop-action hidden" type="button">停止验证</button><button id="download-button" class="download-action" type="button" disabled>下载 CSV</button></div>
       </div>
 
       <div class="table-wrap">
         <table>
-          <thead><tr><th>邮箱</th><th>结果</th><th>域名类型</th><th>验证方式</th><th>服务器响应</th></tr></thead>
+          <thead><tr><th>邮箱</th><th>状态</th><th>操作</th></tr></thead>
           <tbody id="results-body">
-            <tr class="empty-row"><td colspan="5">尚无验证结果</td></tr>
+            <tr class="empty-row"><td colspan="3">尚无验证结果</td></tr>
           </tbody>
         </table>
       </div>
@@ -351,6 +341,11 @@
     <section class="report-secondary-grid"><section class="report-card"><div class="report-card-heading"><div><h2>验证使用趋势</h2><p>最近 14 天</p></div></div><div id="wallet-usage-chart" class="wallet-usage-chart"></div></section><section class="report-card"><div class="report-card-heading"><div><h2>资金流水</h2><p>实收、退款和管理员调整</p></div></div><div id="wallet-transactions" class="wallet-transactions"></div></section></section>
   </main>
 
+  <main id="history-workspace" class="history-workspace hidden">
+    <section class="report-heading"><div><p class="eyebrow">账户</p><h1>历史记录</h1><p class="report-updated">按名单名称查看过去的验证任务</p></div><button id="history-refresh" class="download-action" type="button">刷新</button></section>
+    <section class="report-card history-card"><div class="table-toolbar"><input id="history-search" type="search" placeholder="搜索文件名或名单名称"><select id="history-filter" aria-label="筛选任务"><option value="all">全部</option><option value="completed">已完成</option><option value="running">验证中</option><option value="failed">失败</option></select></div><div id="history-list" class="history-list"></div><div class="pagination"><span id="history-page-info"></span><div><button id="history-prev" class="page-button" type="button">上一页</button><span id="history-pages" class="page-numbers"></span><button id="history-next" class="page-button" type="button">下一页</button></div></div></section>
+  </main>
+
   <footer class="site-footer">
     <span>Verigo · 邮箱验证、名单清洗与企业邮箱查找</span>
     <nav aria-label="网站政策">
@@ -363,6 +358,11 @@
       <a href="/acceptable-use">使用边界</a>
     </nav>
   </footer>
+
+  <aside id="result-detail-drawer" class="result-detail-drawer" aria-hidden="true" aria-labelledby="result-detail-title">
+    <div class="drawer-heading"><div><p class="eyebrow">结果详情</p><h2 id="result-detail-title">邮箱详情</h2></div><button id="close-result-detail" class="dialog-close" type="button" aria-label="关闭">×</button></div>
+    <div id="result-detail-content" class="result-detail-content"></div>
+  </aside>
 
   <dialog id="auth-dialog" class="auth-dialog">
     <form id="auth-form" method="dialog">

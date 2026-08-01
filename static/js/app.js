@@ -23,6 +23,7 @@ const state = {
   adminAccountOffset: 0,
   retryCountdownTimer: null,
   onboardingTimer: null,
+  history: { offset: 0, limit: 10, total: 0 },
 };
 
 const pageSize = 50;
@@ -57,10 +58,10 @@ const errorBox = el("form-error");
 VerigoI18n.init();
 const statusLabels = { queued: "排队中", running: "验证中", completed: "已完成", failed: "失败", stopped: "已停止" };
 const modeLabels = {
-  1: ["稳定模式", "mode-stable"],
-  2: ["标准模式", "mode-standard"],
-  4: ["快速模式", "mode-fast"],
-  8: ["极速模式", "mode-extreme"],
+  1: ["验证任务", "mode-standard"],
+  2: ["验证任务", "mode-standard"],
+  4: ["验证任务", "mode-standard"],
+  8: ["验证任务", "mode-standard"],
 };
 
 function splitEmails(text) {
@@ -141,6 +142,7 @@ function switchView(view) {
   const dashboard = view === "dashboard";
   const adminCredits = view === "admin-credits";
   const wallet = view === "wallet";
+  const history = view === "history";
   if (wallet && !state.user) { el("auth-dialog").showModal(); return; }
   if (discovery && !state.user) {
     el("auth-dialog").showModal();
@@ -149,14 +151,15 @@ function switchView(view) {
     return;
   }
   state.view = view;
-  el("verify-workspace").classList.toggle("hidden", discovery || dashboard || adminCredits || wallet);
+  el("verify-workspace").classList.toggle("hidden", discovery || dashboard || adminCredits || wallet || history);
   el("discovery-workspace").classList.toggle("hidden", !discovery);
   el("dashboard-workspace").classList.toggle("hidden", !dashboard);
   el("admin-credits-workspace").classList.toggle("hidden", !adminCredits);
   el("wallet-workspace").classList.toggle("hidden", !wallet);
+  el("history-workspace").classList.toggle("hidden", !history);
   el("single-panel").classList.toggle("hidden", view !== "single");
   el("batch-panel").classList.toggle("hidden", view !== "batch");
-  if (!discovery && !dashboard && !adminCredits && !wallet) {
+  if (!discovery && !dashboard && !adminCredits && !wallet && !history) {
     el("verify-eyebrow").textContent = VerigoI18n.text(view === "single" ? "免费单个验证" : "收费批量验证");
     el("verify-heading").textContent = VerigoI18n.text(view === "single" ? "验证单个收件地址" : "批量验证收件地址");
   }
@@ -180,11 +183,15 @@ function switchView(view) {
     document.title = "资金与使用 | Verigo";
     if (window.location.pathname !== "/wallet") window.history.pushState({}, "", "/wallet");
     loadWallet();
+  } else if (history) {
+    document.title = "历史记录 | Verigo";
+    if (!state.user) { el("auth-dialog").showModal(); return; }
+    loadHistoryPage();
   } else {
     document.title = "Verigo";
     clearInterval(state.metricsTimer);
     state.metricsTimer = null;
-    if (["/dashboard", "/admin/credits", "/wallet"].includes(window.location.pathname)) window.history.replaceState({}, "", "/");
+    if (["/dashboard", "/admin/credits", "/wallet", "/history"].includes(window.location.pathname)) window.history.replaceState({}, "", "/");
   }
   updateCount();
 }
@@ -392,7 +399,8 @@ startButton.addEventListener("click", async () => {
   try {
     state.guestToken = null;
     const isFreeSingle = state.view === "single";
-    const workerCount = isFreeSingle ? 1 : Number(document.querySelector('input[name="speed"]:checked').value);
+    // Keep the existing API field while choosing capacity internally.
+    const workerCount = isFreeSingle ? 1 : 4;
     const job = await api(isFreeSingle ? "/api/verify/single" : "/api/jobs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -538,12 +546,13 @@ function resultMeta(item) {
 function renderResults() {
   const body = el("results-body");
   const rows = state.results;
+  ["copy-deliverable-button", "copy-undeliverable-button", "copy-unknown-button", "copy-all-button"].forEach((id) => { if (el(id)) el(id).disabled = !state.resultsAvailable; });
   body.replaceChildren();
   if (!rows.length) {
     const row = document.createElement("tr");
     row.className = "empty-row";
     const cell = document.createElement("td");
-    cell.colSpan = 5;
+    cell.colSpan = 3;
     cell.textContent = state.results.length ? "没有符合条件的结果" : "正在等待首条验证结果";
     row.append(cell);
     body.append(row);
@@ -553,20 +562,7 @@ function renderResults() {
   rows.forEach((item) => {
     const [label, className] = resultMeta(item);
     const row = document.createElement("tr");
-    const values = [
-      null,
-      null,
-      item.domain_type || "-",
-      VerigoI18n.resultValue(item.verification_method || item.strategy || "-"),
-      (() => {
-        const detail = VerigoI18n.resultValue(item.smtp_result || item.message || "-");
-        const retryAt = item.retry_at ? new Date(item.retry_at) : null;
-        if (!retryAt || Number.isNaN(retryAt.getTime())) return detail;
-        const seconds = Math.max(0, Math.ceil((retryAt.getTime() - Date.now()) / 1000));
-        const attempt = `${item.retry_attempt || 1}/${item.retry_max_attempts || 3}`;
-        return `${detail} · 第 ${attempt} 次重试，${seconds} 秒后再次复核`;
-      })(),
-    ];
+    const values = [item.email, label, "详情"];
     values.forEach((value, index) => {
       const cell = document.createElement("td");
       if (index === 0) {
@@ -584,9 +580,13 @@ function renderResults() {
         pill.className = `result-pill ${className}`;
         pill.textContent = label;
         cell.append(pill);
-      } else {
-        cell.textContent = String(value ?? "-");
-        if (index === 4) cell.className = "detail-cell";
+      } else if (index === 2) {
+        const action = document.createElement("button");
+        action.type = "button";
+        action.className = "text-action result-detail-action";
+        action.textContent = "查看详情";
+        action.addEventListener("click", () => openResultDetails(item));
+        cell.append(action);
       }
       row.append(cell);
     });
@@ -606,6 +606,57 @@ function renderPagination() {
     state.page = page; await loadResults();
   });
 }
+
+function openResultDetails(item) {
+  const drawer = el("result-detail-drawer");
+  el("result-detail-title").textContent = item.email || "邮箱详情";
+  const fields = [
+    ["状态", resultMeta(item)[0]],
+    ["域名类型", item.domain_type || "-"],
+    ["验证方式", VerigoI18n.resultValue(item.verification_method || item.strategy || "-")],
+    ["服务器响应", VerigoI18n.resultValue(item.smtp_result || item.message || "-")],
+  ];
+  const content = el("result-detail-content");
+  content.replaceChildren();
+  fields.forEach(([label, value]) => {
+    const row = document.createElement("div"); row.className = "detail-field";
+    const key = document.createElement("span"); key.textContent = label;
+    const val = document.createElement("strong"); val.textContent = value;
+    row.append(key, val); content.append(row);
+  });
+  drawer.classList.add("open"); drawer.setAttribute("aria-hidden", "false");
+}
+
+function closeResultDetails() {
+  const drawer = el("result-detail-drawer");
+  drawer.classList.remove("open"); drawer.setAttribute("aria-hidden", "true");
+}
+
+async function copyEmails(kind = "all") {
+  if (!state.jobId) return;
+  try {
+    const items = [];
+    const limit = 100;
+    for (let offset = 0; offset < Math.max(state.resultsAvailable, 1); offset += limit) {
+      const data = await api(`/api/jobs/${state.jobId}/results?limit=${limit}&offset=${offset}&deliverability=all`);
+      items.push(...(data.items || []));
+      if (!data.items?.length || items.length >= Number(data.available || 0)) break;
+    }
+    const selected = kind === "deliverable" ? items.filter((item) => item.deliverable === true)
+      : kind === "undeliverable" ? items.filter((item) => item.deliverable === false)
+        : kind === "unknown" ? items.filter((item) => item.deliverable == null) : items;
+    const text = selected.map((item) => item.email).join("\n");
+    if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(text);
+    else { const area = document.createElement("textarea"); area.value = text; document.body.append(area); area.select(); document.execCommand("copy"); area.remove(); }
+    errorBox.textContent = `已复制 ${selected.length} 个邮箱`;
+  } catch (error) { errorBox.textContent = error.message; }
+}
+
+el("close-result-detail")?.addEventListener("click", closeResultDetails);
+el("copy-deliverable-button")?.addEventListener("click", () => copyEmails("deliverable"));
+el("copy-undeliverable-button")?.addEventListener("click", () => copyEmails("undeliverable"));
+el("copy-unknown-button")?.addEventListener("click", () => copyEmails("unknown"));
+el("copy-all-button")?.addEventListener("click", () => copyEmails("all"));
 
 let searchTimer = null;
 el("result-search").addEventListener("input", () => {
@@ -955,6 +1006,33 @@ async function loadRecentJobs() {
     errorBox.textContent = error.message;
   }
 }
+
+async function loadHistoryPage() {
+  if (!state.user || state.view !== "history") return;
+  const search = encodeURIComponent((el("history-search")?.value || "").trim());
+  const status = encodeURIComponent(el("history-filter")?.value || "all");
+  try {
+    const data = await api(`/api/jobs?offset=${state.history.offset}&limit=${state.history.limit}&search=${search}&status=${status}`);
+    state.history.total = data.total || 0;
+    const list = el("history-list"); list.replaceChildren();
+    (data.items || []).forEach((job) => {
+      const button = document.createElement("button"); button.type = "button"; button.className = "history-item";
+      const name = document.createElement("strong"); name.textContent = job.download_name || job.file_name || formatJobName(job.created_at);
+      const meta = document.createElement("span"); meta.textContent = `${statusLabels[job.status] || job.status} · ${job.total || 0} 个邮箱`;
+      button.append(name, meta); button.addEventListener("click", () => { switchView("single"); showJob(job); state.results = []; state.page = 0; loadResults(); }); list.append(button);
+    });
+    if (!(data.items || []).length) { const empty = document.createElement("p"); empty.className = "history-empty"; empty.textContent = "暂无历史任务"; list.append(empty); }
+    const page = Math.floor(state.history.offset / state.history.limit); const pages = Math.max(1, Math.ceil(state.history.total / state.history.limit));
+    el("history-page-info").textContent = `${page + 1} / ${pages}`; el("history-prev").disabled = page === 0; el("history-next").disabled = page + 1 >= pages;
+    renderPageNumbers(el("history-pages"), page, pages, async (next) => { state.history.offset = next * state.history.limit; await loadHistoryPage(); });
+  } catch (error) { errorBox.textContent = error.message; }
+}
+
+el("history-refresh")?.addEventListener("click", loadHistoryPage);
+el("history-search")?.addEventListener("input", () => { state.history.offset = 0; clearTimeout(state.historyTimer); state.historyTimer = setTimeout(loadHistoryPage, 250); });
+el("history-filter")?.addEventListener("change", () => { state.history.offset = 0; loadHistoryPage(); });
+el("history-prev")?.addEventListener("click", () => { if (state.history.offset >= state.history.limit) { state.history.offset -= state.history.limit; loadHistoryPage(); } });
+el("history-next")?.addEventListener("click", () => { if (state.history.offset + state.history.limit < state.history.total) { state.history.offset += state.history.limit; loadHistoryPage(); } });
 
 function updateAccount() {
   el("account-button").textContent = state.user ? state.user.email : "登录";
