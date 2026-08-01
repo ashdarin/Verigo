@@ -676,6 +676,8 @@ async function copySingleEmail(email, button) {
   } catch (error) { errorBox.textContent = error.message; }
 }
 
+document.querySelectorAll(".demo-copy").forEach((button) => button.addEventListener("click", () => copySingleEmail(button.dataset.demoEmail, button)));
+
 async function copyEmails(kind = "all") {
   if (!state.jobId || state.copyInFlight) return;
   state.copyInFlight = true;
