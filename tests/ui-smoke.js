@@ -50,6 +50,9 @@ async function checkAccountAndImport(browser) {
   await page.fill("#auth-password", "browser-smoke-2026");
   await page.click("#auth-submit");
   await page.waitForFunction((value) => document.querySelector("#account-button")?.textContent === value, email);
+  if (await page.locator("#onboarding-dialog").evaluate((node) => node.open)) {
+    await page.locator("#onboarding-dialog [data-close-onboarding]").first().click();
+  }
   if (await page.locator("#recent-block").evaluate((node) => node.classList.contains("hidden"))) {
     throw new Error("account: recent jobs should be visible after login");
   }

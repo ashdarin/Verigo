@@ -12,6 +12,7 @@ class CreateJobRequest(BaseModel):
     emails: list[str] = Field(min_length=1)
     worker_count: int = Field(default=2, ge=1, le=settings.max_workers_per_job)
     stop_on_deliverable: bool = False
+    list_name: str | None = Field(default=None, max_length=200)
 
     @field_validator("emails")
     @classmethod
@@ -51,6 +52,7 @@ class JobResponse(BaseModel):
     summary: JobSummary | None
     download_url: str | None
     download_name: str | None = None
+    list_name: str | None = None
     queue_position: int | None = None
     retry_at: str | None = None
     stop_on_deliverable: bool = False

@@ -46,6 +46,7 @@ class Job:
     temporary_retry_attempts: int = 0
     pending_indices: list[int] = field(default_factory=list)
     lease_id: str | None = None
+    list_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -83,7 +84,7 @@ class JobStore:
         "started_at", "finished_at", "error", "results_json", "csv_path",
         "owner_id", "guest_token_hash", "worker_id", "heartbeat_at", "stop_on_deliverable",
         "execution_target", "parent_id", "retry_parent_id",
-        "deferred_retry_at", "temporary_retry_attempts",
+        "deferred_retry_at", "temporary_retry_attempts", "list_name",
     )
 
     def __init__(self, keep: int = 100) -> None:
@@ -125,6 +126,7 @@ class JobStore:
                 if row["deferred_retry_at"] else None
             ),
             temporary_retry_attempts=int(row["temporary_retry_attempts"] or 0),
+            list_name=row["list_name"],
         )
 
     def initialize(self) -> None:
@@ -155,12 +157,13 @@ class JobStore:
                         parent_id TEXT,
                         retry_parent_id TEXT,
                         deferred_retry_at TEXT,
-                        temporary_retry_attempts INTEGER NOT NULL DEFAULT 0
+                        temporary_retry_attempts INTEGER NOT NULL DEFAULT 0,
+                        list_name TEXT
                     )
                     """
                 )
                 existing = {row[1] for row in connection.execute("PRAGMA table_info(jobs)")}
-                for name, kind in (("owner_id", "TEXT"), ("guest_token_hash", "TEXT"), ("worker_id", "TEXT"), ("heartbeat_at", "TEXT"), ("stop_on_deliverable", "INTEGER NOT NULL DEFAULT 0"), ("execution_target", "TEXT NOT NULL DEFAULT 'local'"), ("parent_id", "TEXT"), ("retry_parent_id", "TEXT"), ("deferred_retry_at", "TEXT"), ("temporary_retry_attempts", "INTEGER NOT NULL DEFAULT 0")):
+                for name, kind in (("owner_id", "TEXT"), ("guest_token_hash", "TEXT"), ("worker_id", "TEXT"), ("heartbeat_at", "TEXT"), ("stop_on_deliverable", "INTEGER NOT NULL DEFAULT 0"), ("execution_target", "TEXT NOT NULL DEFAULT 'local'"), ("parent_id", "TEXT"), ("retry_parent_id", "TEXT"), ("deferred_retry_at", "TEXT"), ("temporary_retry_attempts", "INTEGER NOT NULL DEFAULT 0"), ("list_name", "TEXT")):
                     if name not in existing:
                         connection.execute(f"ALTER TABLE jobs ADD COLUMN {name} {kind}")
                 connection.execute("CREATE INDEX IF NOT EXISTS idx_jobs_queue ON jobs(status, created_at)")
@@ -657,6 +660,7 @@ class JobStore:
             job.retry_parent_id,
             job.deferred_retry_at.isoformat() if job.deferred_retry_at else None,
             job.temporary_retry_attempts,
+            job.list_name,
         )
         with self._lock, closing(self._connect()) as connection:
             connection.execute(
@@ -665,8 +669,8 @@ class JobStore:
                     id, emails_json, worker_count, status, created_at, started_at, finished_at,
                     error, results_json, csv_path, owner_id, guest_token_hash, worker_id, heartbeat_at,
                     stop_on_deliverable, execution_target, parent_id, retry_parent_id, deferred_retry_at,
-                    temporary_retry_attempts
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    temporary_retry_attempts, list_name
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     emails_json=excluded.emails_json, worker_count=excluded.worker_count,
                     status=excluded.status, started_at=excluded.started_at,
@@ -678,7 +682,8 @@ class JobStore:
                     execution_target=excluded.execution_target, parent_id=excluded.parent_id,
                     retry_parent_id=excluded.retry_parent_id,
                     deferred_retry_at=excluded.deferred_retry_at,
-                    temporary_retry_attempts=excluded.temporary_retry_attempts
+                    temporary_retry_attempts=excluded.temporary_retry_attempts,
+                    list_name=excluded.list_name
                 WHERE jobs.status != 'stopped' OR excluded.status = 'stopped'
                 """,
                 values,
@@ -1010,8 +1015,8 @@ class JobStore:
             if status in {"queued", "running", "completed", "failed", "stopped"}:
                 clauses.append("status=?"); params.append(status)
             if search.strip():
-                clauses.append("(lower(emails_json) LIKE ? OR lower(COALESCE(csv_path, '')) LIKE ?)")
-                needle = f"%{search.strip().lower()}%"; params.extend([needle, needle])
+                clauses.append("(lower(COALESCE(list_name, '')) LIKE ? OR lower(emails_json) LIKE ? OR lower(COALESCE(csv_path, '')) LIKE ?)")
+                needle = f"%{search.strip().lower()}%"; params.extend([needle, needle, needle])
             where = " AND ".join(clauses)
             total = int(connection.execute(f"SELECT COUNT(*) FROM jobs WHERE {where}", params).fetchone()[0])
             rows = connection.execute(

@@ -263,6 +263,7 @@ def submit_routed_job(
     owner_email: str | None,
     stop_on_deliverable: bool = False,
     job_id: str | None = None,
+    list_name: str | None = None,
 ) -> Job:
     targets: dict[tuple[str, int], list[str]] = {}
     for email in emails:
@@ -303,6 +304,7 @@ def submit_routed_job(
             owner_id=owner_id,
             job_id=job_id,
             immediate_results_by_target=immediate_results,
+            list_name=list_name,
         )
 
     if stop_on_deliverable:
@@ -316,6 +318,7 @@ def submit_routed_job(
             stop_on_deliverable=True,
             job_id=job_id,
             execution_target="local",
+            list_name=list_name,
         )
 
     execution_target, child_worker_count = (
@@ -328,6 +331,7 @@ def submit_routed_job(
         stop_on_deliverable=stop_on_deliverable,
         job_id=job_id,
         execution_target=execution_target,
+        list_name=list_name,
         immediate_results=immediate_results.get(execution_target),
     )
 
@@ -475,6 +479,7 @@ def serialize_job(job: Job) -> JobResponse:
         summary=summary,
         download_url=f"/api/jobs/{job.id}/download" if is_done else None,
         download_name=verification_filename(job) if is_done else None,
+        list_name=job.list_name,
         queue_position=job_store.queue_position(job.id),
         retry_at=retry_at.isoformat() if retry_at else None,
         stop_on_deliverable=job.stop_on_deliverable,
@@ -1291,6 +1296,7 @@ def create_job(
             owner_email=user.email,
             stop_on_deliverable=payload.stop_on_deliverable,
             job_id=job_id,
+            list_name=payload.list_name,
         )
     except RuntimeError as exc:
         if charged_count:

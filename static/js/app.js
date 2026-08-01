@@ -418,7 +418,7 @@ startButton.addEventListener("click", async () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(isFreeSingle
         ? { email: emails[0] }
-        : { emails, worker_count: workerCount }),
+        : { emails, worker_count: workerCount, list_name: state.mode === "file" ? el("file-input").files[0]?.name || null : null }),
     });
     state.jobId = job.id;
     state.guestToken = job.access_token || null;
@@ -1058,7 +1058,7 @@ async function loadHistoryPage() {
     const list = el("history-list"); list.replaceChildren();
     (data.items || []).forEach((job) => {
       const button = document.createElement("button"); button.type = "button"; button.className = "history-item";
-      const name = document.createElement("strong"); name.textContent = job.download_name || job.file_name || formatJobName(job.created_at);
+      const name = document.createElement("strong"); name.textContent = job.list_name || job.download_name || job.file_name || formatJobName(job.created_at);
       const meta = document.createElement("span"); meta.textContent = `${statusLabels[job.status] || job.status} · ${job.total || 0} 个邮箱`;
       button.append(name, meta); button.addEventListener("click", () => { switchView("single"); showJob(job); state.results = []; state.page = 0; loadResults(); }); list.append(button);
     });
