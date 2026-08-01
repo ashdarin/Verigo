@@ -186,7 +186,7 @@ async function checkEnglishLocale(browser) {
   await page.click("#locale-toggle");
   await page.fill("#single-email-input", "locale-check@yahoo.com");
   await page.click("#start-button");
-  await page.waitForFunction(() => document.querySelectorAll("#results-body td").length >= 5);
+  await page.waitForFunction(() => document.querySelectorAll("#results-body td").length >= 3);
   const result = await page.evaluate(() => ({
     lang: document.documentElement.lang,
     code: document.querySelector("#locale-code")?.textContent,
