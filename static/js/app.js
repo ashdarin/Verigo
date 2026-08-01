@@ -593,6 +593,7 @@ function renderResults() {
         copyIcon.className = "fa-regular fa-copy";
         copyIcon.setAttribute("aria-hidden", "true");
         copyButton.append(emailText, copyIcon);
+        emailText.addEventListener("click", () => copyButton.click());
         copyButton.addEventListener("click", async (event) => {
           event.stopPropagation();
           await copySingleEmail(item.email, copyButton);
@@ -676,17 +677,6 @@ async function copySingleEmail(email, button) {
   } catch (error) { errorBox.textContent = error.message; }
 }
 
-document.querySelectorAll(".demo-copy").forEach((button) => button.addEventListener("click", () => copySingleEmail(button.dataset.demoEmail, button)));
-document.querySelectorAll(".hero-demo-row").forEach((row) => {
-  const button = row.querySelector(".demo-copy");
-  const email = row.querySelector(".demo-email");
-  email?.addEventListener("click", () => button?.click());
-  row.addEventListener("keydown", (event) => {
-    if ((event.key === "Enter" || event.key === " ") && event.target === row) {
-      event.preventDefault(); button?.click();
-    }
-  });
-});
 
 async function copyEmails(kind = "all") {
   if (!state.jobId || state.copyInFlight) return;
