@@ -1,7 +1,11 @@
+const initialPath = window.location.pathname;
+const initialView = initialPath === "/dashboard" || initialPath === "/admin" ? "dashboard"
+  : initialPath === "/admin/credits" ? "admin-credits"
+    : initialPath === "/wallet" || initialPath === "/app/billing" ? "wallet"
+      : initialPath === "/history" || initialPath === "/app/history" ? "history"
+        : initialPath === "/app/finder" ? "discovery" : "single";
 const state = {
-  view: window.location.pathname === "/dashboard"
-    ? "dashboard"
-    : window.location.pathname === "/admin/credits" ? "admin-credits" : window.location.pathname === "/wallet" ? "wallet" : window.location.pathname === "/history" ? "history" : "single",
+  view: initialView,
   mode: "paste",
   fileEmails: [],
   user: null,
@@ -1417,6 +1421,7 @@ function openApiKeysDialog() {
 }
 
 el("api-nav").addEventListener("click", () => {
+  if (el("onboarding-dialog")?.open) el("onboarding-dialog").close();
   if (!state.user) {
     el("auth-dialog").showModal();
     setAuthMode("login");

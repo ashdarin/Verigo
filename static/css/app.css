@@ -418,3 +418,8 @@ th:nth-child(1) { width: 52%; } th:nth-child(2) { width: 24%; } th:nth-child(3) 
 .compact-marketing .solution-grid article, .compact-marketing .trust-grid article { min-height: 0; padding: 18px; }
 
 @media (max-width: 560px) { .table-actions { flex-wrap: wrap; justify-content: flex-start; } .table-actions .download-action, .table-actions .stop-action { flex: 1 1 auto; min-width: 0; padding: 0 8px; font-size: 11px; } .result-detail-drawer { width: 100vw; max-width: 100vw; right: 0; overflow-y: auto; } .result-detail-drawer.open { transform: translateX(0); } .history-search-controls { flex-direction: column; width: 100%; } .history-search-controls select { width: 100%; } }
+
+.app-surface .commercial-hero, .app-surface .commercial-section, .app-surface .site-footer, .app-surface .hero-demo { display: none; }
+.admin-surface .commercial-hero, .admin-surface .commercial-section, .admin-surface .site-footer, .admin-surface .verify-workspace, .admin-surface .discovery-workspace, .admin-surface .history-workspace, .admin-surface .wallet-workspace { display: none !important; }
+.admin-surface .dashboard-workspace, .admin-surface .admin-credits-workspace { display: block; }
+.app-surface .dashboard-workspace, .app-surface .admin-credits-workspace { display: none !important; }
