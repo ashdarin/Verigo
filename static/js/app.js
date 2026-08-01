@@ -1096,6 +1096,9 @@ async function syncOnboarding() {
   clearTimeout(state.onboardingTimer);
   const step = state.user?.onboarding_step;
   if (!step || step === "completed") return;
+  // Do not interrupt the first authenticated session with a modal. The user
+  // can start activation from the trial-credit action in the account area.
+  if (!el("onboarding-dialog").open) return;
   showOnboardingStep(step);
   if (step !== "verification_in_progress" || !state.user.activation_job_id) return;
   try {
@@ -1611,12 +1614,8 @@ el("auth-form").addEventListener("submit", async (event) => {
     el("auth-dialog").close();
     el("auth-form").reset();
     updateAccount();
-    // Registration is the one moment the activation flow must be impossible
-    // to miss. Keep this explicit rather than relying only on a later account
-    // refresh or a background state sync.
-    if (state.authMode === "register" && state.user?.onboarding_step !== "completed") {
-      showOnboardingStep(state.user.onboarding_step);
-    }
+    // Keep registration non-blocking; activation remains available from the
+    // prominent trial-credit action and can be completed when the user is ready.
     if (window.location.pathname === "/dashboard" && state.user.is_admin) switchView("dashboard");
     if (window.location.pathname === "/admin/credits" && state.user.is_admin) switchView("admin-credits");
   } catch (error) {

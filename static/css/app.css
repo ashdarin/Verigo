@@ -17,7 +17,8 @@
 }
 
 * { box-sizing: border-box; }
-body { margin: 0; min-width: 320px; background: var(--canvas); color: var(--ink); font: 14px/1.45 Inter, "Segoe UI", "Microsoft YaHei", sans-serif; }
+html { overflow-x: hidden; }
+body { margin: 0; min-width: 320px; overflow-x: hidden; background: var(--canvas); color: var(--ink); font: 14px/1.45 Inter, "Segoe UI", "Microsoft YaHei", sans-serif; }
 button, input, textarea, select { font: inherit; letter-spacing: 0; }
 button { cursor: pointer; }
 .hidden { display: none !important; }
@@ -154,7 +155,7 @@ textarea:focus, input:focus, select:focus { border-color: var(--accent); box-sha
 .download-action { min-height: 38px; padding: 0 13px; border: 1px solid var(--accent); border-radius: 5px; background: #fff; color: var(--accent); font-weight: 700; white-space: nowrap; }
 .download-action:hover:not(:disabled) { background: #edf8f3; }
 .download-action:disabled { border-color: var(--line); color: #9aa49f; cursor: not-allowed; }
-.table-actions { display: flex; gap: 8px; }
+.table-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
 .stop-action { min-height: 38px; padding: 0 13px; border: 1px solid #c94742; border-radius: 5px; background: #fff; color: #aa3632; font-weight: 700; white-space: nowrap; }
 .stop-action:hover { background: #fbeeed; }
 .table-wrap { overflow: auto; border: 1px solid var(--line); border-radius: 7px; }
@@ -180,8 +181,8 @@ th:nth-child(1) { width: 52%; } th:nth-child(2) { width: 24%; } th:nth-child(3) 
 .result-skipped { background: #edf1ef; color: #67736e; }
 .detail-cell { color: var(--muted); font-size: 12px; line-height: 1.45; }
 .result-detail-action { margin: 0; padding: 0; font-size: 12px; }
-.result-detail-drawer { position: fixed; z-index: 40; top: 0; right: 0; width: min(430px, 100vw); height: 100vh; padding: 28px; background: #fff; box-shadow: -12px 0 36px rgba(15,25,21,.16); transform: translateX(105%); transition: transform .2s ease; }
-.result-detail-drawer.open { transform: translateX(0); }
+.result-detail-drawer { position: fixed; z-index: 40; top: 0; right: -430px; width: min(430px, 100vw); height: 100vh; padding: 28px; background: #fff; box-shadow: -12px 0 36px rgba(15,25,21,.16); transition: right .2s ease; }
+.result-detail-drawer.open { right: 0; }
 .drawer-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; border-bottom: 1px solid var(--line); padding-bottom: 18px; }
 .result-detail-content { display: grid; gap: 0; margin-top: 12px; }
 .detail-field { display: grid; gap: 5px; padding: 15px 0; border-bottom: 1px solid var(--line); }
