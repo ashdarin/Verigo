@@ -431,3 +431,4 @@ th:nth-child(1) { width: 52%; } th:nth-child(2) { width: 24%; } th:nth-child(3) 
 .admin-surface .product-nav > .nav-link,
 .admin-surface .product-nav > #api-nav,
 .admin-surface .product-nav > #wallet-nav { display: none !important; }
+.demo-email { cursor: pointer; }
