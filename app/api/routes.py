@@ -1330,6 +1330,7 @@ def verify_single_email(
             owner_id=user.id if user else None,
             owner_email=user.email if user else None,
             job_id=uuid.uuid4().hex[:12],
+            list_name=payload.list_name,
         )
         if user and user.onboarding_required and user.email_verified and not user.activation_completed_at:
             auth_store.record_activation_job(user.id, job.id)

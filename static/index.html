@@ -82,6 +82,8 @@
       <section id="single-panel" class="input-mode">
         <label for="single-email-input">邮箱地址</label>
         <input id="single-email-input" type="email" autocomplete="email" placeholder="name@example.com" spellcheck="false">
+        <label for="single-list-name-input">任务名称（可选）</label>
+        <input id="single-list-name-input" type="text" maxlength="200" placeholder="例如：客户跟进-8月" autocomplete="off">
       </section>
 
       <section id="batch-panel" class="hidden">
@@ -91,6 +93,8 @@
         </div>
 
         <section id="paste-panel" class="input-mode">
+          <label for="list-name-input">名单名称（可选）</label>
+          <input id="list-name-input" type="text" maxlength="200" placeholder="例如：海外客户名单-8月" autocomplete="off">
           <label for="email-input">邮箱列表</label>
           <textarea id="email-input" rows="11" placeholder="name@example.com&#10;hello@company.cn" spellcheck="false"></textarea>
         </section>

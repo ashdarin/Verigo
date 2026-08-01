@@ -955,6 +955,12 @@ with TestClient(app) as account:
     assert account.post(
         "/api/verify/single", json={"email": "first@example.com"}
     ).status_code == 202
+    named_single = account.post(
+        "/api/verify/single",
+        json={"email": "named@example.com", "list_name": "客户跟进-8月"},
+    )
+    assert named_single.status_code == 202, named_single.text
+    assert named_single.json()["list_name"] == "客户跟进-8月"
 
     verification_code = auth_store.create_email_verification(user_id)
     auth_store.confirm_email_verification(user_id, verification_code)

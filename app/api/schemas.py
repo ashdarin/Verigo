@@ -27,6 +27,7 @@ class CreateJobRequest(BaseModel):
 
 class SingleVerificationRequest(BaseModel):
     email: str = Field(min_length=3, max_length=254)
+    list_name: str | None = Field(default=None, max_length=200)
 
 
 class JobSummary(BaseModel):

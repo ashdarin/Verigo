@@ -423,3 +423,11 @@ th:nth-child(1) { width: 52%; } th:nth-child(2) { width: 24%; } th:nth-child(3) 
 .admin-surface .commercial-hero, .admin-surface .commercial-section, .admin-surface .site-footer, .admin-surface .verify-workspace, .admin-surface .discovery-workspace, .admin-surface .history-workspace, .admin-surface .wallet-workspace { display: none !important; }
 .admin-surface .dashboard-workspace, .admin-surface .admin-credits-workspace { display: block; }
 .app-surface .dashboard-workspace, .app-surface .admin-credits-workspace { display: none !important; }
+/* Admin has its own navigation surface; user workspaces stay out of sight. */
+.admin-surface .product-nav > [data-view="single"],
+.admin-surface .product-nav > [data-view="batch"],
+.admin-surface .product-nav > [data-view="discovery"],
+.admin-surface .product-nav > [data-view="history"],
+.admin-surface .product-nav > .nav-link,
+.admin-surface .product-nav > #api-nav,
+.admin-surface .product-nav > #wallet-nav { display: none !important; }

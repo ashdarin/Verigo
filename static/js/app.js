@@ -421,8 +421,8 @@ startButton.addEventListener("click", async () => {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(isFreeSingle
-        ? { email: emails[0] }
-        : { emails, worker_count: workerCount, list_name: state.mode === "file" ? el("file-input").files[0]?.name || null : null }),
+        ? { email: emails[0], list_name: el("single-list-name-input")?.value.trim() || null }
+        : { emails, worker_count: workerCount, list_name: (el("list-name-input")?.value.trim() || (state.mode === "file" ? el("file-input").files[0]?.name || null : null)) }),
     });
     state.jobId = job.id;
     state.guestToken = job.access_token || null;
