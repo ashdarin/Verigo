@@ -1,5 +1,11 @@
 const VerigoI18n = (() => {
   const english = {
+    // Keep the verification workspace fully localized even when legacy catalog keys are mojibake.
+    "单个邮箱": "Single email", "批量名单": "Bulk list", "验证任务": "Verification job",
+    "无法确认": "Unable to confirm", "复制可投递": "Copy deliverable", "复制不可投递": "Copy undeliverable",
+    "复制无法确认": "Copy unable to confirm", "复制全部": "Copy all", "状态": "Status",
+    "邮箱": "Email", "结果": "Result", "操作": "Actions", "筛选验证状态": "Filter by status",
+    "全部": "All", "可投递": "Deliverable", "不可投递": "Undeliverable", "详情": "Details",
     "单个验证": "Single check", "批量验证": "Bulk check", "查找工作邮箱": "Find work email",
     "面向销售、招聘与出海团队": "For sales, recruiting, and global teams", "先验证名单，再找到能联系上的企业邮箱。": "Verify your list, then find company emails you can contact.",
     "Verigo 将邮箱验证、批量清洗和按域名联系人发现放在一条工作流中，帮助你减少退信、保护发信信誉，并更快触达目标企业。": "Verigo brings email verification, list cleaning, and company email finding into one workflow to reduce bounces and reach target companies faster.",
