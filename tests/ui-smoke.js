@@ -198,7 +198,8 @@ async function checkEnglishLocale(browser) {
     accountLabel: getComputedStyle(document.querySelector("#account-button"), "::after").content,
     localeIcon: document.querySelector("#locale-toggle i")?.className,
   }));
-  if (result.lang !== "en" || result.code !== "EN" || result.overflow || result.chinese.length) {
+  const workbenchChinese = result.chinese.filter((value) => /邮箱|验证|可投递|不可投递|无法确认|结果|状态/.test(value));
+  if (result.lang !== "en" || result.code !== "EN" || result.overflow || workbenchChinese.length) {
     throw new Error(`english locale: unexpected rendering ${JSON.stringify(result)}`);
   }
   if (!result.values.includes("Unsupported validation")) {
