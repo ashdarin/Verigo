@@ -1072,9 +1072,11 @@ with TestClient(app) as account:
     assert jobs.status_code == 200
     assert jobs.json()["total"] >= 1
     assert "ownedjob0001" in [job["id"] for job in jobs.json()["items"]]
-    completed_history = account.get("/api/jobs?offset=0&limit=20&status=completed&search=check@example.com")
+    named_job = completed_job("namedjob0001", owner_id=user_id, list_name="customers-august.csv")
+    job_store.add(named_job)
+    completed_history = account.get("/api/jobs?offset=0&limit=20&status=completed&search=customers-august.csv")
     assert completed_history.status_code == 200
-    assert "ownedjob0001" in [job["id"] for job in completed_history.json()["items"]]
+    assert "namedjob0001" in [job["id"] for job in completed_history.json()["items"]]
     assert account.get("/api/jobs?offset=0&limit=20&status=invalid").status_code == 422
     assert account.get("/api/jobs/ownedjob0001").status_code == 200
 

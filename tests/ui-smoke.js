@@ -148,6 +148,9 @@ async function checkMobileTrialAction(browser) {
   await page.fill("#auth-password", "browser-smoke-2026");
   await page.click("#auth-submit");
   await page.waitForFunction(() => !document.querySelector("#claim-trial-button")?.classList.contains("hidden"));
+  if (await page.locator("#onboarding-dialog").evaluate((node) => node.open)) {
+    await page.locator("#onboarding-dialog [data-close-onboarding]").first().click();
+  }
   await page.click("#api-nav");
   if (!(await page.locator("#api-keys-dialog").evaluate((node) => node.open))) {
     throw new Error("mobile API keys: management dialog should open");

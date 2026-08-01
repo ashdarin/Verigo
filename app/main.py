@@ -177,12 +177,12 @@ def app_section(section: str) -> FileResponse:
     if section not in {"verify", "finder", "history", "billing", "api", "settings"}:
         from fastapi import HTTPException
         raise HTTPException(status_code=404, detail="App page not found")
-    return FileResponse(STATIC_DIR / "index.html", headers={"X-Robots-Tag": "noindex, nofollow"})
+    return FileResponse(STATIC_DIR / "app.html", headers={"X-Robots-Tag": "noindex, nofollow"})
 
 
 @app.get("/admin", include_in_schema=False)
 def admin() -> FileResponse:
-    return FileResponse(STATIC_DIR / "index.html", headers={"X-Robots-Tag": "noindex, nofollow"})
+    return FileResponse(STATIC_DIR / "admin.html", headers={"X-Robots-Tag": "noindex, nofollow"})
 
 
 @app.get("/privacy", include_in_schema=False)
