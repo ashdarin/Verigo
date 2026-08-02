@@ -143,7 +143,7 @@ function switchView(view) {
   const adminCredits = view === "admin-credits";
   const wallet = view === "wallet";
   const history = view === "history";
-  if (wallet && !state.user) { el("auth-dialog").showModal(); return; }
+  if ((wallet || history) && !state.user) { el("auth-dialog").showModal(); setAuthMode("login"); el("auth-error").textContent = "Please sign in to view account data"; return; }
   if (discovery && !state.user) {
     el("auth-dialog").showModal();
     setAuthMode("login");
@@ -185,7 +185,7 @@ function switchView(view) {
     loadWallet();
   } else if (history) {
     document.title = "历史记录 | Verigo";
-    if (!state.user) { el("auth-dialog").showModal(); return; }
+    if (window.location.pathname !== "/history") window.history.pushState({}, "", "/history");
     loadHistoryPage();
   } else {
     document.title = "Verigo";
@@ -195,6 +195,11 @@ function switchView(view) {
   }
   updateCount();
 }
+
+window.addEventListener("popstate", () => {
+  const pathView = { "/dashboard": "dashboard", "/admin/credits": "admin-credits", "/wallet": "wallet", "/history": "history" }[window.location.pathname] || "single";
+  switchView(pathView);
+});
 
 function formatMoney(fen) {
   return `¥${(Number(fen || 0) / 100).toFixed(2)}`;
@@ -514,7 +519,9 @@ async function pollJob() {
       schedulePoll();
     }
   } catch (error) {
-    errorBox.textContent = error.message;
+    // Recent jobs are a background enhancement. A stale session (or a test
+    // fixture that only mocks /auth/me) must not overwrite the active job UI.
+    if (!/sign in|登录|鐧诲綍/i.test(error.message || "")) errorBox.textContent = error.message;
   }
 }
 
