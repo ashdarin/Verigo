@@ -71,7 +71,7 @@
 
   <main id="workspace-home" class="workspace-home hidden">
     <section class="workspace-welcome">
-      <div><p class="eyebrow">VERIGO WORKSPACE</p><h1>今天先把名单质量做好</h1><p>从最近任务继续，或选择一个动作开始。</p></div>
+      <div><p class="eyebrow">VERIGO WORKSPACE</p><h2>今天先把名单质量做好</h2><p>从最近任务继续，或选择一个动作开始。</p></div>
       <a class="hero-secondary" href="/api-docs">查看 API 文档</a>
     </section>
     <section class="workspace-metrics" aria-label="账户摘要">
@@ -93,7 +93,7 @@
       <div class="panel-heading">
         <div>
           <p id="verify-eyebrow" class="eyebrow">免费单个验证</p>
-          <h1 id="verify-heading">验证单个收件地址</h1>
+          <h2 id="verify-heading">验证单个收件地址</h2>
         </div>
         <span id="email-count" class="count">0</span>
       </div>
@@ -221,7 +221,7 @@
   <main id="discovery-workspace" class="discovery-workspace hidden">
     <section class="discovery-form-area">
       <p class="eyebrow">企业邮箱查找</p>
-      <h1>找到目标企业的工作邮箱</h1>
+      <h2>找到目标企业的工作邮箱</h2>
       <div class="discovery-fields">
         <label>名字<input id="discovery-first-name" autocomplete="given-name" placeholder="ming"></label>
         <label>姓氏<input id="discovery-last-name" autocomplete="family-name" placeholder="wang"></label>
@@ -263,7 +263,7 @@
     <section class="report-heading">
       <div>
         <p class="eyebrow">报告快照</p>
-        <h1>网站运营概览</h1>
+        <h2>网站运营概览</h2>
         <p id="dashboard-updated" class="report-updated">正在加载数据</p>
       </div>
       <div class="report-actions"><span class="report-period">最近 14 天</span><button id="dashboard-refresh" class="download-action" type="button">刷新</button></div>
@@ -341,7 +341,7 @@
   </main>
 
   <main id="admin-credits-workspace" class="admin-credits-workspace hidden">
-    <section class="report-heading admin-report-heading"><div><p class="eyebrow">账户运营</p><h1>验证次数管理</h1><p class="report-updated">账户、使用情况与调整记录</p></div><div class="report-actions"><span class="report-period">100 次 ¥0.50</span></div></section>
+    <section class="report-heading admin-report-heading"><div><p class="eyebrow">账户运营</p><h2>验证次数管理</h2><p class="report-updated">账户、使用情况与调整记录</p></div><div class="report-actions"><span class="report-period">100 次 ¥0.50</span></div></section>
     <section class="report-scorecards admin-scorecards"><article class="report-scorecard"><span>账户总数</span><strong id="admin-metric-users">0</strong><small>已注册账户</small></article><article class="report-scorecard"><span>付费验证次数</span><strong id="admin-metric-paid">0</strong><small>全部账户</small></article><article class="report-scorecard"><span>体验验证次数</span><strong id="admin-metric-trial">0</strong><small>有效体验次数</small></article><article class="report-scorecard"><span>累计已验证</span><strong id="admin-metric-used">0</strong><small>全部账户</small></article></section>
     <section class="admin-credits-panel" aria-labelledby="admin-credits-heading">
       <div class="admin-credits-heading">
@@ -366,7 +366,7 @@
   </main>
 
   <main id="wallet-workspace" class="wallet-workspace hidden">
-    <section class="report-heading"><div><p class="eyebrow">账户中心</p><h1>资金与使用</h1><p id="wallet-updated" class="report-updated"></p></div><div class="report-actions"><span id="wallet-price" class="report-period"></span><button id="wallet-refresh" class="download-action" type="button">刷新</button></div></section>
+    <section class="report-heading"><div><p class="eyebrow">账户中心</p><h2>资金与使用</h2><p id="wallet-updated" class="report-updated"></p></div><div class="report-actions"><span id="wallet-price" class="report-period"></span><button id="wallet-refresh" class="download-action" type="button">刷新</button></div></section>
     <section class="report-scorecards"><article class="report-scorecard"><span>累计充值</span><strong id="wallet-recharged">¥0.00</strong><small>实收金额</small></article><article class="report-scorecard"><span>付费余额价值</span><strong id="wallet-value">¥0.00</strong><small id="wallet-paid">0 次</small></article><article class="report-scorecard"><span>已用于验证</span><strong id="wallet-spent">¥0.00</strong><small id="wallet-used">0 次</small></article><article class="report-scorecard"><span>可用验证次数</span><strong id="wallet-available">0</strong><small id="wallet-trial-note">含体验次数</small></article></section>
     <section class="wallet-purchase"><div><p class="eyebrow">购买验证额度</p><h2>按需充值，立即用于批量验证</h2><p>100 次 ¥0.50。购买完成后额度自动进入账户。</p></div><div class="purchase-actions"><label for="purchase-packages">购买份数（每份 100 次）</label><div><input id="purchase-packages" type="number" min="1" max="1000" value="1"><button id="purchase-button" class="primary-action" type="button">购买 100 次 · ¥0.50</button></div><p id="purchase-status" class="purchase-status" role="status"></p></div></section>
     <section class="report-secondary-grid"><section class="report-card"><div class="report-card-heading"><div><h2>验证使用趋势</h2><p>最近 14 天</p></div></div><div id="wallet-usage-chart" class="wallet-usage-chart"></div></section><section class="report-card"><div class="report-card-heading"><div><h2>资金流水</h2><p>实收、退款和管理员调整</p></div></div><div id="wallet-transactions" class="wallet-transactions"></div></section></section>
