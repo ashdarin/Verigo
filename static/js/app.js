@@ -1,7 +1,5 @@
 const state = {
-  view: window.location.pathname === "/lists" ? "lists"
-    : window.location.pathname.startsWith("/lists/") ? "lists"
-    : window.location.pathname === "/workspace" ? "workspace"
+  view: window.location.pathname === "/workspace" ? "workspace"
     : window.location.pathname === "/dashboard"
     ? "dashboard"
     : window.location.pathname === "/admin/credits" ? "admin-credits" : window.location.pathname === "/wallet" ? "wallet" : "single",
@@ -28,10 +26,7 @@ const state = {
   onboardingTimer: null,
   workspace: { loaded: false },
   pendingView: null,
-  pendingSaveResult: null,
   activeResultItem: null,
-  listSelection: new Set(),
-  discoverySelection: new Set(),
 };
 
 const pageSize = 50;
@@ -151,8 +146,7 @@ function switchView(view) {
   const adminCredits = view === "admin-credits";
   const wallet = view === "wallet";
   const workspace = view === "workspace";
-  const lists = view === "lists";
-  if ((wallet || lists) && !state.user) { state.pendingView = view; el("auth-dialog").showModal(); setAuthMode("login"); el("auth-error").textContent = VerigoI18n.text("请先登录后查看账户数据"); return; }
+  if (wallet && !state.user) { state.pendingView = view; el("auth-dialog").showModal(); setAuthMode("login"); el("auth-error").textContent = VerigoI18n.text("请先登录后查看账户数据"); return; }
   if (workspace && !state.user) { state.pendingView = "workspace"; el("auth-dialog").showModal(); setAuthMode("login"); el("auth-error").textContent = "Please sign in to open your workspace"; return; }
   if (discovery && !state.user) {
     el("auth-dialog").showModal();
@@ -163,16 +157,15 @@ function switchView(view) {
   state.view = view;
   const marketing = view === "single" || view === "batch";
   document.querySelectorAll(".public-marketing").forEach((section) => section.classList.toggle("workspace-mode-hidden", !marketing));
-  el("verify-workspace").classList.toggle("hidden", discovery || dashboard || adminCredits || wallet || workspace || lists);
+  el("verify-workspace").classList.toggle("hidden", discovery || dashboard || adminCredits || wallet || workspace);
   el("workspace-home").classList.toggle("hidden", !workspace);
   el("discovery-workspace").classList.toggle("hidden", !discovery);
   el("dashboard-workspace").classList.toggle("hidden", !dashboard);
   el("admin-credits-workspace").classList.toggle("hidden", !adminCredits);
   el("wallet-workspace").classList.toggle("hidden", !wallet);
-  el("lists-workspace").classList.toggle("hidden", !lists);
   el("single-panel").classList.toggle("hidden", view !== "single");
   el("batch-panel").classList.toggle("hidden", view !== "batch");
-  if (!discovery && !dashboard && !adminCredits && !wallet && !workspace && !lists) {
+  if (!discovery && !dashboard && !adminCredits && !wallet && !workspace) {
     el("verify-eyebrow").textContent = VerigoI18n.text(view === "single" ? "免费单个验证" : "收费批量验证");
     el("verify-heading").textContent = VerigoI18n.text(view === "single" ? "验证单个收件地址" : "批量验证收件地址");
   }
@@ -200,10 +193,6 @@ function switchView(view) {
     document.title = "Workspace | Verigo";
     if (window.location.pathname !== "/workspace") window.history.pushState({}, "", "/workspace");
     loadWorkspaceHome();
-  } else if (lists) {
-    document.title = `${VerigoI18n.text("我的列表")} | Verigo`;
-    if (window.location.pathname === "/lists" || !window.location.pathname.startsWith("/lists/")) window.history.pushState({}, "", "/lists");
-    loadListsPage();
   } else {
     document.title = "Verigo";
     clearInterval(state.metricsTimer);
@@ -214,12 +203,8 @@ function switchView(view) {
 }
 
 window.addEventListener("popstate", () => {
-  const pathView = { "/workspace": "workspace", "/lists": "lists", "/dashboard": "dashboard", "/admin/credits": "admin-credits", "/wallet": "wallet", "/history": "workspace" }[window.location.pathname] || (window.location.pathname.startsWith("/lists/") ? "lists" : "single");
+  const pathView = { "/workspace": "workspace", "/lists": "workspace", "/dashboard": "dashboard", "/admin/credits": "admin-credits", "/wallet": "wallet", "/history": "workspace" }[window.location.pathname] || "single";
   switchView(pathView);
-  if (pathView === "lists" && window.location.pathname.startsWith("/lists/")) {
-    const listId = window.location.pathname.split("/")[2];
-    if (listId) openListDetail(listId);
-  }
 });
 
 function formatMoney(fen) {
@@ -662,59 +647,12 @@ function openResultDetails(item) {
     const val = document.createElement("strong"); val.textContent = value;
     row.append(key, val); content.append(row);
   });
-  el("result-history-button").disabled = !state.user || !(item.saved_result_id || item.result_id);
   drawer.classList.add("open"); drawer.setAttribute("aria-hidden", "false");
 }
 
 function closeResultDetails() {
   const drawer = el("result-detail-drawer");
   drawer.classList.remove("open"); drawer.setAttribute("aria-hidden", "true");
-}
-
-async function openSaveResultDialog(item = state.activeResultItem) {
-  if (!item || !state.jobId) return;
-  if (!state.user) {
-    state.pendingSaveResult = { jobId: state.jobId, guestToken: state.guestToken, resultIndex: Number(item.original_index ?? item.result_index ?? 0), email: item.email };
-    el("auth-dialog").showModal(); setAuthMode("login");
-    el("auth-error").textContent = VerigoI18n.text("请先登录，登录后会继续保存当前结果");
-    return;
-  }
-  const select = el("save-result-list-select");
-  el("save-result-error").textContent = ""; el("save-result-new-list-name").value = "";
-  select.replaceChildren(new Option(VerigoI18n.text("新建列表"), ""));
-  try {
-    const lists = await api("/api/lists");
-    lists.forEach((list) => select.append(new Option(`${list.name} (${list.result_count || 0})`, list.id)));
-    el("save-result-dialog").showModal();
-  } catch (requestError) { el("save-result-error").textContent = requestError.message; }
-}
-
-async function submitSaveResult() {
-  const item = state.activeResultItem || {};
-  const payload = { job_id: state.jobId, result_index: Number(item.original_index ?? item.result_index ?? 0) };
-  const selected = el("save-result-list-select").value; const newName = el("save-result-new-list-name").value.trim();
-  if (selected) payload.list_id = selected; else if (newName) payload.list_name = newName; else throw new Error(VerigoI18n.text("请选择列表或输入新列表名称"));
-  const response = await api("/api/results/save", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
-  if (response.result?.id) item.saved_result_id = response.result.id;
-  el("save-result-dialog").close(); el("result-history-button").disabled = !state.user || !item.saved_result_id;
-  errorBox.textContent = VerigoI18n.text(response.added ? "结果已保存到列表" : "结果已在列表中");
-}
-
-async function copyResultFields() {
-  const item = state.activeResultItem; if (!item) return;
-  const text = [`email: ${item.email || ""}`, `status: ${resultMeta(item)[2]}`, `verification_method: ${item.verification_method || item.strategy || ""}`, `server_response: ${item.smtp_result || item.message || ""}`].join("\n");
-  try { await navigator.clipboard.writeText(text); errorBox.textContent = VerigoI18n.text("关键字段已复制"); } catch (_) { errorBox.textContent = VerigoI18n.text("复制失败，请手动选择"); }
-}
-
-async function openResultHistory() {
-  const id = state.activeResultItem?.saved_result_id || state.activeResultItem?.result_id; if (!id || !state.user) return;
-  try {
-    el("result-detail-title").textContent = state.activeResultItem.email || VerigoI18n.text("结果历史");
-    el("result-detail-drawer").classList.add("open"); el("result-detail-drawer").setAttribute("aria-hidden", "false");
-    const data = await api(`/api/results/${encodeURIComponent(id)}/history`); const content = el("result-detail-content");
-    const heading = document.createElement("p"); heading.className = "detail-history-heading"; heading.textContent = `${data.email} · ${data.items.length} 个版本`; content.prepend(heading);
-    data.items.forEach((version) => { const row = document.createElement("div"); row.className = "detail-field"; const key = document.createElement("span"); key.textContent = `${VerigoI18n.text(version.status)} · ${VerigoI18n.formatDate(version.created_at)}`; const val = document.createElement("strong"); val.textContent = version.verification_method || "-"; row.append(key, val); content.append(row); });
-  } catch (requestError) { errorBox.textContent = requestError.message; }
 }
 
 async function reverifyActiveResult() {
@@ -748,12 +686,7 @@ async function copyEmails(kind = "all") {
 }
 
 el("close-result-detail")?.addEventListener("click", closeResultDetails);
-el("result-save-button")?.addEventListener("click", () => openSaveResultDialog());
-el("result-copy-button")?.addEventListener("click", copyResultFields);
-el("result-history-button")?.addEventListener("click", openResultHistory);
 el("result-reverify-button")?.addEventListener("click", reverifyActiveResult);
-el("close-save-result")?.addEventListener("click", () => el("save-result-dialog").close());
-el("save-result-form")?.addEventListener("submit", async (event) => { event.preventDefault(); const button = el("save-result-submit"); button.disabled = true; el("save-result-error").textContent = ""; try { await submitSaveResult(); } catch (requestError) { el("save-result-error").textContent = requestError.message; } finally { button.disabled = false; } });
 el("copy-deliverable-button")?.addEventListener("click", () => copyEmails("deliverable"));
 el("copy-undeliverable-button")?.addEventListener("click", () => copyEmails("undeliverable"));
 el("copy-unknown-button")?.addEventListener("click", () => copyEmails("unknown"));
@@ -836,14 +769,6 @@ function resultType(item) {
 function renderDiscoveryResults() {
   const body = el("discovery-results-body");
   body.replaceChildren();
-  state.discoverySelection ||= new Set();
-  el("discovery-save-selected") && (el("discovery-save-selected").disabled = !state.discoverySelection.size);
-  const appendSaveAction = (row, item) => {
-    const actionCell = document.createElement("td");
-    const save = document.createElement("button"); save.type = "button"; save.className = "text-action"; save.textContent = VerigoI18n.text("保存到列表");
-    save.addEventListener("click", () => { if (!state.discovery.jobId) { el("discovery-error").textContent = VerigoI18n.text("请先验证候选邮箱，完成后即可保存结果"); return; } state.jobId = state.discovery.jobId; openResultDetails(item); openSaveResultDialog(item); });
-    actionCell.append(save); row.append(actionCell);
-  };
   if (!state.discovery.results.length) {
     if (state.discovery.candidates.length && !state.discovery.jobId) {
       state.discovery.candidates.forEach((email) => {
@@ -853,12 +778,12 @@ function renderDiscoveryResults() {
           cell.textContent = value;
           row.append(cell);
         });
-        const checkCell = row.firstElementChild; const check = document.createElement("input"); check.type = "checkbox"; check.addEventListener("change", () => { const index = state.discovery.candidates.indexOf(email); if (check.checked) state.discoverySelection.add(index); else state.discoverySelection.delete(index); el("discovery-save-selected").disabled = !state.discoverySelection.size; }); checkCell.append(check); appendSaveAction(row, { email, original_index: state.discovery.candidates.indexOf(email) }); body.append(row);
+        body.append(row);
       });
     } else {
       const row = document.createElement("tr");
       row.className = "empty-row";
-      row.innerHTML = '<td colspan="5">正在生成验证结果</td>';
+      row.innerHTML = '<td colspan="4">正在生成验证结果</td>';
       body.append(row);
     }
     return;
@@ -866,7 +791,6 @@ function renderDiscoveryResults() {
   state.discovery.results.forEach((item) => {
     const [label, className] = resultMeta(item);
     const row = document.createElement("tr");
-    const selectCell = document.createElement("td"); const check = document.createElement("input"); check.type = "checkbox"; check.addEventListener("change", () => { if (check.checked) state.discoverySelection.add(item.original_index); else state.discoverySelection.delete(item.original_index); el("discovery-save-selected").disabled = !state.discoverySelection.size; }); selectCell.append(check); row.append(selectCell);
     [
       item.email,
       label,
@@ -882,7 +806,7 @@ function renderDiscoveryResults() {
       } else cell.textContent = String(value);
       row.append(cell);
     });
-    appendSaveAction(row, item); body.append(row);
+    body.append(row);
   });
 }
 
@@ -1038,16 +962,6 @@ el("discovery-verify").addEventListener("click", async () => {
     button.disabled = submitted || !state.discovery.candidates.length;
   }
 });
-el("discovery-save-selected")?.addEventListener("click", async () => {
-  if (!state.discovery.jobId || !state.discoverySelection.size) return;
-  try {
-    const lists = await api("/api/lists");
-    const listId = lists[0]?.id || null;
-    if (!listId) { el("discovery-error").textContent = VerigoI18n.text("请先创建一个列表"); switchView("lists"); return; }
-    const response = await api("/api/results/save-batch", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ job_id: state.discovery.jobId, result_indices:[...state.discoverySelection], list_id:listId }) });
-    el("discovery-error").textContent = `${VerigoI18n.text("已保存")} ${response.results?.length || 0} ${VerigoI18n.text("个结果")}`;
-  } catch (error) { el("discovery-error").textContent = error.message; }
-});
 el("discovery-export-button")?.addEventListener("click", () => { if (!state.discovery.jobId) return; window.location.href = `/api/jobs/${encodeURIComponent(state.discovery.jobId)}/download`; });
 el("discovery-stop-button").addEventListener("click", async () => {
   if (!state.discovery.jobId) return;
@@ -1149,7 +1063,6 @@ function updateAccount() {
   el("admin-credits-nav").classList.toggle("hidden", !state.user?.is_admin);
   el("wallet-nav").classList.toggle("hidden", !state.user);
   el("workspace-nav").classList.toggle("hidden", !state.user);
-  el("lists-nav").classList.toggle("hidden", !state.user);
   el("notification-button").classList.toggle("hidden", !state.user);
   el("claim-trial-button").classList.toggle(
     "hidden", !state.user || state.user.needs_email_binding || state.user.email_verified,
@@ -1189,8 +1102,7 @@ async function loadWorkspaceHome() {
     el("workspace-deliverable-rate").textContent = Number(data.settled || 0) ? `${Math.round(Number(data.deliverable || 0) / Number(data.settled) * 100)}%` : "—";
     const list = el("workspace-recent-jobs"); list.replaceChildren();
     const recentResults = el("workspace-recent-results");
-    if (recentResults) { recentResults.replaceChildren(); (data.recent_results || []).forEach((result) => { const item = document.createElement("button"); item.type = "button"; item.className = "workspace-job-row"; const name = document.createElement("strong"); name.textContent = result.email; const meta = document.createElement("span"); meta.textContent = `${VerigoI18n.text(result.status)} · ${VerigoI18n.formatDate(result.created_at)}`; item.append(name, meta); item.addEventListener("click", () => { state.activeResultItem = { email: result.email, saved_result_id: result.id }; openResultHistory(); }); recentResults.append(item); }); if (!recentResults.children.length) { const empty = document.createElement("p"); empty.className = "workspace-empty"; empty.textContent = VerigoI18n.text("还没有保存的结果"); recentResults.append(empty); } }
-    await loadWorkspaceListsPreview();
+    if (recentResults) { recentResults.replaceChildren(); (data.recent_results || []).forEach((result) => { const item = document.createElement("button"); item.type = "button"; item.className = "workspace-job-row"; const name = document.createElement("strong"); name.textContent = result.email; const meta = document.createElement("span"); meta.textContent = `${VerigoI18n.text(result.status)} · ${VerigoI18n.formatDate(result.created_at)}`; item.append(name, meta); item.addEventListener("click", () => openResultDetails(result)); recentResults.append(item); }); if (!recentResults.children.length) { const empty = document.createElement("p"); empty.className = "workspace-empty"; empty.textContent = VerigoI18n.text("还没有最近验证结果"); recentResults.append(empty); } }
     if (!jobs.length) { const empty = document.createElement("p"); empty.className = "workspace-empty"; empty.textContent = VerigoI18n.text("还没有任务，先验证一个邮箱吧。"); list.append(empty); }
     jobs.slice(0, 5).forEach((job) => {
       const item = document.createElement("button"); item.type = "button"; item.className = "workspace-job-row";
@@ -1204,58 +1116,8 @@ async function loadWorkspaceHome() {
   } catch (error) { el("workspace-recent-jobs").textContent = VerigoI18n.text("任务加载失败，请稍后刷新。"); }
 }
 
-async function loadWorkspaceListsPreview() {
-  const container = el("workspace-lists-preview");
-  if (!container || !state.user) return;
-  try {
-    const lists = await api("/api/lists"); container.replaceChildren();
-    if (!lists.length) { const empty = document.createElement("p"); empty.className = "workspace-empty"; empty.textContent = VerigoI18n.text("还没有保存的列表"); container.append(empty); return; }
-    lists.slice(0, 4).forEach((savedList) => { const item = document.createElement("button"); item.type = "button"; item.className = "workspace-job-row"; const name = document.createElement("strong"); name.textContent = savedList.name; const meta = document.createElement("span"); meta.textContent = `${savedList.result_count || 0} ${VerigoI18n.text("个结果")}`; item.append(name, meta); item.addEventListener("click", () => { switchView("lists"); openListDetail(savedList.id); }); container.append(item); });
-  } catch (error) { container.textContent = error.message; }
-}
-
-async function loadListsPage() {
-  if (!state.user || state.view !== "lists") return;
-  const index = el("lists-index"); const detail = el("list-detail");
-  try {
-    const lists = await api("/api/lists");
-    index.replaceChildren();
-    if (!window.location.pathname.startsWith("/lists/")) detail.classList.add("hidden");
-    if (!lists.length) { const empty = document.createElement("div"); empty.className = "workspace-card list-empty"; empty.textContent = VerigoI18n.text("还没有列表，先保存一个验证结果吧。"); index.append(empty); return; }
-    lists.forEach((list) => {
-      const card = document.createElement("article"); card.className = "list-card";
-      const title = document.createElement("h2"); title.textContent = list.name;
-      const meta = document.createElement("p"); meta.textContent = `${Number(list.result_count || 0).toLocaleString(VerigoI18n.locale === "en" ? "en-US" : "zh-CN")} ${VerigoI18n.text("个结果")} · ${VerigoI18n.formatDate(list.updated_at)}`;
-      const open = document.createElement("button"); open.type = "button"; open.className = "text-action"; open.textContent = VerigoI18n.text("打开列表"); open.addEventListener("click", () => openListDetail(list.id));
-      card.append(title, meta, open); index.append(card);
-    });
-  } catch (error) { index.textContent = error.message; }
-}
-
-async function openListDetail(listId, status = el("list-status-filter")?.value || "all") {
-  try {
-    state.listSelection = new Set();
-    el("list-select-all") && (el("list-select-all").checked = false);
-    el("list-reverify-button") && (el("list-reverify-button").disabled = true);
-    el("list-add-to-button") && (el("list-add-to-button").disabled = true);
-    const data = await api(`/api/lists/${encodeURIComponent(listId)}?status=${encodeURIComponent(status)}`); const list = data.list;
-    el("lists-index").classList.add("hidden"); el("list-detail").classList.remove("hidden");
-    el("list-detail-title").textContent = list.name; el("list-detail-meta").textContent = `${Number(data.total || 0).toLocaleString(VerigoI18n.locale === "en" ? "en-US" : "zh-CN")} ${VerigoI18n.text("个结果")}`;
-    const items = el("list-detail-items"); items.replaceChildren();
-    if (!data.items.length) { const empty = document.createElement("p"); empty.className = "list-empty"; empty.textContent = VerigoI18n.text("列表中还没有结果"); items.append(empty); }
-    data.items.forEach((item) => { const row = document.createElement("div"); row.className = "list-result-row"; const check = document.createElement("input"); check.type = "checkbox"; check.value = item.id; check.addEventListener("change", () => { if (check.checked) state.listSelection.add(item.id); else state.listSelection.delete(item.id); el("list-reverify-button").disabled = !state.listSelection.size; el("list-add-to-button").disabled = !state.listSelection.size; }); const info = document.createElement("div"); const email = document.createElement("strong"); email.textContent = item.email; const meta = document.createElement("span"); meta.textContent = `${VerigoI18n.text(item.status)} · ${VerigoI18n.text(item.source)}`; info.append(email, meta); const remove = document.createElement("button"); remove.type = "button"; remove.className = "text-action"; remove.textContent = VerigoI18n.text("移除"); remove.addEventListener("click", async () => { await api(`/api/lists/${listId}/results`, { method:"DELETE", headers:{"Content-Type":"application/json"}, body:JSON.stringify({result_ids:[item.id]}) }); await openListDetail(listId, status); }); row.append(check, info, remove); items.append(row); });
-    el("list-export-button").onclick = () => { window.location.href = `/api/lists/${encodeURIComponent(listId)}/export`; };
-    window.history.pushState({}, "", `/lists/${encodeURIComponent(listId)}`);
-  } catch (error) { el("list-detail-items").textContent = error.message; }
-}
-
-el("create-list-button")?.addEventListener("click", async () => { const name = window.prompt(VerigoI18n.text("请输入列表名称")); if (!name?.trim()) return; await api("/api/lists", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({name:name.trim()}) }); await loadListsPage(); });
-el("list-back-button")?.addEventListener("click", () => { window.history.pushState({}, "", "/lists"); loadListsPage(); });
-el("list-status-filter")?.addEventListener("change", () => { const id = window.location.pathname.split("/").pop(); if (id) openListDetail(id, el("list-status-filter").value); });
-el("list-select-all")?.addEventListener("change", (event) => { document.querySelectorAll("#list-detail-items input[type=checkbox]").forEach((check) => { check.checked = event.target.checked; check.dispatchEvent(new Event("change")); }); });
-el("list-reverify-button")?.addEventListener("click", async () => { const id = window.location.pathname.split("/").pop(); if (!id || !state.listSelection.size) return; const button = el("list-reverify-button"); button.disabled = true; try { const job = await api(`/api/lists/${encodeURIComponent(id)}/reverify`, { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ result_ids:[...state.listSelection] }) }); switchView("single"); state.jobId = job.id; showJob(job); schedulePoll(300); } catch (error) { el("list-detail-meta").textContent = error.message; button.disabled = false; } });
-el("list-add-to-button")?.addEventListener("click", async () => { const id = window.location.pathname.split("/").pop(); if (!id || !state.listSelection.size) return; try { const lists = await api("/api/lists"); const choices = lists.filter((list) => list.id !== id); if (!choices.length) { el("list-detail-meta").textContent = VerigoI18n.text("还没有其他列表"); return; } const targetName = window.prompt(VerigoI18n.text("请选择目标列表"), choices.map((list, index) => `${index + 1}. ${list.name}`).join("\\n")); const target = choices.find((list) => list.name === targetName?.trim()) || choices[Number(targetName) - 1]; if (!target) return; await api(`/api/lists/${encodeURIComponent(target.id)}/results`, { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ result_ids:[...state.listSelection], added_from:"cross-list" }) }); el("list-detail-meta").textContent = `${VerigoI18n.text("已加入")} ${target.name}`; } catch (error) { el("list-detail-meta").textContent = error.message; } });
-
+/* Lists were intentionally retired from the product UI. */
+/* Retired list workspace kept out of the UI. */
 el("dashboard-refresh").addEventListener("click", loadDashboardMetrics);
 async function loadWallet() { const data = await api("/api/wallet"); const set=(id,v)=>el(id).textContent=Number(v||0).toLocaleString("zh-CN"); set("wallet-available",data.available_verifications); el("wallet-paid").textContent=`${Number(data.paid_verifications||0).toLocaleString("zh-CN")} 次`; el("wallet-used").textContent=`${Number(data.paid_verifications_used||0).toLocaleString("zh-CN")} 次`; el("wallet-recharged").textContent=`¥${(Number(data.cumulative_recharge_fen||0)/100).toFixed(2)}`; el("wallet-value").textContent=`¥${Number(data.remaining_paid_value_yuan||0).toFixed(2)}`; el("wallet-spent").textContent=`¥${Number(data.paid_used_value_yuan||0).toFixed(2)}`; el("wallet-price").textContent=`100 次 ¥${(data.price_fen_per_100/100).toFixed(2)}`; el("wallet-trial-note").textContent=data.trial_verifications?`另有 ${data.trial_verifications} 体验次数`:"不含体验次数"; el("wallet-updated").textContent=`更新于 ${new Date().toLocaleString("zh-CN")}`; const days=data.usage_daily||[]; const max=Math.max(1,...days.map(x=>x.verifications)); el("wallet-usage-chart").innerHTML=days.map(x=>`<div class="wallet-bar" style="height:${Math.max(4,x.verifications/max*180)}px"><span>${x.verifications}</span></div>`).join(""); el("wallet-transactions").innerHTML=(data.transactions||[]).map(x=>`<div class="wallet-transaction"><div><strong>${x.title}</strong><small>${x.credits>0?"+":""}${x.credits} 次 ${x.note||""}</small></div><div><strong>${x.amount_fen==null?"—":`${x.credits<0?"-":"+"}¥${(x.amount_fen/100).toFixed(2)}`}</strong><small>${new Date(x.created_at).toLocaleString("zh-CN")}</small></div></div>`).join("")||"暂无资金流水"; }
 el("wallet-refresh").addEventListener("click", loadWallet);
@@ -1799,13 +1661,6 @@ el("auth-form").addEventListener("submit", async (event) => {
       state.pendingView = null;
       switchView(nextView);
     }
-    if (state.pendingSaveResult && state.user) {
-      const pending = state.pendingSaveResult;
-      state.pendingSaveResult = null;
-      state.jobId = pending.jobId; state.guestToken = pending.guestToken || state.guestToken;
-      state.activeResultItem = { email: pending.email || "", original_index: pending.resultIndex };
-      await openSaveResultDialog(state.activeResultItem);
-    }
   } catch (error) {
     el("auth-error").textContent = error.message;
   } finally {
@@ -1853,9 +1708,7 @@ el("workspace-history-link")?.addEventListener("click", () => {
   switchView("single");
   window.setTimeout(() => el("recent-block")?.scrollIntoView({ behavior: "smooth", block: "start" }), 0);
 });
-el("workspace-lists-link")?.addEventListener("click", () => switchView("lists"));
 el("workspace-api-button")?.addEventListener("click", () => el("api-nav").click());
-el("lists-nav")?.addEventListener("click", () => switchView("lists"));
 document.querySelectorAll("#workspace-home [data-view]").forEach((button) => button.addEventListener("click", () => switchView(button.dataset.view)));
 
 (async function init() {
@@ -1866,12 +1719,10 @@ document.querySelectorAll("#workspace-home [data-view]").forEach((button) => but
   if (["/workspace", "/history", "/lists", "/dashboard", "/admin/credits", "/wallet"].includes(window.location.pathname) || window.location.pathname.startsWith("/lists/")) {
     if (window.location.pathname === "/workspace" && state.user) {
       switchView("workspace");
-    } else if ((window.location.pathname === "/lists" || window.location.pathname.startsWith("/lists/")) && state.user) {
-      const listId = window.location.pathname.startsWith("/lists/") ? window.location.pathname.split("/")[2] : "";
-      switchView("lists");
-      if (listId) { await openListDetail(listId); }
-    } else if ((window.location.pathname === "/lists" || window.location.pathname.startsWith("/lists/")) && !state.user) {
-      window.history.replaceState({}, "", "/"); state.pendingView = "lists"; el("auth-dialog").showModal(); setAuthMode("login"); el("auth-error").textContent = VerigoI18n.text("请先登录后查看账户数据"); return;
+    } else if ((window.location.pathname === "/lists" || window.location.pathname.startsWith("/lists/"))) {
+      window.history.replaceState({}, "", state.user ? "/workspace" : "/");
+      if (state.user) switchView("workspace");
+      else switchView("single");
     } else if (window.location.pathname === "/workspace" && !state.user) {
       window.history.replaceState({}, "", "/");
       switchView("single");
