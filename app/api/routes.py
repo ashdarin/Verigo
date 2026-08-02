@@ -1543,6 +1543,12 @@ def save_job_result(payload: SaveJobResultRequest, user: Annotated[User, Depends
 def save_job_results(payload: SaveJobResultsRequest, user: Annotated[User, Depends(require_user)], guest_token: Annotated[str | None, Header(alias="X-Job-Token")] = None) -> dict[str, object]:
     if not payload.list_id and not payload.list_name:
         raise HTTPException(status_code=422, detail="list_id or list_name is required")
+    if payload.list_id and not result_object_store.get_list(user.id, payload.list_id):
+        raise HTTPException(status_code=404, detail="list not found")
+    job = require_job_access(require_job(payload.job_id, include_results=False), user, guest_token)
+    invalid = [index for index in dict.fromkeys(payload.result_indices) if index < 0 or index >= len(job.emails)]
+    if invalid:
+        raise HTTPException(status_code=404, detail="Verification result does not exist")
     list_id = payload.list_id or result_object_store.create_list(user.id, payload.list_name or "")["id"]
     saved_results = [_ensure_saved_result(user, payload.job_id, index, guest_token) for index in dict.fromkeys(payload.result_indices)]
     source = "discovery" if any(item.get("source") == "discovery" for item in saved_results) else "batch"
@@ -1577,7 +1583,10 @@ def update_list(list_id: str, payload: ListUpdateRequest, user: Annotated[User, 
     with result_object_store._connect() as connection:
         current = result_object_store.get_list(user.id, list_id, connection=connection)
         if not current: raise HTTPException(status_code=404, detail="list not found")
-        name = (payload.name or current["name"]).strip(); description = payload.description if payload.description is not None else current["description"]
+        name = (payload.name if payload.name is not None else current["name"]).strip()
+        if not name or len(name) > 120:
+            raise HTTPException(status_code=422, detail="list name is required")
+        description = payload.description if payload.description is not None else current["description"]
         connection.execute("UPDATE lists SET name=?, description=?, updated_at=? WHERE id=? AND owner_id=?", (name, description, now_iso(), list_id, user.id))
         return result_object_store.get_list(user.id, list_id, connection=connection)
 
@@ -1638,6 +1647,8 @@ def reverify_saved_result(result_id: str, user: Annotated[User, Depends(require_
             auth_store.consume_credits(user.id, charged, f"reverify:{job_id}")
         job = submit_routed_job([result["email"]], 1, owner_id=user.id, owner_email=user.email, job_id=job_id)
     except (ValueError, RuntimeError) as exc:
+        if charged:
+            auth_store.refund_credits(user.id, charged, f"reverify:{job_id}")
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return serialize_job(job)
 

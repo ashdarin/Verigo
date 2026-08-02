@@ -838,8 +838,8 @@ function resultType(item) {
 function renderDiscoveryResults() {
   const body = el("discovery-results-body");
   body.replaceChildren();
-  state.discoverySelection = new Set();
-  el("discovery-save-selected") && (el("discovery-save-selected").disabled = true);
+  state.discoverySelection ||= new Set();
+  el("discovery-save-selected") && (el("discovery-save-selected").disabled = !state.discoverySelection.size);
   const appendSaveAction = (row, item) => {
     const actionCell = document.createElement("td");
     const save = document.createElement("button"); save.type = "button"; save.className = "text-action"; save.textContent = VerigoI18n.text("保存到列表");
@@ -855,7 +855,7 @@ function renderDiscoveryResults() {
           cell.textContent = value;
           row.append(cell);
         });
-        appendSaveAction(row, { email, original_index: state.discovery.candidates.indexOf(email) }); body.append(row);
+        const checkCell = row.firstElementChild; const check = document.createElement("input"); check.type = "checkbox"; check.addEventListener("change", () => { const index = state.discovery.candidates.indexOf(email); if (check.checked) state.discoverySelection.add(index); else state.discoverySelection.delete(index); el("discovery-save-selected").disabled = !state.discoverySelection.size; }); checkCell.append(check); appendSaveAction(row, { email, original_index: state.discovery.candidates.indexOf(email) }); body.append(row);
       });
     } else {
       const row = document.createElement("tr");
