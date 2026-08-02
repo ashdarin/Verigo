@@ -26,7 +26,6 @@ const state = {
   adminAccountOffset: 0,
   retryCountdownTimer: null,
   onboardingTimer: null,
-  history: { offset: 0, limit: 10, total: 0 },
   workspace: { loaded: false },
   pendingView: null,
   pendingSaveResult: null,
@@ -151,10 +150,9 @@ function switchView(view) {
   const dashboard = view === "dashboard";
   const adminCredits = view === "admin-credits";
   const wallet = view === "wallet";
-  const history = view === "history";
   const workspace = view === "workspace";
   const lists = view === "lists";
-  if ((wallet || history || lists) && !state.user) { state.pendingView = view; el("auth-dialog").showModal(); setAuthMode("login"); el("auth-error").textContent = VerigoI18n.text("请先登录后查看账户数据"); return; }
+  if ((wallet || lists) && !state.user) { state.pendingView = view; el("auth-dialog").showModal(); setAuthMode("login"); el("auth-error").textContent = VerigoI18n.text("请先登录后查看账户数据"); return; }
   if (workspace && !state.user) { state.pendingView = "workspace"; el("auth-dialog").showModal(); setAuthMode("login"); el("auth-error").textContent = "Please sign in to open your workspace"; return; }
   if (discovery && !state.user) {
     el("auth-dialog").showModal();
@@ -163,18 +161,18 @@ function switchView(view) {
     return;
   }
   state.view = view;
-  document.querySelectorAll(".public-marketing").forEach((section) => section.classList.toggle("workspace-mode-hidden", workspace || lists));
-  el("verify-workspace").classList.toggle("hidden", discovery || dashboard || adminCredits || wallet || history || workspace || lists);
+  const marketing = view === "single" || view === "batch";
+  document.querySelectorAll(".public-marketing").forEach((section) => section.classList.toggle("workspace-mode-hidden", !marketing));
+  el("verify-workspace").classList.toggle("hidden", discovery || dashboard || adminCredits || wallet || workspace || lists);
   el("workspace-home").classList.toggle("hidden", !workspace);
   el("discovery-workspace").classList.toggle("hidden", !discovery);
   el("dashboard-workspace").classList.toggle("hidden", !dashboard);
   el("admin-credits-workspace").classList.toggle("hidden", !adminCredits);
   el("wallet-workspace").classList.toggle("hidden", !wallet);
-  el("history-workspace").classList.toggle("hidden", !history);
   el("lists-workspace").classList.toggle("hidden", !lists);
   el("single-panel").classList.toggle("hidden", view !== "single");
   el("batch-panel").classList.toggle("hidden", view !== "batch");
-  if (!discovery && !dashboard && !adminCredits && !wallet && !history && !workspace && !lists) {
+  if (!discovery && !dashboard && !adminCredits && !wallet && !workspace && !lists) {
     el("verify-eyebrow").textContent = VerigoI18n.text(view === "single" ? "免费单个验证" : "收费批量验证");
     el("verify-heading").textContent = VerigoI18n.text(view === "single" ? "验证单个收件地址" : "批量验证收件地址");
   }
@@ -198,10 +196,6 @@ function switchView(view) {
     document.title = `${VerigoI18n.text("资金与使用")} | Verigo`;
     if (window.location.pathname !== "/wallet") window.history.pushState({}, "", "/wallet");
     loadWallet();
-  } else if (history) {
-    document.title = `${VerigoI18n.text("历史记录")} | Verigo`;
-    if (window.location.pathname !== "/history") window.history.pushState({}, "", "/history");
-    loadHistoryPage();
   } else if (workspace) {
     document.title = "Workspace | Verigo";
     if (window.location.pathname !== "/workspace") window.history.pushState({}, "", "/workspace");
@@ -220,7 +214,7 @@ function switchView(view) {
 }
 
 window.addEventListener("popstate", () => {
-  const pathView = { "/workspace": "workspace", "/lists": "lists", "/dashboard": "dashboard", "/admin/credits": "admin-credits", "/wallet": "wallet", "/history": "history" }[window.location.pathname] || (window.location.pathname.startsWith("/lists/") ? "lists" : "single");
+  const pathView = { "/workspace": "workspace", "/lists": "lists", "/dashboard": "dashboard", "/admin/credits": "admin-credits", "/wallet": "wallet", "/history": "workspace" }[window.location.pathname] || (window.location.pathname.startsWith("/lists/") ? "lists" : "single");
   switchView(pathView);
   if (pathView === "lists" && window.location.pathname.startsWith("/lists/")) {
     const listId = window.location.pathname.split("/")[2];
@@ -1134,33 +1128,6 @@ async function loadRecentJobs() {
   }
 }
 
-async function loadHistoryPage() {
-  if (!state.user || state.view !== "history") return;
-  const search = encodeURIComponent((el("history-search")?.value || "").trim());
-  const status = encodeURIComponent(el("history-filter")?.value || "all");
-  try {
-    const data = await api(`/api/jobs?offset=${state.history.offset}&limit=${state.history.limit}&search=${search}&status=${status}`);
-    state.history.total = data.total || 0;
-    const list = el("history-list"); list.replaceChildren();
-    (data.items || []).forEach((job) => {
-      const button = document.createElement("button"); button.type = "button"; button.className = "history-item";
-      const name = document.createElement("strong"); name.textContent = job.download_name || job.file_name || formatJobName(job.created_at);
-      const meta = document.createElement("span"); meta.textContent = `${statusLabels[job.status] || job.status} · ${job.total || 0} 个邮箱`;
-      button.append(name, meta); button.addEventListener("click", () => { switchView("single"); showJob(job); state.results = []; state.page = 0; loadResults(); }); list.append(button);
-    });
-    if (!(data.items || []).length) { const empty = document.createElement("p"); empty.className = "history-empty"; empty.textContent = "暂无历史任务"; list.append(empty); }
-    const page = Math.floor(state.history.offset / state.history.limit); const pages = Math.max(1, Math.ceil(state.history.total / state.history.limit));
-    el("history-page-info").textContent = `${page + 1} / ${pages}`; el("history-prev").disabled = page === 0; el("history-next").disabled = page + 1 >= pages;
-    renderPageNumbers(el("history-pages"), page, pages, async (next) => { state.history.offset = next * state.history.limit; await loadHistoryPage(); });
-  } catch (error) { errorBox.textContent = error.message; }
-}
-
-el("history-refresh")?.addEventListener("click", loadHistoryPage);
-el("history-search")?.addEventListener("input", () => { state.history.offset = 0; clearTimeout(state.historyTimer); state.historyTimer = setTimeout(loadHistoryPage, 250); });
-el("history-filter")?.addEventListener("change", () => { state.history.offset = 0; loadHistoryPage(); });
-el("history-prev")?.addEventListener("click", () => { if (state.history.offset >= state.history.limit) { state.history.offset -= state.history.limit; loadHistoryPage(); } });
-el("history-next")?.addEventListener("click", () => { if (state.history.offset + state.history.limit < state.history.total) { state.history.offset += state.history.limit; loadHistoryPage(); } });
-
 function updateAccount() {
   el("account-button").textContent = state.user ? state.user.email : "登录";
   el("account-name").textContent = state.user?.email || "";
@@ -1882,7 +1849,10 @@ el("reset-confirm-form").addEventListener("submit", async (event) => {
 });
 
 el("refresh-jobs").addEventListener("click", loadRecentJobs);
-el("workspace-history-link")?.addEventListener("click", () => switchView("history"));
+el("workspace-history-link")?.addEventListener("click", () => {
+  switchView("single");
+  window.setTimeout(() => el("recent-block")?.scrollIntoView({ behavior: "smooth", block: "start" }), 0);
+});
 el("workspace-lists-link")?.addEventListener("click", () => switchView("lists"));
 el("workspace-api-button")?.addEventListener("click", () => el("api-nav").click());
 el("lists-nav")?.addEventListener("click", () => switchView("lists"));
@@ -1910,15 +1880,10 @@ document.querySelectorAll("#workspace-home [data-view]").forEach((button) => but
       setAuthMode("login");
       el("auth-error").textContent = "Please sign in to open your workspace";
       return;
-    } else if (window.location.pathname === "/history" && state.user) {
-      switchView("history");
-    } else if (window.location.pathname === "/history" && !state.user) {
-      window.history.replaceState({}, "", "/");
-      state.pendingView = "history";
-      el("auth-dialog").showModal();
-      setAuthMode("login");
-      el("auth-error").textContent = VerigoI18n.text("请先登录后查看账户数据");
-      return;
+    } else if (window.location.pathname === "/history") {
+      // History is represented by the recent-jobs workspace card now.
+      if (state.user) switchView("workspace");
+      else { window.history.replaceState({}, "", "/"); switchView("single"); }
     } else if (window.location.pathname === "/wallet" && state.user) {
       switchView("wallet");
     } else if (state.user?.is_admin) {

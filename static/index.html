@@ -29,7 +29,6 @@
       <button class="nav-item active" type="button" data-view="single">邮箱验证</button>
       <button class="nav-item" type="button" data-view="batch">批量清洗</button>
       <button class="nav-item" type="button" data-view="discovery">邮箱查找</button>
-      <button class="nav-item" type="button" data-view="history">历史记录</button>
       <button id="lists-nav" class="nav-item hidden" type="button" data-view="lists">我的列表</button>
       <button id="workspace-nav" class="nav-item hidden" type="button" data-view="workspace">工作台</button>
       <a class="nav-item nav-link" href="/pricing">价格</a>
@@ -84,7 +83,7 @@
     </section>
     <section class="workspace-grid">
       <article class="workspace-card workspace-quick-start"><div class="workspace-card-heading"><div><p class="eyebrow">QUICK START</p><h2>选择下一步</h2></div></div><div class="quick-start-grid"><button type="button" data-view="single"><strong>验证一个邮箱</strong><span>快速判断地址是否可投递</span></button><button type="button" data-view="batch"><strong>清洗一份名单</strong><span>导入 CSV 或 Excel 批量处理</span></button><button type="button" data-view="discovery"><strong>查找企业邮箱</strong><span>从姓名和域名开始寻找候选地址</span></button></div></article>
-      <article class="workspace-card"><div class="workspace-card-heading"><div><p class="eyebrow">RECENT JOBS</p><h2>最近任务</h2></div><button id="workspace-history-link" class="text-action" type="button">查看全部</button></div><div id="workspace-recent-jobs" class="workspace-recent-jobs"><p class="workspace-empty">正在加载任务…</p></div></article>
+      <article class="workspace-card"><div class="workspace-card-heading"><div><p class="eyebrow">RECENT JOBS</p><h2>最近任务</h2></div><button id="workspace-history-link" class="text-action" type="button">查看全部任务</button></div><div id="workspace-recent-jobs" class="workspace-recent-jobs"><p class="workspace-empty">正在加载任务…</p></div></article>
       <article class="workspace-card"><div class="workspace-card-heading"><div><p class="eyebrow">SAVED RESULTS</p><h2>我的列表</h2></div><button id="workspace-lists-link" class="text-action" type="button">查看全部</button></div><div id="workspace-lists-preview" class="workspace-recent-jobs"><p class="workspace-empty">正在加载列表…</p></div></article>
       <article class="workspace-card"><div class="workspace-card-heading"><div><p class="eyebrow">RECENT RESULTS</p><h2>最近验证结果</h2></div></div><div id="workspace-recent-results" class="workspace-recent-jobs"><p class="workspace-empty">正在加载结果…</p></div></article>
     </section>
@@ -367,11 +366,6 @@
     <section class="report-scorecards"><article class="report-scorecard"><span>累计充值</span><strong id="wallet-recharged">¥0.00</strong><small>实收金额</small></article><article class="report-scorecard"><span>付费余额价值</span><strong id="wallet-value">¥0.00</strong><small id="wallet-paid">0 次</small></article><article class="report-scorecard"><span>已用于验证</span><strong id="wallet-spent">¥0.00</strong><small id="wallet-used">0 次</small></article><article class="report-scorecard"><span>可用验证次数</span><strong id="wallet-available">0</strong><small id="wallet-trial-note">含体验次数</small></article></section>
     <section class="wallet-purchase"><div><p class="eyebrow">购买验证额度</p><h2>按需充值，立即用于批量验证</h2><p>100 次 ¥0.50。购买完成后额度自动进入账户。</p></div><div class="purchase-actions"><label for="purchase-packages">购买份数（每份 100 次）</label><div><input id="purchase-packages" type="number" min="1" max="1000" value="1"><button id="purchase-button" class="primary-action" type="button">购买 100 次 · ¥0.50</button></div><p id="purchase-status" class="purchase-status" role="status"></p></div></section>
     <section class="report-secondary-grid"><section class="report-card"><div class="report-card-heading"><div><h2>验证使用趋势</h2><p>最近 14 天</p></div></div><div id="wallet-usage-chart" class="wallet-usage-chart"></div></section><section class="report-card"><div class="report-card-heading"><div><h2>资金流水</h2><p>实收、退款和管理员调整</p></div></div><div id="wallet-transactions" class="wallet-transactions"></div></section></section>
-  </main>
-
-  <main id="history-workspace" class="history-workspace hidden">
-    <section class="report-heading"><div><p class="eyebrow">账户</p><h1>历史记录</h1><p class="report-updated">按名单名称查看过去的验证任务</p></div><button id="history-refresh" class="download-action" type="button">刷新</button></section>
-    <section class="report-card history-card"><div class="table-toolbar"><input id="history-search" type="search" placeholder="搜索文件名或名单名称"><select id="history-filter" aria-label="筛选任务"><option value="all">全部</option><option value="completed">已完成</option><option value="running">验证中</option><option value="failed">失败</option></select></div><div id="history-list" class="history-list"></div><div class="pagination"><span id="history-page-info"></span><div><button id="history-prev" class="page-button" type="button">上一页</button><span id="history-pages" class="page-numbers"></span><button id="history-next" class="page-button" type="button">下一页</button></div></div></section>
   </main>
 
   <main id="lists-workspace" class="history-workspace hidden">
