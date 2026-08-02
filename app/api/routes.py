@@ -39,7 +39,7 @@ from app.api.schemas import (
     ProspectingCompanyUpdateRequest,
     SavedProspectingContactsResponse,
     ResultsResponse,
-    ListCreateRequest, ListUpdateRequest, ListResultIdsRequest, SaveJobResultRequest,
+    ListCreateRequest, ListUpdateRequest, ListResultIdsRequest, SaveJobResultRequest, SaveJobResultsRequest, ReverifyRequest,
     SingleVerificationRequest,
     WorkerFailureRequest,
     WorkerResultsRequest,
@@ -1430,6 +1430,7 @@ def workspace_snapshot(user: Annotated[User, Depends(require_user)]) -> dict[str
         "deliverable": deliverable,
         "settled": settled,
         "items": [serialize_job(job) for job in all_jobs[:8]],
+        "recent_results": result_object_store.recent_results(user.id, 8),
     }
 
 
@@ -1538,6 +1539,16 @@ def save_job_result(payload: SaveJobResultRequest, user: Annotated[User, Depends
     result = result_object_store.get_result(user.id, result["id"]) or result
     return {"result": result, **saved}
 
+@router.post("/results/save-batch")
+def save_job_results(payload: SaveJobResultsRequest, user: Annotated[User, Depends(require_user)], guest_token: Annotated[str | None, Header(alias="X-Job-Token")] = None) -> dict[str, object]:
+    if not payload.list_id and not payload.list_name:
+        raise HTTPException(status_code=422, detail="list_id or list_name is required")
+    list_id = payload.list_id or result_object_store.create_list(user.id, payload.list_name or "")["id"]
+    saved_results = [_ensure_saved_result(user, payload.job_id, index, guest_token) for index in dict.fromkeys(payload.result_indices)]
+    source = "discovery" if any(item.get("source") == "discovery" for item in saved_results) else "batch"
+    saved = result_object_store.add_results(user.id, list_id, [item["id"] for item in saved_results], source)
+    return {"results": [result_object_store.get_result(user.id, item["id"]) or item for item in saved_results], **saved}
+
 
 @router.get("/lists")
 def get_lists(user: Annotated[User, Depends(require_user)]) -> list[dict[str, object]]:
@@ -1627,6 +1638,29 @@ def reverify_saved_result(result_id: str, user: Annotated[User, Depends(require_
             auth_store.consume_credits(user.id, charged, f"reverify:{job_id}")
         job = submit_routed_job([result["email"]], 1, owner_id=user.id, owner_email=user.email, job_id=job_id)
     except (ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return serialize_job(job)
+
+@router.post("/lists/{list_id}/reverify", response_model=JobResponse, status_code=202)
+def reverify_list_results(list_id: str, payload: ReverifyRequest, user: Annotated[User, Depends(require_user)]) -> JobResponse:
+    require_verification_submission_open()
+    try:
+        _, rows = result_object_store.list_results(user.id, list_id, 0, 5000)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    selected = set(payload.result_ids)
+    emails = [row["email"] for row in rows if row["id"] in selected]
+    if not emails:
+        raise HTTPException(status_code=422, detail="列表中没有可再次验证的结果")
+    job_id = uuid.uuid4().hex[:12]
+    charged = sum(1 for email in emails if not is_yahoo_email(email))
+    try:
+        if charged:
+            auth_store.consume_credits(user.id, charged, f"reverify:{job_id}")
+        job = submit_routed_job(emails, 2, owner_id=user.id, owner_email=user.email, job_id=job_id)
+    except (ValueError, RuntimeError) as exc:
+        if charged:
+            auth_store.refund_credits(user.id, charged, f"reverify:{job_id}")
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return serialize_job(job)
 

@@ -31,6 +31,8 @@ const state = {
   pendingView: null,
   pendingSaveResult: null,
   activeResultItem: null,
+  listSelection: new Set(),
+  discoverySelection: new Set(),
 };
 
 const pageSize = 50;
@@ -709,6 +711,8 @@ async function copyResultFields() {
 async function openResultHistory() {
   const id = state.activeResultItem?.saved_result_id || state.activeResultItem?.result_id; if (!id || !state.user) return;
   try {
+    el("result-detail-title").textContent = state.activeResultItem.email || VerigoI18n.text("结果历史");
+    el("result-detail-drawer").classList.add("open"); el("result-detail-drawer").setAttribute("aria-hidden", "false");
     const data = await api(`/api/results/${encodeURIComponent(id)}/history`); const content = el("result-detail-content");
     const heading = document.createElement("p"); heading.className = "detail-history-heading"; heading.textContent = `${data.email} · ${data.items.length} 个版本`; content.prepend(heading);
     data.items.forEach((version) => { const row = document.createElement("div"); row.className = "detail-field"; const key = document.createElement("span"); key.textContent = `${VerigoI18n.text(version.status)} · ${VerigoI18n.formatDate(version.created_at)}`; const val = document.createElement("strong"); val.textContent = version.verification_method || "-"; row.append(key, val); content.append(row); });
@@ -834,6 +838,8 @@ function resultType(item) {
 function renderDiscoveryResults() {
   const body = el("discovery-results-body");
   body.replaceChildren();
+  state.discoverySelection = new Set();
+  el("discovery-save-selected") && (el("discovery-save-selected").disabled = true);
   const appendSaveAction = (row, item) => {
     const actionCell = document.createElement("td");
     const save = document.createElement("button"); save.type = "button"; save.className = "text-action"; save.textContent = VerigoI18n.text("保存到列表");
@@ -862,6 +868,7 @@ function renderDiscoveryResults() {
   state.discovery.results.forEach((item) => {
     const [label, className] = resultMeta(item);
     const row = document.createElement("tr");
+    const selectCell = document.createElement("td"); const check = document.createElement("input"); check.type = "checkbox"; check.addEventListener("change", () => { if (check.checked) state.discoverySelection.add(item.original_index); else state.discoverySelection.delete(item.original_index); el("discovery-save-selected").disabled = !state.discoverySelection.size; }); selectCell.append(check); row.append(selectCell);
     [
       item.email,
       label,
@@ -1033,6 +1040,17 @@ el("discovery-verify").addEventListener("click", async () => {
     button.disabled = submitted || !state.discovery.candidates.length;
   }
 });
+el("discovery-save-selected")?.addEventListener("click", async () => {
+  if (!state.discovery.jobId || !state.discoverySelection.size) return;
+  try {
+    const lists = await api("/api/lists");
+    const listId = lists[0]?.id || null;
+    if (!listId) { el("discovery-error").textContent = VerigoI18n.text("请先创建一个列表"); switchView("lists"); return; }
+    const response = await api("/api/results/save-batch", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ job_id: state.discovery.jobId, result_indices:[...state.discoverySelection], list_id:listId }) });
+    el("discovery-error").textContent = `${VerigoI18n.text("已保存")} ${response.results?.length || 0} ${VerigoI18n.text("个结果")}`;
+  } catch (error) { el("discovery-error").textContent = error.message; }
+});
+el("discovery-export-button")?.addEventListener("click", () => { if (!state.discovery.jobId) return; window.location.href = `/api/jobs/${encodeURIComponent(state.discovery.jobId)}/download`; });
 el("discovery-stop-button").addEventListener("click", async () => {
   if (!state.discovery.jobId) return;
   const button = el("discovery-stop-button");
@@ -1199,6 +1217,8 @@ async function loadWorkspaceHome() {
     el("workspace-processed").textContent = Number(data.processed_today || 0).toLocaleString(locale);
     el("workspace-deliverable-rate").textContent = Number(data.settled || 0) ? `${Math.round(Number(data.deliverable || 0) / Number(data.settled) * 100)}%` : "—";
     const list = el("workspace-recent-jobs"); list.replaceChildren();
+    const recentResults = el("workspace-recent-results");
+    if (recentResults) { recentResults.replaceChildren(); (data.recent_results || []).forEach((result) => { const item = document.createElement("button"); item.type = "button"; item.className = "workspace-job-row"; const name = document.createElement("strong"); name.textContent = result.email; const meta = document.createElement("span"); meta.textContent = `${VerigoI18n.text(result.status)} · ${VerigoI18n.formatDate(result.created_at)}`; item.append(name, meta); item.addEventListener("click", () => { state.activeResultItem = { email: result.email, saved_result_id: result.id }; openResultHistory(); }); recentResults.append(item); }); if (!recentResults.children.length) { const empty = document.createElement("p"); empty.className = "workspace-empty"; empty.textContent = VerigoI18n.text("还没有保存的结果"); recentResults.append(empty); } }
     await loadWorkspaceListsPreview();
     if (!jobs.length) { const empty = document.createElement("p"); empty.className = "workspace-empty"; empty.textContent = VerigoI18n.text("还没有任务，先验证一个邮箱吧。"); list.append(empty); }
     jobs.slice(0, 5).forEach((job) => {
@@ -1242,12 +1262,15 @@ async function loadListsPage() {
 
 async function openListDetail(listId, status = el("list-status-filter")?.value || "all") {
   try {
+    state.listSelection = new Set();
+    el("list-select-all") && (el("list-select-all").checked = false);
+    el("list-reverify-button") && (el("list-reverify-button").disabled = true);
     const data = await api(`/api/lists/${encodeURIComponent(listId)}?status=${encodeURIComponent(status)}`); const list = data.list;
     el("lists-index").classList.add("hidden"); el("list-detail").classList.remove("hidden");
     el("list-detail-title").textContent = list.name; el("list-detail-meta").textContent = `${Number(data.total || 0).toLocaleString(VerigoI18n.locale === "en" ? "en-US" : "zh-CN")} ${VerigoI18n.text("个结果")}`;
     const items = el("list-detail-items"); items.replaceChildren();
     if (!data.items.length) { const empty = document.createElement("p"); empty.className = "list-empty"; empty.textContent = VerigoI18n.text("列表中还没有结果"); items.append(empty); }
-    data.items.forEach((item) => { const row = document.createElement("div"); row.className = "list-result-row"; const info = document.createElement("div"); const email = document.createElement("strong"); email.textContent = item.email; const meta = document.createElement("span"); meta.textContent = `${VerigoI18n.text(item.status)} · ${VerigoI18n.text(item.source)}`; info.append(email, meta); const remove = document.createElement("button"); remove.type = "button"; remove.className = "text-action"; remove.textContent = VerigoI18n.text("移除"); remove.addEventListener("click", async () => { await api(`/api/lists/${listId}/results`, { method:"DELETE", headers:{"Content-Type":"application/json"}, body:JSON.stringify({result_ids:[item.id]}) }); await openListDetail(listId); }); row.append(info, remove); items.append(row); });
+    data.items.forEach((item) => { const row = document.createElement("div"); row.className = "list-result-row"; const check = document.createElement("input"); check.type = "checkbox"; check.value = item.id; check.addEventListener("change", () => { if (check.checked) state.listSelection.add(item.id); else state.listSelection.delete(item.id); el("list-reverify-button").disabled = !state.listSelection.size; }); const info = document.createElement("div"); const email = document.createElement("strong"); email.textContent = item.email; const meta = document.createElement("span"); meta.textContent = `${VerigoI18n.text(item.status)} · ${VerigoI18n.text(item.source)}`; info.append(email, meta); const remove = document.createElement("button"); remove.type = "button"; remove.className = "text-action"; remove.textContent = VerigoI18n.text("移除"); remove.addEventListener("click", async () => { await api(`/api/lists/${listId}/results`, { method:"DELETE", headers:{"Content-Type":"application/json"}, body:JSON.stringify({result_ids:[item.id]}) }); await openListDetail(listId, status); }); row.append(check, info, remove); items.append(row); });
     el("list-export-button").onclick = () => { window.location.href = `/api/lists/${encodeURIComponent(listId)}/export`; };
     window.history.pushState({}, "", `/lists/${encodeURIComponent(listId)}`);
   } catch (error) { el("list-detail-items").textContent = error.message; }
@@ -1256,6 +1279,8 @@ async function openListDetail(listId, status = el("list-status-filter")?.value |
 el("create-list-button")?.addEventListener("click", async () => { const name = window.prompt(VerigoI18n.text("请输入列表名称")); if (!name?.trim()) return; await api("/api/lists", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({name:name.trim()}) }); await loadListsPage(); });
 el("list-back-button")?.addEventListener("click", () => { window.history.pushState({}, "", "/lists"); loadListsPage(); });
 el("list-status-filter")?.addEventListener("change", () => { const id = window.location.pathname.split("/").pop(); if (id) openListDetail(id, el("list-status-filter").value); });
+el("list-select-all")?.addEventListener("change", (event) => { document.querySelectorAll("#list-detail-items input[type=checkbox]").forEach((check) => { check.checked = event.target.checked; check.dispatchEvent(new Event("change")); }); });
+el("list-reverify-button")?.addEventListener("click", async () => { const id = window.location.pathname.split("/").pop(); if (!id || !state.listSelection.size) return; const button = el("list-reverify-button"); button.disabled = true; try { const job = await api(`/api/lists/${encodeURIComponent(id)}/reverify`, { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ result_ids:[...state.listSelection] }) }); switchView("single"); state.jobId = job.id; showJob(job); schedulePoll(300); } catch (error) { el("list-detail-meta").textContent = error.message; button.disabled = false; } });
 
 el("dashboard-refresh").addEventListener("click", loadDashboardMetrics);
 async function loadWallet() { const data = await api("/api/wallet"); const set=(id,v)=>el(id).textContent=Number(v||0).toLocaleString("zh-CN"); set("wallet-available",data.available_verifications); el("wallet-paid").textContent=`${Number(data.paid_verifications||0).toLocaleString("zh-CN")} 次`; el("wallet-used").textContent=`${Number(data.paid_verifications_used||0).toLocaleString("zh-CN")} 次`; el("wallet-recharged").textContent=`¥${(Number(data.cumulative_recharge_fen||0)/100).toFixed(2)}`; el("wallet-value").textContent=`¥${Number(data.remaining_paid_value_yuan||0).toFixed(2)}`; el("wallet-spent").textContent=`¥${Number(data.paid_used_value_yuan||0).toFixed(2)}`; el("wallet-price").textContent=`100 次 ¥${(data.price_fen_per_100/100).toFixed(2)}`; el("wallet-trial-note").textContent=data.trial_verifications?`另有 ${data.trial_verifications} 体验次数`:"不含体验次数"; el("wallet-updated").textContent=`更新于 ${new Date().toLocaleString("zh-CN")}`; const days=data.usage_daily||[]; const max=Math.max(1,...days.map(x=>x.verifications)); el("wallet-usage-chart").innerHTML=days.map(x=>`<div class="wallet-bar" style="height:${Math.max(4,x.verifications/max*180)}px"><span>${x.verifications}</span></div>`).join(""); el("wallet-transactions").innerHTML=(data.transactions||[]).map(x=>`<div class="wallet-transaction"><div><strong>${x.title}</strong><small>${x.credits>0?"+":""}${x.credits} 次 ${x.note||""}</small></div><div><strong>${x.amount_fen==null?"—":`${x.credits<0?"-":"+"}¥${(x.amount_fen/100).toFixed(2)}`}</strong><small>${new Date(x.created_at).toLocaleString("zh-CN")}</small></div></div>`).join("")||"暂无资金流水"; }

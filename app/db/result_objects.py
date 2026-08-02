@@ -159,6 +159,12 @@ class ResultObjectStore:
             row = connection.execute("SELECT * FROM result_objects WHERE id=? AND owner_id=?", (result_id, owner_id)).fetchone()
             return self._row(row, self._list_ids(connection, result_id)) if row else None
 
+    def recent_results(self, owner_id: str, limit: int = 8) -> list[dict[str, Any]]:
+        self.initialize()
+        with closing(self._connect()) as connection:
+            rows = connection.execute("SELECT * FROM result_objects WHERE owner_id=? ORDER BY created_at DESC LIMIT ?", (owner_id, limit)).fetchall()
+            return [self._row(row, self._list_ids(connection, row["id"])) for row in rows]
+
     def export_rows(self, owner_id: str, list_id: str) -> list[dict[str, Any]]:
         return self.list_results(owner_id, list_id, 0, 100000)[1]
 

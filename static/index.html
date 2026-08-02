@@ -95,6 +95,7 @@
       <article class="workspace-card workspace-quick-start"><div class="workspace-card-heading"><div><p class="eyebrow">QUICK START</p><h2>选择下一步</h2></div></div><div class="quick-start-grid"><button type="button" data-view="single"><strong>验证一个邮箱</strong><span>快速判断地址是否可投递</span></button><button type="button" data-view="batch"><strong>清洗一份名单</strong><span>导入 CSV 或 Excel 批量处理</span></button><button type="button" data-view="discovery"><strong>查找企业邮箱</strong><span>从姓名和域名开始寻找候选地址</span></button></div></article>
       <article class="workspace-card"><div class="workspace-card-heading"><div><p class="eyebrow">RECENT JOBS</p><h2>最近任务</h2></div><button id="workspace-history-link" class="text-action" type="button">查看全部</button></div><div id="workspace-recent-jobs" class="workspace-recent-jobs"><p class="workspace-empty">正在加载任务…</p></div></article>
       <article class="workspace-card"><div class="workspace-card-heading"><div><p class="eyebrow">SAVED RESULTS</p><h2>我的列表</h2></div><button id="workspace-lists-link" class="text-action" type="button">查看全部</button></div><div id="workspace-lists-preview" class="workspace-recent-jobs"><p class="workspace-empty">正在加载列表…</p></div></article>
+      <article class="workspace-card"><div class="workspace-card-heading"><div><p class="eyebrow">RECENT RESULTS</p><h2>最近验证结果</h2></div></div><div id="workspace-recent-results" class="workspace-recent-jobs"><p class="workspace-empty">正在加载结果…</p></div></article>
     </section>
     <section class="workspace-help"><div><strong>需要接入自动化流程？</strong><span>使用 API Key 将验证能力接入 CRM、表单或内部工具。</span></div><button id="workspace-api-button" class="download-action" type="button">管理 API Key</button></section>
   </main>
@@ -207,6 +208,7 @@
           <button id="next-page" class="page-button" type="button" disabled>下一页</button>
         </div>
       </div>
+      <div class="table-actions"><button id="discovery-save-selected" class="secondary-action" type="button" disabled>保存选中候选</button><button id="discovery-export-button" class="download-action" type="button" disabled>导出候选 CSV</button></div>
     </section>
   </main>
 
@@ -256,8 +258,8 @@
       <p id="discovery-verdict" class="discovery-verdict">请输入姓名和公司域名</p>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>候选邮箱</th><th>结果</th><th>验证方式</th><th>服务器响应</th><th>操作</th></tr></thead>
-          <tbody id="discovery-results-body"><tr class="empty-row"><td colspan="5">尚无查找结果</td></tr></tbody>
+          <thead><tr><th>选择</th><th>候选邮箱</th><th>结果</th><th>验证方式</th><th>服务器响应</th><th>操作</th></tr></thead>
+          <tbody id="discovery-results-body"><tr class="empty-row"><td colspan="6">尚无查找结果</td></tr></tbody>
         </table>
       </div>
     </section>
@@ -384,7 +386,7 @@
   <main id="lists-workspace" class="history-workspace hidden">
     <section class="report-heading"><div><p class="eyebrow">账户</p><h1>我的列表</h1><p class="report-updated">保存验证和查找结果，方便以后再次验证与导出</p></div><button id="create-list-button" class="primary-action" type="button">创建列表</button></section>
     <section id="lists-index" class="lists-index"></section>
-    <section id="list-detail" class="report-card hidden"><div class="workspace-card-heading"><div><p class="eyebrow">LIST DETAIL</p><h2 id="list-detail-title"></h2><p id="list-detail-meta" class="report-updated"></p></div><div class="table-actions"><button id="list-export-button" class="download-action" type="button">导出 CSV</button><button id="list-back-button" class="text-action" type="button">返回列表</button></div></div><div class="table-toolbar"><select id="list-status-filter" aria-label="筛选列表结果"><option value="all">全部</option><option value="deliverable">可投递</option><option value="undeliverable">不可投递</option><option value="unknown">待确认</option><option value="catch-all">Catch-all</option></select></div><div id="list-detail-items" class="list-detail-items"></div></section>
+    <section id="list-detail" class="report-card hidden"><div class="workspace-card-heading"><div><p class="eyebrow">LIST DETAIL</p><h2 id="list-detail-title"></h2><p id="list-detail-meta" class="report-updated"></p></div><div class="table-actions"><button id="list-reverify-button" class="secondary-action" type="button" disabled>再次验证选中</button><button id="list-export-button" class="download-action" type="button">导出 CSV</button><button id="list-back-button" class="text-action" type="button">返回列表</button></div></div><div class="table-toolbar"><label><input id="list-select-all" type="checkbox"> 全选</label><select id="list-status-filter" aria-label="筛选列表结果"><option value="all">全部</option><option value="deliverable">可投递</option><option value="undeliverable">不可投递</option><option value="unknown">待确认</option><option value="catch-all">Catch-all</option></select></div><div id="list-detail-items" class="list-detail-items"></div></section>
   </main>
 
   <footer class="site-footer">

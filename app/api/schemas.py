@@ -88,6 +88,12 @@ class SaveJobResultRequest(BaseModel):
     list_id: str | None = None
     list_name: str | None = Field(default=None, max_length=120)
 
+class SaveJobResultsRequest(BaseModel):
+    job_id: str
+    result_indices: list[int] = Field(min_length=1, max_length=5000)
+    list_id: str | None = None
+    list_name: str | None = Field(default=None, max_length=120)
+
 
 class ReverifyRequest(BaseModel):
     result_ids: list[str] = Field(min_length=1, max_length=5000)
