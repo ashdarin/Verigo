@@ -1535,7 +1535,10 @@ def save_job_result(payload: SaveJobResultRequest, user: Annotated[User, Depends
     if not list_id:
         if not payload.list_name:
             raise HTTPException(status_code=422, detail="list_id or list_name is required")
-        list_id = result_object_store.create_list(user.id, payload.list_name)["id"]
+        try:
+            list_id = result_object_store.create_list(user.id, payload.list_name)["id"]
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
     source = "discovery" if result.get("source") == "discovery" else ("batch" if result.get("source") == "batch" else "single")
     saved = result_object_store.add_results(user.id, list_id, [result["id"]], source)
     result = result_object_store.get_result(user.id, result["id"]) or result
@@ -1551,7 +1554,13 @@ def save_job_results(payload: SaveJobResultsRequest, user: Annotated[User, Depen
     invalid = [index for index in dict.fromkeys(payload.result_indices) if index < 0 or index >= len(job.emails)]
     if invalid:
         raise HTTPException(status_code=404, detail="Verification result does not exist")
-    list_id = payload.list_id or result_object_store.create_list(user.id, payload.list_name or "")["id"]
+    if payload.list_id:
+        list_id = payload.list_id
+    else:
+        try:
+            list_id = result_object_store.create_list(user.id, payload.list_name or "")["id"]
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
     saved_results = [_ensure_saved_result(user, payload.job_id, index, guest_token) for index in dict.fromkeys(payload.result_indices)]
     source = "discovery" if any(item.get("source") == "discovery" for item in saved_results) else "batch"
     saved = result_object_store.add_results(user.id, list_id, [item["id"] for item in saved_results], source)

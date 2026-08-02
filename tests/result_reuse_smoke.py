@@ -43,5 +43,6 @@ with TestClient(app) as client:
     auth_store.confirm_email_verification(user_id, code)
     target = store.create_list(user_id, "API reuse")
     assert client.post("/api/results/save-batch", json={"job_id": "missing-job", "result_indices": [99], "list_id": target["id"]}).status_code == 404
+    assert client.post("/api/results/save-batch", json={"job_id": "missing-job", "result_indices": [0], "list_name": ""}).status_code == 422
     assert client.get("/api/lists/not-owned").status_code == 404
 print("result reuse smoke: ok")
