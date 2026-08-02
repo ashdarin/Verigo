@@ -1423,7 +1423,7 @@ def workspace_snapshot(user: Annotated[User, Depends(require_user)]) -> dict[str
             processed_today += max(0, int(job_progress(job)[0]))
         overview = job_store.result_overview(job.id)
         deliverable += max(0, int(overview.deliverable))
-        settled += max(0, int(overview.total))
+        settled += max(0, int(overview.settled))
     return {
         "total": total,
         "processed_today": processed_today,

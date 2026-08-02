@@ -222,6 +222,10 @@ function switchView(view) {
 window.addEventListener("popstate", () => {
   const pathView = { "/workspace": "workspace", "/lists": "lists", "/dashboard": "dashboard", "/admin/credits": "admin-credits", "/wallet": "wallet", "/history": "history" }[window.location.pathname] || (window.location.pathname.startsWith("/lists/") ? "lists" : "single");
   switchView(pathView);
+  if (pathView === "lists" && window.location.pathname.startsWith("/lists/")) {
+    const listId = window.location.pathname.split("/")[2];
+    if (listId) openListDetail(listId);
+  }
 });
 
 function formatMoney(fen) {
