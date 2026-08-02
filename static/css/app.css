@@ -364,6 +364,17 @@ th:nth-child(1) { width: 28%; } th:nth-child(2) { width: 14%; } th:nth-child(3) 
   .metric:nth-child(n+4) { border-top: 1px solid var(--line); }
 }
 
+/* Saved result lists */
+.lists-index { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; }
+.list-card { display:grid; gap:10px; padding:22px; border:1px solid #dadce0; border-radius:10px; background:#fff; }
+.list-card h2 { margin:0; font-size:18px; }
+.list-card p { margin:0; color:#68746f; font-size:12px; }
+.list-card button { justify-self:start; }
+.list-detail-items { display:grid; }
+.list-result-row { display:flex; align-items:center; justify-content:space-between; gap:14px; padding:15px 0; border-bottom:1px solid #edf0f2; }
+.list-result-row strong { font-size:13px; }
+.list-result-row span { color:#68746f; font-size:12px; }
+.list-empty { padding:36px 15px; color:#68746f; text-align:center; }
 @media (max-width: 560px) {
   .topbar { min-height: 150px; padding: 10px 16px 8px; }
   .product-nav { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 3px; }

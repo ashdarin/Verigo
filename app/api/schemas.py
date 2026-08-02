@@ -67,6 +67,32 @@ class ResultsResponse(BaseModel):
     items: list[dict[str, Any]]
 
 
+class ListCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    description: str = Field(default="", max_length=500)
+
+
+class ListUpdateRequest(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    description: str | None = Field(default=None, max_length=500)
+
+
+class ListResultIdsRequest(BaseModel):
+    result_ids: list[str] = Field(min_length=1, max_length=5000)
+    added_from: str = Field(default="history", max_length=32)
+
+
+class SaveJobResultRequest(BaseModel):
+    job_id: str
+    result_index: int = Field(ge=0)
+    list_id: str | None = None
+    list_name: str | None = Field(default=None, max_length=120)
+
+
+class ReverifyRequest(BaseModel):
+    result_ids: list[str] = Field(min_length=1, max_length=5000)
+
+
 class ImportResponse(BaseModel):
     count: int
     emails: list[str]

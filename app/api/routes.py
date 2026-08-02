@@ -39,6 +39,7 @@ from app.api.schemas import (
     ProspectingCompanyUpdateRequest,
     SavedProspectingContactsResponse,
     ResultsResponse,
+    ListCreateRequest, ListUpdateRequest, ListResultIdsRequest, SaveJobResultRequest,
     SingleVerificationRequest,
     WorkerFailureRequest,
     WorkerResultsRequest,
@@ -76,6 +77,7 @@ from app.db.auth import User, auth_store
 from app.db.jobs import Job, job_store, utc_now
 from app.db.metrics import metrics_store
 from app.db.prospecting import ProspectingRun, prospecting_store
+from app.db.result_objects import now_iso, result_object_store
 from app.tasks.verification import (
     clean_emails,
     job_progress,
@@ -1512,6 +1514,101 @@ def get_results(
         limit=limit,
         items=[normalize_result(result) for result in page],
     )
+
+
+def _ensure_saved_result(user: User, job_id: str, result_index: int) -> dict[str, object]:
+    job = require_job_access(require_job(job_id, include_results=False), user, None)
+    if result_index < 0 or result_index >= len(job.emails):
+        raise HTTPException(status_code=404, detail="Verification result does not exist")
+    page = job_store.result_page(job.id, offset=result_index, limit=1, search="", deliverability="all")[1]
+    raw = page[0] if page else {"email": job.emails[result_index], "progress_state": "pending", "original_index": result_index}
+    return result_object_store.ensure_result(user.id, job.id, result_index, normalize_result(raw), "discovery" if job.execution_target == "discovery" else ("single" if len(job.emails) == 1 else "batch"))
+
+
+@router.post("/results/save")
+def save_job_result(payload: SaveJobResultRequest, user: Annotated[User, Depends(require_user)]) -> dict[str, object]:
+    result = _ensure_saved_result(user, payload.job_id, payload.result_index)
+    list_id = payload.list_id
+    if not list_id:
+        if not payload.list_name:
+            raise HTTPException(status_code=422, detail="list_id or list_name is required")
+        list_id = result_object_store.create_list(user.id, payload.list_name)["id"]
+    saved = result_object_store.add_results(user.id, list_id, [result["id"]], "single")
+    return {"result": result, **saved}
+
+
+@router.get("/lists")
+def get_lists(user: Annotated[User, Depends(require_user)]) -> list[dict[str, object]]:
+    return result_object_store.list_lists(user.id)
+
+
+@router.post("/lists")
+def create_list(payload: ListCreateRequest, user: Annotated[User, Depends(require_user)]) -> dict[str, object]:
+    try: return result_object_store.create_list(user.id, payload.name, payload.description)
+    except ValueError as exc: raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/lists/{list_id}")
+def get_list(list_id: str, user: Annotated[User, Depends(require_user)], offset: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=500), status: str = Query("all")) -> dict[str, object]:
+    try:
+        total, items = result_object_store.list_results(user.id, list_id, offset, limit, status)
+        summary = result_object_store.get_list(user.id, list_id)
+        return {"list": summary, "total": total, "offset": offset, "limit": limit, "items": items}
+    except ValueError as exc: raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.patch("/lists/{list_id}")
+def update_list(list_id: str, payload: ListUpdateRequest, user: Annotated[User, Depends(require_user)]) -> dict[str, object]:
+    with result_object_store._connect() as connection:
+        current = result_object_store.get_list(user.id, list_id, connection=connection)
+        if not current: raise HTTPException(status_code=404, detail="list not found")
+        name = (payload.name or current["name"]).strip(); description = payload.description if payload.description is not None else current["description"]
+        connection.execute("UPDATE lists SET name=?, description=?, updated_at=? WHERE id=? AND owner_id=?", (name, description, now_iso(), list_id, user.id))
+        return result_object_store.get_list(user.id, list_id, connection=connection)
+
+
+@router.delete("/lists/{list_id}", status_code=204)
+def archive_list(list_id: str, user: Annotated[User, Depends(require_user)]) -> None:
+    with result_object_store._connect() as connection:
+        if not result_object_store.get_list(user.id, list_id, connection=connection): raise HTTPException(status_code=404, detail="list not found")
+        connection.execute("UPDATE lists SET archived_at=?, updated_at=? WHERE id=? AND owner_id=?", (utc_now().isoformat(), utc_now().isoformat(), list_id, user.id))
+
+
+@router.post("/lists/{list_id}/results")
+def add_list_results(list_id: str, payload: ListResultIdsRequest, user: Annotated[User, Depends(require_user)]) -> dict[str, object]:
+    try: return result_object_store.add_results(user.id, list_id, payload.result_ids, payload.added_from)
+    except ValueError as exc: raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.delete("/lists/{list_id}/results")
+def remove_list_results(list_id: str, payload: ListResultIdsRequest, user: Annotated[User, Depends(require_user)]) -> dict[str, object]:
+    try: return result_object_store.remove_results(user.id, list_id, payload.result_ids)
+    except ValueError as exc: raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/lists/{list_id}/export")
+def export_list(list_id: str, user: Annotated[User, Depends(require_user)]) -> Response:
+    try: rows = result_object_store.export_rows(user.id, list_id)
+    except ValueError as exc: raise HTTPException(status_code=404, detail=str(exc)) from exc
+    output = StringIO(); writer = csv.writer(output); writer.writerow(["email", "status", "verification_method", "server_response", "confidence", "source", "task_id", "created_at"])
+    for row in rows: writer.writerow([row.get(key) or "" for key in ("email", "status", "verification_method", "server_response", "confidence", "source", "task_id", "created_at")])
+    return Response(content=output.getvalue(), media_type="text/csv", headers={"Content-Disposition": f'attachment; filename="verigo-list-{list_id}.csv"'})
+
+
+@router.get("/results/{result_id}")
+def get_saved_result(result_id: str, user: Annotated[User, Depends(require_user)]) -> dict[str, object]:
+    result = result_object_store.get_result(user.id, result_id)
+    if not result: raise HTTPException(status_code=404, detail="result not found")
+    return result
+
+
+@router.get("/results/{result_id}/history")
+def get_saved_result_history(result_id: str, user: Annotated[User, Depends(require_user)]) -> dict[str, object]:
+    result = result_object_store.get_result(user.id, result_id)
+    if not result: raise HTTPException(status_code=404, detail="result not found")
+    with result_object_store._connect() as connection:
+        rows = connection.execute("SELECT * FROM result_objects WHERE owner_id=? AND lower(email)=lower(?) ORDER BY created_at DESC", (user.id, result["email"])).fetchall()
+        return {"email": result["email"], "items": [result_object_store._row(row, result_object_store._list_ids(connection, row["id"])) for row in rows]}
 
 
 @router.post("/jobs/{job_id}/results/{result_index}/reviewed", status_code=204)

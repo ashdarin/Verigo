@@ -198,6 +198,37 @@ class JobStore:
                 connection.execute("CREATE INDEX IF NOT EXISTS idx_job_results_filter ON job_results(job_id, deliverability, is_skipped, original_index)")
                 connection.execute("CREATE INDEX IF NOT EXISTS idx_job_results_email ON job_results(job_id, email COLLATE NOCASE, original_index)")
                 connection.execute("""
+                    CREATE TABLE IF NOT EXISTS result_objects (
+                        id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, task_id TEXT NOT NULL,
+                        result_index INTEGER NOT NULL, email TEXT NOT NULL,
+                        status TEXT NOT NULL, verification_method TEXT,
+                        server_response TEXT, confidence TEXT NOT NULL DEFAULT 'unknown',
+                        source TEXT NOT NULL, created_at TEXT NOT NULL,
+                        supersedes_result_id TEXT, metadata_json TEXT NOT NULL DEFAULT '{}',
+                        UNIQUE(owner_id, task_id, result_index)
+                    )
+                """)
+                connection.execute("CREATE INDEX IF NOT EXISTS idx_result_objects_owner ON result_objects(owner_id, created_at DESC)")
+                connection.execute("CREATE INDEX IF NOT EXISTS idx_result_objects_email ON result_objects(owner_id, email COLLATE NOCASE)")
+                connection.execute("""
+                    CREATE TABLE IF NOT EXISTS lists (
+                        id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, name TEXT NOT NULL,
+                        description TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL, archived_at TEXT
+                    )
+                """)
+                connection.execute("CREATE INDEX IF NOT EXISTS idx_lists_owner ON lists(owner_id, archived_at, updated_at DESC)")
+                connection.execute("""
+                    CREATE TABLE IF NOT EXISTS list_items (
+                        list_id TEXT NOT NULL, result_id TEXT NOT NULL,
+                        added_at TEXT NOT NULL, added_from TEXT NOT NULL,
+                        PRIMARY KEY(list_id, result_id),
+                        FOREIGN KEY(list_id) REFERENCES lists(id) ON DELETE CASCADE,
+                        FOREIGN KEY(result_id) REFERENCES result_objects(id) ON DELETE CASCADE
+                    )
+                """)
+                connection.execute("CREATE INDEX IF NOT EXISTS idx_list_items_result ON list_items(result_id)")
+                connection.execute("""
                     CREATE TABLE IF NOT EXISTS job_result_links (
                         child_job_id TEXT NOT NULL, child_index INTEGER NOT NULL,
                         parent_job_id TEXT NOT NULL, parent_index INTEGER NOT NULL,

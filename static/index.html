@@ -30,6 +30,7 @@
       <button class="nav-item" type="button" data-view="batch">批量清洗</button>
       <button class="nav-item" type="button" data-view="discovery">邮箱查找</button>
       <button class="nav-item" type="button" data-view="history">历史记录</button>
+      <button id="lists-nav" class="nav-item hidden" type="button" data-view="lists">我的列表</button>
       <button id="workspace-nav" class="nav-item hidden" type="button" data-view="workspace">工作台</button>
       <a class="nav-item nav-link" href="/pricing">价格</a>
       <button id="api-nav" class="nav-item" type="button">API</button>
@@ -377,6 +378,12 @@
   <main id="history-workspace" class="history-workspace hidden">
     <section class="report-heading"><div><p class="eyebrow">账户</p><h1>历史记录</h1><p class="report-updated">按名单名称查看过去的验证任务</p></div><button id="history-refresh" class="download-action" type="button">刷新</button></section>
     <section class="report-card history-card"><div class="table-toolbar"><input id="history-search" type="search" placeholder="搜索文件名或名单名称"><select id="history-filter" aria-label="筛选任务"><option value="all">全部</option><option value="completed">已完成</option><option value="running">验证中</option><option value="failed">失败</option></select></div><div id="history-list" class="history-list"></div><div class="pagination"><span id="history-page-info"></span><div><button id="history-prev" class="page-button" type="button">上一页</button><span id="history-pages" class="page-numbers"></span><button id="history-next" class="page-button" type="button">下一页</button></div></div></section>
+  </main>
+
+  <main id="lists-workspace" class="history-workspace hidden">
+    <section class="report-heading"><div><p class="eyebrow">账户</p><h1>我的列表</h1><p class="report-updated">保存验证和查找结果，方便以后再次验证与导出</p></div><button id="create-list-button" class="primary-action" type="button">创建列表</button></section>
+    <section id="lists-index" class="lists-index"></section>
+    <section id="list-detail" class="report-card hidden"><div class="workspace-card-heading"><div><p class="eyebrow">LIST DETAIL</p><h2 id="list-detail-title"></h2><p id="list-detail-meta" class="report-updated"></p></div><div class="table-actions"><button id="list-export-button" class="download-action" type="button">导出 CSV</button><button id="list-back-button" class="text-action" type="button">返回列表</button></div></div><div class="table-toolbar"><select id="list-status-filter" aria-label="筛选列表结果"><option value="all">全部</option><option value="deliverable">可投递</option><option value="undeliverable">不可投递</option><option value="unknown">待确认</option><option value="catch-all">Catch-all</option></select></div><div id="list-detail-items" class="list-detail-items"></div></section>
   </main>
 
   <footer class="site-footer">

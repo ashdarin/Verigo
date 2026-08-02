@@ -1,5 +1,7 @@
 const state = {
-  view: window.location.pathname === "/workspace" ? "workspace"
+  view: window.location.pathname === "/lists" ? "lists"
+    : window.location.pathname.startsWith("/lists/") ? "lists"
+    : window.location.pathname === "/workspace" ? "workspace"
     : window.location.pathname === "/dashboard"
     ? "dashboard"
     : window.location.pathname === "/admin/credits" ? "admin-credits" : window.location.pathname === "/wallet" ? "wallet" : "single",
@@ -147,7 +149,8 @@ function switchView(view) {
   const wallet = view === "wallet";
   const history = view === "history";
   const workspace = view === "workspace";
-  if ((wallet || history) && !state.user) { state.pendingView = view; el("auth-dialog").showModal(); setAuthMode("login"); el("auth-error").textContent = VerigoI18n.text("请先登录后查看账户数据"); return; }
+  const lists = view === "lists";
+  if ((wallet || history || lists) && !state.user) { state.pendingView = view; el("auth-dialog").showModal(); setAuthMode("login"); el("auth-error").textContent = VerigoI18n.text("请先登录后查看账户数据"); return; }
   if (workspace && !state.user) { state.pendingView = "workspace"; el("auth-dialog").showModal(); setAuthMode("login"); el("auth-error").textContent = "Please sign in to open your workspace"; return; }
   if (discovery && !state.user) {
     el("auth-dialog").showModal();
@@ -156,17 +159,18 @@ function switchView(view) {
     return;
   }
   state.view = view;
-  document.querySelectorAll(".public-marketing").forEach((section) => section.classList.toggle("workspace-mode-hidden", workspace));
-  el("verify-workspace").classList.toggle("hidden", discovery || dashboard || adminCredits || wallet || history || workspace);
+  document.querySelectorAll(".public-marketing").forEach((section) => section.classList.toggle("workspace-mode-hidden", workspace || lists));
+  el("verify-workspace").classList.toggle("hidden", discovery || dashboard || adminCredits || wallet || history || workspace || lists);
   el("workspace-home").classList.toggle("hidden", !workspace);
   el("discovery-workspace").classList.toggle("hidden", !discovery);
   el("dashboard-workspace").classList.toggle("hidden", !dashboard);
   el("admin-credits-workspace").classList.toggle("hidden", !adminCredits);
   el("wallet-workspace").classList.toggle("hidden", !wallet);
   el("history-workspace").classList.toggle("hidden", !history);
+  el("lists-workspace").classList.toggle("hidden", !lists);
   el("single-panel").classList.toggle("hidden", view !== "single");
   el("batch-panel").classList.toggle("hidden", view !== "batch");
-  if (!discovery && !dashboard && !adminCredits && !wallet && !history) {
+  if (!discovery && !dashboard && !adminCredits && !wallet && !history && !workspace && !lists) {
     el("verify-eyebrow").textContent = VerigoI18n.text(view === "single" ? "免费单个验证" : "收费批量验证");
     el("verify-heading").textContent = VerigoI18n.text(view === "single" ? "验证单个收件地址" : "批量验证收件地址");
   }
@@ -198,17 +202,21 @@ function switchView(view) {
     document.title = "Workspace | Verigo";
     if (window.location.pathname !== "/workspace") window.history.pushState({}, "", "/workspace");
     loadWorkspaceHome();
+  } else if (lists) {
+    document.title = `${VerigoI18n.text("我的列表")} | Verigo`;
+    if (window.location.pathname === "/lists" || !window.location.pathname.startsWith("/lists/")) window.history.pushState({}, "", "/lists");
+    loadListsPage();
   } else {
     document.title = "Verigo";
     clearInterval(state.metricsTimer);
     state.metricsTimer = null;
-    if (["/dashboard", "/admin/credits", "/wallet", "/history", "/workspace"].includes(window.location.pathname)) window.history.replaceState({}, "", "/");
+    if (["/dashboard", "/admin/credits", "/wallet", "/history", "/workspace", "/lists"].includes(window.location.pathname)) window.history.replaceState({}, "", "/");
   }
   updateCount();
 }
 
 window.addEventListener("popstate", () => {
-  const pathView = { "/workspace": "workspace", "/dashboard": "dashboard", "/admin/credits": "admin-credits", "/wallet": "wallet", "/history": "history" }[window.location.pathname] || "single";
+  const pathView = { "/workspace": "workspace", "/lists": "lists", "/dashboard": "dashboard", "/admin/credits": "admin-credits", "/wallet": "wallet", "/history": "history" }[window.location.pathname] || (window.location.pathname.startsWith("/lists/") ? "lists" : "single");
   switchView(pathView);
 });
 
@@ -1082,6 +1090,7 @@ function updateAccount() {
   el("admin-credits-nav").classList.toggle("hidden", !state.user?.is_admin);
   el("wallet-nav").classList.toggle("hidden", !state.user);
   el("workspace-nav").classList.toggle("hidden", !state.user);
+  el("lists-nav").classList.toggle("hidden", !state.user);
   el("notification-button").classList.toggle("hidden", !state.user);
   el("claim-trial-button").classList.toggle(
     "hidden", !state.user || state.user.needs_email_binding || state.user.email_verified,
@@ -1132,6 +1141,40 @@ async function loadWorkspaceHome() {
     });
   } catch (error) { el("workspace-recent-jobs").textContent = VerigoI18n.text("任务加载失败，请稍后刷新。"); }
 }
+
+async function loadListsPage() {
+  if (!state.user || state.view !== "lists") return;
+  const index = el("lists-index"); const detail = el("list-detail");
+  try {
+    const lists = await api("/api/lists");
+    index.replaceChildren(); detail.classList.add("hidden");
+    if (!lists.length) { const empty = document.createElement("div"); empty.className = "workspace-card list-empty"; empty.textContent = VerigoI18n.text("还没有列表，先保存一个验证结果吧。"); index.append(empty); return; }
+    lists.forEach((list) => {
+      const card = document.createElement("article"); card.className = "list-card";
+      const title = document.createElement("h2"); title.textContent = list.name;
+      const meta = document.createElement("p"); meta.textContent = `${Number(list.result_count || 0).toLocaleString(VerigoI18n.locale === "en" ? "en-US" : "zh-CN")} ${VerigoI18n.text("个结果")} · ${VerigoI18n.formatDate(list.updated_at)}`;
+      const open = document.createElement("button"); open.type = "button"; open.className = "text-action"; open.textContent = VerigoI18n.text("打开列表"); open.addEventListener("click", () => openListDetail(list.id));
+      card.append(title, meta, open); index.append(card);
+    });
+  } catch (error) { index.textContent = error.message; }
+}
+
+async function openListDetail(listId) {
+  try {
+    const data = await api(`/api/lists/${encodeURIComponent(listId)}`); const list = data.list;
+    el("lists-index").classList.add("hidden"); el("list-detail").classList.remove("hidden");
+    el("list-detail-title").textContent = list.name; el("list-detail-meta").textContent = `${Number(data.total || 0).toLocaleString(VerigoI18n.locale === "en" ? "en-US" : "zh-CN")} ${VerigoI18n.text("个结果")}`;
+    const items = el("list-detail-items"); items.replaceChildren();
+    if (!data.items.length) { const empty = document.createElement("p"); empty.className = "list-empty"; empty.textContent = VerigoI18n.text("列表中还没有结果"); items.append(empty); }
+    data.items.forEach((item) => { const row = document.createElement("div"); row.className = "list-result-row"; const info = document.createElement("div"); const email = document.createElement("strong"); email.textContent = item.email; const meta = document.createElement("span"); meta.textContent = `${VerigoI18n.text(item.status)} · ${VerigoI18n.text(item.source)}`; info.append(email, meta); const remove = document.createElement("button"); remove.type = "button"; remove.className = "text-action"; remove.textContent = VerigoI18n.text("移除"); remove.addEventListener("click", async () => { await api(`/api/lists/${listId}/results`, { method:"DELETE", headers:{"Content-Type":"application/json"}, body:JSON.stringify({result_ids:[item.id]}) }); await openListDetail(listId); }); row.append(info, remove); items.append(row); });
+    el("list-export-button").onclick = () => { window.location.href = `/api/lists/${encodeURIComponent(listId)}/export`; };
+    window.history.pushState({}, "", `/lists/${encodeURIComponent(listId)}`);
+  } catch (error) { el("list-detail-items").textContent = error.message; }
+}
+
+el("create-list-button")?.addEventListener("click", async () => { const name = window.prompt(VerigoI18n.text("请输入列表名称")); if (!name?.trim()) return; await api("/api/lists", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({name:name.trim()}) }); await loadListsPage(); });
+el("list-back-button")?.addEventListener("click", () => { window.history.pushState({}, "", "/lists"); loadListsPage(); });
+el("list-status-filter")?.addEventListener("change", () => { const id = window.location.pathname.split("/").pop(); if (id) openListDetail(id); });
 
 el("dashboard-refresh").addEventListener("click", loadDashboardMetrics);
 async function loadWallet() { const data = await api("/api/wallet"); const set=(id,v)=>el(id).textContent=Number(v||0).toLocaleString("zh-CN"); set("wallet-available",data.available_verifications); el("wallet-paid").textContent=`${Number(data.paid_verifications||0).toLocaleString("zh-CN")} 次`; el("wallet-used").textContent=`${Number(data.paid_verifications_used||0).toLocaleString("zh-CN")} 次`; el("wallet-recharged").textContent=`¥${(Number(data.cumulative_recharge_fen||0)/100).toFixed(2)}`; el("wallet-value").textContent=`¥${Number(data.remaining_paid_value_yuan||0).toFixed(2)}`; el("wallet-spent").textContent=`¥${Number(data.paid_used_value_yuan||0).toFixed(2)}`; el("wallet-price").textContent=`100 次 ¥${(data.price_fen_per_100/100).toFixed(2)}`; el("wallet-trial-note").textContent=data.trial_verifications?`另有 ${data.trial_verifications} 体验次数`:"不含体验次数"; el("wallet-updated").textContent=`更新于 ${new Date().toLocaleString("zh-CN")}`; const days=data.usage_daily||[]; const max=Math.max(1,...days.map(x=>x.verifications)); el("wallet-usage-chart").innerHTML=days.map(x=>`<div class="wallet-bar" style="height:${Math.max(4,x.verifications/max*180)}px"><span>${x.verifications}</span></div>`).join(""); el("wallet-transactions").innerHTML=(data.transactions||[]).map(x=>`<div class="wallet-transaction"><div><strong>${x.title}</strong><small>${x.credits>0?"+":""}${x.credits} 次 ${x.note||""}</small></div><div><strong>${x.amount_fen==null?"—":`${x.credits<0?"-":"+"}¥${(x.amount_fen/100).toFixed(2)}`}</strong><small>${new Date(x.created_at).toLocaleString("zh-CN")}</small></div></div>`).join("")||"暂无资金流水"; }
@@ -1721,6 +1764,7 @@ el("reset-confirm-form").addEventListener("submit", async (event) => {
 el("refresh-jobs").addEventListener("click", loadRecentJobs);
 el("workspace-history-link")?.addEventListener("click", () => switchView("history"));
 el("workspace-api-button")?.addEventListener("click", () => el("api-nav").click());
+el("lists-nav")?.addEventListener("click", () => switchView("lists"));
 document.querySelectorAll("#workspace-home [data-view]").forEach((button) => button.addEventListener("click", () => switchView(button.dataset.view)));
 
 (async function init() {
@@ -1728,9 +1772,14 @@ document.querySelectorAll("#workspace-home [data-view]").forEach((button) => but
   updateCount();
   await loadAccount();
   await loadPublicConfig();
-  if (["/workspace", "/history", "/dashboard", "/admin/credits", "/wallet"].includes(window.location.pathname)) {
+  if (["/workspace", "/history", "/lists", "/dashboard", "/admin/credits", "/wallet"].includes(window.location.pathname) || window.location.pathname.startsWith("/lists/")) {
     if (window.location.pathname === "/workspace" && state.user) {
       switchView("workspace");
+    } else if ((window.location.pathname === "/lists" || window.location.pathname.startsWith("/lists/")) && state.user) {
+      switchView("lists");
+      if (window.location.pathname.startsWith("/lists/") && window.location.pathname.split("/")[2]) openListDetail(window.location.pathname.split("/")[2]);
+    } else if ((window.location.pathname === "/lists" || window.location.pathname.startsWith("/lists/")) && !state.user) {
+      window.history.replaceState({}, "", "/"); state.pendingView = "lists"; el("auth-dialog").showModal(); setAuthMode("login"); el("auth-error").textContent = VerigoI18n.text("请先登录后查看账户数据"); return;
     } else if (window.location.pathname === "/workspace" && !state.user) {
       window.history.replaceState({}, "", "/");
       switchView("single");

@@ -174,6 +174,11 @@ def workspace() -> FileResponse:
 def history() -> FileResponse:
     return FileResponse(STATIC_DIR / "index.html", headers={"X-Robots-Tag": "noindex, nofollow"})
 
+@app.get("/lists", include_in_schema=False)
+@app.get("/lists/{list_id}", include_in_schema=False)
+def lists(list_id: str | None = None) -> FileResponse:
+    return FileResponse(STATIC_DIR / "index.html", headers={"X-Robots-Tag": "noindex, nofollow"})
+
 
 @app.get("/privacy", include_in_schema=False)
 def privacy() -> FileResponse:
