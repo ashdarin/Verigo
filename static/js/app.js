@@ -1248,7 +1248,8 @@ async function loadListsPage() {
   const index = el("lists-index"); const detail = el("list-detail");
   try {
     const lists = await api("/api/lists");
-    index.replaceChildren(); detail.classList.add("hidden");
+    index.replaceChildren();
+    if (!window.location.pathname.startsWith("/lists/")) detail.classList.add("hidden");
     if (!lists.length) { const empty = document.createElement("div"); empty.className = "workspace-card list-empty"; empty.textContent = VerigoI18n.text("还没有列表，先保存一个验证结果吧。"); index.append(empty); return; }
     lists.forEach((list) => {
       const card = document.createElement("article"); card.className = "list-card";
@@ -1892,8 +1893,9 @@ document.querySelectorAll("#workspace-home [data-view]").forEach((button) => but
     if (window.location.pathname === "/workspace" && state.user) {
       switchView("workspace");
     } else if ((window.location.pathname === "/lists" || window.location.pathname.startsWith("/lists/")) && state.user) {
+      const listId = window.location.pathname.startsWith("/lists/") ? window.location.pathname.split("/")[2] : "";
       switchView("lists");
-      if (window.location.pathname.startsWith("/lists/") && window.location.pathname.split("/")[2]) openListDetail(window.location.pathname.split("/")[2]);
+      if (listId) { await openListDetail(listId); }
     } else if ((window.location.pathname === "/lists" || window.location.pathname.startsWith("/lists/")) && !state.user) {
       window.history.replaceState({}, "", "/"); state.pendingView = "lists"; el("auth-dialog").showModal(); setAuthMode("login"); el("auth-error").textContent = VerigoI18n.text("请先登录后查看账户数据"); return;
     } else if (window.location.pathname === "/workspace" && !state.user) {

@@ -110,7 +110,7 @@ const VerigoI18n = (() => {
     if (locale !== "en") return text;
     const nativeEnglish = {
       "工作台": "Workspace", "批量清洗": "List cleaning", "邮箱查找": "Email finder",
-      "我的列表": "My lists", "打开列表": "Open list", "个结果": "results", "列表中还没有结果": "This list has no results yet", "还没有列表，先保存一个验证结果吧。": "No lists yet. Save a verification result to get started.", "请输入列表名称": "Enter a list name", "移除": "Remove", "single": "Single check", "batch": "Bulk check", "discovery": "Email finder", "reverify": "Reverification",
+      "我的列表": "My lists", "打开列表": "Open list", "个结果": "results", "列表中还没有结果": "This list has no results yet", "还没有列表，先保存一个验证结果吧。": "No lists yet. Save a verification result to get started.", "请输入列表名称": "Enter a list name", "移除": "Remove", "single": "Single check", "batch": "Bulk check", "discovery": "Email finder", "reverify": "Reverification", "还没有其他列表": "No other lists yet", "已加入": "Added to", "请选择目标列表": "Choose a target list",
       "个邮箱": "emails", "还没有任务，先验证一个邮箱吧。": "No jobs yet. Verify an email to get started.", "任务加载失败，请稍后刷新。": "Unable to load jobs. Please refresh later.", "请先登录后查看账户数据": "Sign in to view account data", "请先登录后打开工作台": "Sign in to open your workspace",
       "运营监控": "Operations", "额度管理": "Credit management", "资金与使用": "Credits & billing", "历史记录": "History",
       "验证邮箱是否可投递": "Check if an email is deliverable", "在发送邮件或导入名单前，先确认这个地址是否值得继续使用。": "Confirm an address is worth using before sending or importing a list.",
