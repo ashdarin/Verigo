@@ -1516,8 +1516,8 @@ def get_results(
     )
 
 
-def _ensure_saved_result(user: User, job_id: str, result_index: int) -> dict[str, object]:
-    job = require_job_access(require_job(job_id, include_results=False), user, None)
+def _ensure_saved_result(user: User, job_id: str, result_index: int, guest_token: str | None = None) -> dict[str, object]:
+    job = require_job_access(require_job(job_id, include_results=False), user, guest_token)
     if result_index < 0 or result_index >= len(job.emails):
         raise HTTPException(status_code=404, detail="Verification result does not exist")
     page = job_store.result_page(job.id, offset=result_index, limit=1, search="", deliverability="all")[1]
@@ -1526,14 +1526,16 @@ def _ensure_saved_result(user: User, job_id: str, result_index: int) -> dict[str
 
 
 @router.post("/results/save")
-def save_job_result(payload: SaveJobResultRequest, user: Annotated[User, Depends(require_user)]) -> dict[str, object]:
-    result = _ensure_saved_result(user, payload.job_id, payload.result_index)
+def save_job_result(payload: SaveJobResultRequest, user: Annotated[User, Depends(require_user)], guest_token: Annotated[str | None, Header(alias="X-Job-Token")] = None) -> dict[str, object]:
+    result = _ensure_saved_result(user, payload.job_id, payload.result_index, guest_token)
     list_id = payload.list_id
     if not list_id:
         if not payload.list_name:
             raise HTTPException(status_code=422, detail="list_id or list_name is required")
         list_id = result_object_store.create_list(user.id, payload.list_name)["id"]
-    saved = result_object_store.add_results(user.id, list_id, [result["id"]], "single")
+    source = "discovery" if result.get("source") == "discovery" else ("batch" if result.get("source") == "batch" else "single")
+    saved = result_object_store.add_results(user.id, list_id, [result["id"]], source)
+    result = result_object_store.get_result(user.id, result["id"]) or result
     return {"result": result, **saved}
 
 
@@ -1550,6 +1552,8 @@ def create_list(payload: ListCreateRequest, user: Annotated[User, Depends(requir
 
 @router.get("/lists/{list_id}")
 def get_list(list_id: str, user: Annotated[User, Depends(require_user)], offset: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=500), status: str = Query("all")) -> dict[str, object]:
+    if status not in {"all", "deliverable", "undeliverable", "unknown", "catch-all", "queued", "running", "completed", "failed"}:
+        raise HTTPException(status_code=422, detail="invalid list status")
     try:
         total, items = result_object_store.list_results(user.id, list_id, offset, limit, status)
         summary = result_object_store.get_list(user.id, list_id)
@@ -1609,6 +1613,22 @@ def get_saved_result_history(result_id: str, user: Annotated[User, Depends(requi
     with result_object_store._connect() as connection:
         rows = connection.execute("SELECT * FROM result_objects WHERE owner_id=? AND lower(email)=lower(?) ORDER BY created_at DESC", (user.id, result["email"])).fetchall()
         return {"email": result["email"], "items": [result_object_store._row(row, result_object_store._list_ids(connection, row["id"])) for row in rows]}
+
+@router.post("/results/{result_id}/reverify", response_model=JobResponse, status_code=202)
+def reverify_saved_result(result_id: str, user: Annotated[User, Depends(require_user)]) -> JobResponse:
+    require_verification_submission_open()
+    result = result_object_store.get_result(user.id, result_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="result not found")
+    try:
+        job_id = uuid.uuid4().hex[:12]
+        charged = 0 if is_yahoo_email(result["email"]) else 1
+        if charged:
+            auth_store.consume_credits(user.id, charged, f"reverify:{job_id}")
+        job = submit_routed_job([result["email"]], 1, owner_id=user.id, owner_email=user.email, job_id=job_id)
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return serialize_job(job)
 
 
 @router.post("/jobs/{job_id}/results/{result_index}/reviewed", status_code=204)

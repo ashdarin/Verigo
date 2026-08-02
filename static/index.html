@@ -94,6 +94,7 @@
     <section class="workspace-grid">
       <article class="workspace-card workspace-quick-start"><div class="workspace-card-heading"><div><p class="eyebrow">QUICK START</p><h2>选择下一步</h2></div></div><div class="quick-start-grid"><button type="button" data-view="single"><strong>验证一个邮箱</strong><span>快速判断地址是否可投递</span></button><button type="button" data-view="batch"><strong>清洗一份名单</strong><span>导入 CSV 或 Excel 批量处理</span></button><button type="button" data-view="discovery"><strong>查找企业邮箱</strong><span>从姓名和域名开始寻找候选地址</span></button></div></article>
       <article class="workspace-card"><div class="workspace-card-heading"><div><p class="eyebrow">RECENT JOBS</p><h2>最近任务</h2></div><button id="workspace-history-link" class="text-action" type="button">查看全部</button></div><div id="workspace-recent-jobs" class="workspace-recent-jobs"><p class="workspace-empty">正在加载任务…</p></div></article>
+      <article class="workspace-card"><div class="workspace-card-heading"><div><p class="eyebrow">SAVED RESULTS</p><h2>我的列表</h2></div><button id="workspace-lists-link" class="text-action" type="button">查看全部</button></div><div id="workspace-lists-preview" class="workspace-recent-jobs"><p class="workspace-empty">正在加载列表…</p></div></article>
     </section>
     <section class="workspace-help"><div><strong>需要接入自动化流程？</strong><span>使用 API Key 将验证能力接入 CRM、表单或内部工具。</span></div><button id="workspace-api-button" class="download-action" type="button">管理 API Key</button></section>
   </main>
@@ -255,8 +256,8 @@
       <p id="discovery-verdict" class="discovery-verdict">请输入姓名和公司域名</p>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>候选邮箱</th><th>结果</th><th>验证方式</th><th>服务器响应</th></tr></thead>
-          <tbody id="discovery-results-body"><tr class="empty-row"><td colspan="4">尚无查找结果</td></tr></tbody>
+          <thead><tr><th>候选邮箱</th><th>结果</th><th>验证方式</th><th>服务器响应</th><th>操作</th></tr></thead>
+          <tbody id="discovery-results-body"><tr class="empty-row"><td colspan="5">尚无查找结果</td></tr></tbody>
         </table>
       </div>
     </section>
@@ -402,7 +403,25 @@
   <aside id="result-detail-drawer" class="result-detail-drawer" aria-hidden="true" aria-labelledby="result-detail-title">
     <div class="drawer-heading"><div><p class="eyebrow">结果详情</p><h2 id="result-detail-title">邮箱详情</h2></div><button id="close-result-detail" class="dialog-close" type="button" aria-label="关闭">×</button></div>
     <div id="result-detail-content" class="result-detail-content"></div>
+    <div class="result-detail-actions">
+      <button id="result-save-button" class="primary-action" type="button">保存到列表</button>
+      <button id="result-copy-button" class="download-action" type="button">复制关键字段</button>
+      <button id="result-history-button" class="text-action" type="button">查看历史</button>
+      <button id="result-reverify-button" class="secondary-action" type="button">再次验证</button>
+    </div>
   </aside>
+
+  <dialog id="save-result-dialog" class="auth-dialog">
+    <form id="save-result-form" method="dialog">
+      <div class="dialog-heading"><div><p class="eyebrow">结果复用</p><h2>保存到列表</h2></div><button id="close-save-result" class="dialog-close" type="button" aria-label="关闭">×</button></div>
+      <label for="save-result-list-select">选择已有列表</label>
+      <select id="save-result-list-select"><option value="">新建列表</option></select>
+      <label for="save-result-new-list-name">新列表名称</label>
+      <input id="save-result-new-list-name" type="text" maxlength="120" placeholder="例如：本周待跟进">
+      <p id="save-result-error" class="form-error" role="alert"></p>
+      <button id="save-result-submit" class="primary-action" type="submit">保存结果</button>
+    </form>
+  </dialog>
 
   <dialog id="auth-dialog" class="auth-dialog">
     <form id="auth-form" method="dialog">

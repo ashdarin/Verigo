@@ -29,6 +29,8 @@ const state = {
   history: { offset: 0, limit: 10, total: 0 },
   workspace: { loaded: false },
   pendingView: null,
+  pendingSaveResult: null,
+  activeResultItem: null,
 };
 
 const pageSize = 50;
@@ -643,6 +645,7 @@ function renderPagination() {
 }
 
 function openResultDetails(item) {
+  state.activeResultItem = item;
   const drawer = el("result-detail-drawer");
   el("result-detail-title").textContent = item.email || "邮箱详情";
   const fields = [
@@ -659,12 +662,67 @@ function openResultDetails(item) {
     const val = document.createElement("strong"); val.textContent = value;
     row.append(key, val); content.append(row);
   });
+  el("result-history-button").disabled = !state.user || !(item.saved_result_id || item.result_id);
   drawer.classList.add("open"); drawer.setAttribute("aria-hidden", "false");
 }
 
 function closeResultDetails() {
   const drawer = el("result-detail-drawer");
   drawer.classList.remove("open"); drawer.setAttribute("aria-hidden", "true");
+}
+
+async function openSaveResultDialog(item = state.activeResultItem) {
+  if (!item || !state.jobId) return;
+  if (!state.user) {
+    state.pendingSaveResult = { jobId: state.jobId, guestToken: state.guestToken, resultIndex: Number(item.original_index ?? item.result_index ?? 0), email: item.email };
+    el("auth-dialog").showModal(); setAuthMode("login");
+    el("auth-error").textContent = VerigoI18n.text("请先登录，登录后会继续保存当前结果");
+    return;
+  }
+  const select = el("save-result-list-select");
+  el("save-result-error").textContent = ""; el("save-result-new-list-name").value = "";
+  select.replaceChildren(new Option(VerigoI18n.text("新建列表"), ""));
+  try {
+    const lists = await api("/api/lists");
+    lists.forEach((list) => select.append(new Option(`${list.name} (${list.result_count || 0})`, list.id)));
+    el("save-result-dialog").showModal();
+  } catch (requestError) { el("save-result-error").textContent = requestError.message; }
+}
+
+async function submitSaveResult() {
+  const item = state.activeResultItem || {};
+  const payload = { job_id: state.jobId, result_index: Number(item.original_index ?? item.result_index ?? 0) };
+  const selected = el("save-result-list-select").value; const newName = el("save-result-new-list-name").value.trim();
+  if (selected) payload.list_id = selected; else if (newName) payload.list_name = newName; else throw new Error(VerigoI18n.text("请选择列表或输入新列表名称"));
+  const response = await api("/api/results/save", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+  if (response.result?.id) item.saved_result_id = response.result.id;
+  el("save-result-dialog").close(); el("result-history-button").disabled = !state.user || !item.saved_result_id;
+  errorBox.textContent = VerigoI18n.text(response.added ? "结果已保存到列表" : "结果已在列表中");
+}
+
+async function copyResultFields() {
+  const item = state.activeResultItem; if (!item) return;
+  const text = [`email: ${item.email || ""}`, `status: ${resultMeta(item)[2]}`, `verification_method: ${item.verification_method || item.strategy || ""}`, `server_response: ${item.smtp_result || item.message || ""}`].join("\n");
+  try { await navigator.clipboard.writeText(text); errorBox.textContent = VerigoI18n.text("关键字段已复制"); } catch (_) { errorBox.textContent = VerigoI18n.text("复制失败，请手动选择"); }
+}
+
+async function openResultHistory() {
+  const id = state.activeResultItem?.saved_result_id || state.activeResultItem?.result_id; if (!id || !state.user) return;
+  try {
+    const data = await api(`/api/results/${encodeURIComponent(id)}/history`); const content = el("result-detail-content");
+    const heading = document.createElement("p"); heading.className = "detail-history-heading"; heading.textContent = `${data.email} · ${data.items.length} 个版本`; content.prepend(heading);
+    data.items.forEach((version) => { const row = document.createElement("div"); row.className = "detail-field"; const key = document.createElement("span"); key.textContent = `${VerigoI18n.text(version.status)} · ${VerigoI18n.formatDate(version.created_at)}`; const val = document.createElement("strong"); val.textContent = version.verification_method || "-"; row.append(key, val); content.append(row); });
+  } catch (requestError) { errorBox.textContent = requestError.message; }
+}
+
+async function reverifyActiveResult() {
+  const item = state.activeResultItem; if (!item || !state.user || !item.email) return;
+  try {
+    const job = item.saved_result_id
+      ? await api(`/api/results/${encodeURIComponent(item.saved_result_id)}/reverify`, { method: "POST" })
+      : await api("/api/jobs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ emails: [item.email], worker_count: 1 }) });
+    closeResultDetails(); state.jobId = job.id; state.guestToken = null; sessionStorage.setItem("verigo_job_id", job.id); state.page = 0; state.results = []; switchView("single"); showJob(job); await loadAccount(); schedulePoll(300);
+  } catch (requestError) { errorBox.textContent = requestError.message; }
 }
 
 async function copyEmails(kind = "all") {
@@ -688,6 +746,12 @@ async function copyEmails(kind = "all") {
 }
 
 el("close-result-detail")?.addEventListener("click", closeResultDetails);
+el("result-save-button")?.addEventListener("click", () => openSaveResultDialog());
+el("result-copy-button")?.addEventListener("click", copyResultFields);
+el("result-history-button")?.addEventListener("click", openResultHistory);
+el("result-reverify-button")?.addEventListener("click", reverifyActiveResult);
+el("close-save-result")?.addEventListener("click", () => el("save-result-dialog").close());
+el("save-result-form")?.addEventListener("submit", async (event) => { event.preventDefault(); const button = el("save-result-submit"); button.disabled = true; el("save-result-error").textContent = ""; try { await submitSaveResult(); } catch (requestError) { el("save-result-error").textContent = requestError.message; } finally { button.disabled = false; } });
 el("copy-deliverable-button")?.addEventListener("click", () => copyEmails("deliverable"));
 el("copy-undeliverable-button")?.addEventListener("click", () => copyEmails("undeliverable"));
 el("copy-unknown-button")?.addEventListener("click", () => copyEmails("unknown"));
@@ -770,6 +834,12 @@ function resultType(item) {
 function renderDiscoveryResults() {
   const body = el("discovery-results-body");
   body.replaceChildren();
+  const appendSaveAction = (row, item) => {
+    const actionCell = document.createElement("td");
+    const save = document.createElement("button"); save.type = "button"; save.className = "text-action"; save.textContent = VerigoI18n.text("保存到列表");
+    save.addEventListener("click", () => { if (!state.discovery.jobId) { el("discovery-error").textContent = VerigoI18n.text("请先验证候选邮箱，完成后即可保存结果"); return; } state.jobId = state.discovery.jobId; openResultDetails(item); openSaveResultDialog(item); });
+    actionCell.append(save); row.append(actionCell);
+  };
   if (!state.discovery.results.length) {
     if (state.discovery.candidates.length && !state.discovery.jobId) {
       state.discovery.candidates.forEach((email) => {
@@ -779,12 +849,12 @@ function renderDiscoveryResults() {
           cell.textContent = value;
           row.append(cell);
         });
-        body.append(row);
+        appendSaveAction(row, { email, original_index: state.discovery.candidates.indexOf(email) }); body.append(row);
       });
     } else {
       const row = document.createElement("tr");
       row.className = "empty-row";
-      row.innerHTML = '<td colspan="4">正在生成验证结果</td>';
+      row.innerHTML = '<td colspan="5">正在生成验证结果</td>';
       body.append(row);
     }
     return;
@@ -807,7 +877,7 @@ function renderDiscoveryResults() {
       } else cell.textContent = String(value);
       row.append(cell);
     });
-    body.append(row);
+    appendSaveAction(row, item); body.append(row);
   });
 }
 
@@ -1129,6 +1199,7 @@ async function loadWorkspaceHome() {
     el("workspace-processed").textContent = Number(data.processed_today || 0).toLocaleString(locale);
     el("workspace-deliverable-rate").textContent = Number(data.settled || 0) ? `${Math.round(Number(data.deliverable || 0) / Number(data.settled) * 100)}%` : "—";
     const list = el("workspace-recent-jobs"); list.replaceChildren();
+    await loadWorkspaceListsPreview();
     if (!jobs.length) { const empty = document.createElement("p"); empty.className = "workspace-empty"; empty.textContent = VerigoI18n.text("还没有任务，先验证一个邮箱吧。"); list.append(empty); }
     jobs.slice(0, 5).forEach((job) => {
       const item = document.createElement("button"); item.type = "button"; item.className = "workspace-job-row";
@@ -1140,6 +1211,16 @@ async function loadWorkspaceHome() {
       item.addEventListener("click", () => { switchView("single"); showJob(job); state.results = []; state.page = 0; loadResults(); }); list.append(item);
     });
   } catch (error) { el("workspace-recent-jobs").textContent = VerigoI18n.text("任务加载失败，请稍后刷新。"); }
+}
+
+async function loadWorkspaceListsPreview() {
+  const container = el("workspace-lists-preview");
+  if (!container || !state.user) return;
+  try {
+    const lists = await api("/api/lists"); container.replaceChildren();
+    if (!lists.length) { const empty = document.createElement("p"); empty.className = "workspace-empty"; empty.textContent = VerigoI18n.text("还没有保存的列表"); container.append(empty); return; }
+    lists.slice(0, 4).forEach((savedList) => { const item = document.createElement("button"); item.type = "button"; item.className = "workspace-job-row"; const name = document.createElement("strong"); name.textContent = savedList.name; const meta = document.createElement("span"); meta.textContent = `${savedList.result_count || 0} ${VerigoI18n.text("个结果")}`; item.append(name, meta); item.addEventListener("click", () => { switchView("lists"); openListDetail(savedList.id); }); container.append(item); });
+  } catch (error) { container.textContent = error.message; }
 }
 
 async function loadListsPage() {
@@ -1159,9 +1240,9 @@ async function loadListsPage() {
   } catch (error) { index.textContent = error.message; }
 }
 
-async function openListDetail(listId) {
+async function openListDetail(listId, status = el("list-status-filter")?.value || "all") {
   try {
-    const data = await api(`/api/lists/${encodeURIComponent(listId)}`); const list = data.list;
+    const data = await api(`/api/lists/${encodeURIComponent(listId)}?status=${encodeURIComponent(status)}`); const list = data.list;
     el("lists-index").classList.add("hidden"); el("list-detail").classList.remove("hidden");
     el("list-detail-title").textContent = list.name; el("list-detail-meta").textContent = `${Number(data.total || 0).toLocaleString(VerigoI18n.locale === "en" ? "en-US" : "zh-CN")} ${VerigoI18n.text("个结果")}`;
     const items = el("list-detail-items"); items.replaceChildren();
@@ -1174,7 +1255,7 @@ async function openListDetail(listId) {
 
 el("create-list-button")?.addEventListener("click", async () => { const name = window.prompt(VerigoI18n.text("请输入列表名称")); if (!name?.trim()) return; await api("/api/lists", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({name:name.trim()}) }); await loadListsPage(); });
 el("list-back-button")?.addEventListener("click", () => { window.history.pushState({}, "", "/lists"); loadListsPage(); });
-el("list-status-filter")?.addEventListener("change", () => { const id = window.location.pathname.split("/").pop(); if (id) openListDetail(id); });
+el("list-status-filter")?.addEventListener("change", () => { const id = window.location.pathname.split("/").pop(); if (id) openListDetail(id, el("list-status-filter").value); });
 
 el("dashboard-refresh").addEventListener("click", loadDashboardMetrics);
 async function loadWallet() { const data = await api("/api/wallet"); const set=(id,v)=>el(id).textContent=Number(v||0).toLocaleString("zh-CN"); set("wallet-available",data.available_verifications); el("wallet-paid").textContent=`${Number(data.paid_verifications||0).toLocaleString("zh-CN")} 次`; el("wallet-used").textContent=`${Number(data.paid_verifications_used||0).toLocaleString("zh-CN")} 次`; el("wallet-recharged").textContent=`¥${(Number(data.cumulative_recharge_fen||0)/100).toFixed(2)}`; el("wallet-value").textContent=`¥${Number(data.remaining_paid_value_yuan||0).toFixed(2)}`; el("wallet-spent").textContent=`¥${Number(data.paid_used_value_yuan||0).toFixed(2)}`; el("wallet-price").textContent=`100 次 ¥${(data.price_fen_per_100/100).toFixed(2)}`; el("wallet-trial-note").textContent=data.trial_verifications?`另有 ${data.trial_verifications} 体验次数`:"不含体验次数"; el("wallet-updated").textContent=`更新于 ${new Date().toLocaleString("zh-CN")}`; const days=data.usage_daily||[]; const max=Math.max(1,...days.map(x=>x.verifications)); el("wallet-usage-chart").innerHTML=days.map(x=>`<div class="wallet-bar" style="height:${Math.max(4,x.verifications/max*180)}px"><span>${x.verifications}</span></div>`).join(""); el("wallet-transactions").innerHTML=(data.transactions||[]).map(x=>`<div class="wallet-transaction"><div><strong>${x.title}</strong><small>${x.credits>0?"+":""}${x.credits} 次 ${x.note||""}</small></div><div><strong>${x.amount_fen==null?"—":`${x.credits<0?"-":"+"}¥${(x.amount_fen/100).toFixed(2)}`}</strong><small>${new Date(x.created_at).toLocaleString("zh-CN")}</small></div></div>`).join("")||"暂无资金流水"; }
@@ -1719,6 +1800,13 @@ el("auth-form").addEventListener("submit", async (event) => {
       state.pendingView = null;
       switchView(nextView);
     }
+    if (state.pendingSaveResult && state.user) {
+      const pending = state.pendingSaveResult;
+      state.pendingSaveResult = null;
+      state.jobId = pending.jobId; state.guestToken = pending.guestToken || state.guestToken;
+      state.activeResultItem = { email: pending.email || "", original_index: pending.resultIndex };
+      await openSaveResultDialog(state.activeResultItem);
+    }
   } catch (error) {
     el("auth-error").textContent = error.message;
   } finally {
@@ -1763,6 +1851,7 @@ el("reset-confirm-form").addEventListener("submit", async (event) => {
 
 el("refresh-jobs").addEventListener("click", loadRecentJobs);
 el("workspace-history-link")?.addEventListener("click", () => switchView("history"));
+el("workspace-lists-link")?.addEventListener("click", () => switchView("lists"));
 el("workspace-api-button")?.addEventListener("click", () => el("api-nav").click());
 el("lists-nav")?.addEventListener("click", () => switchView("lists"));
 document.querySelectorAll("#workspace-home [data-view]").forEach((button) => button.addEventListener("click", () => switchView(button.dataset.view)));
