@@ -1523,7 +1523,11 @@ def _ensure_saved_result(user: User, job_id: str, result_index: int, guest_token
         raise HTTPException(status_code=404, detail="Verification result does not exist")
     page = job_store.result_page(job.id, offset=result_index, limit=1, search="", deliverability="all")[1]
     raw = page[0] if page else {"email": job.emails[result_index], "progress_state": "pending", "original_index": result_index}
-    return result_object_store.ensure_result(user.id, job.id, result_index, normalize_result(raw), "discovery" if job.execution_target == "discovery" else ("single" if len(job.emails) == 1 else "batch"))
+    normalized = normalize_result(raw)
+    source = "discovery" if job.execution_target == "discovery" else ("reverify" if job.execution_target == "reverify" else ("single" if len(job.emails) == 1 else "batch"))
+    if job.parent_id:
+        normalized["supersedes_result_id"] = job.parent_id
+    return result_object_store.ensure_result(user.id, job.id, result_index, normalized, source)
 
 
 @router.post("/results/save")
@@ -1646,6 +1650,13 @@ def reverify_saved_result(result_id: str, user: Annotated[User, Depends(require_
         if charged:
             auth_store.consume_credits(user.id, charged, f"reverify:{job_id}")
         job = submit_routed_job([result["email"]], 1, owner_id=user.id, owner_email=user.email, job_id=job_id)
+        result_object_store.ensure_result(
+            user.id,
+            job.id,
+            0,
+            {"email": result["email"], "progress_state": "pending", "supersedes_result_id": result_id},
+            "reverify",
+        )
     except (ValueError, RuntimeError) as exc:
         if charged:
             auth_store.refund_credits(user.id, charged, f"reverify:{job_id}")

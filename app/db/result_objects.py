@@ -68,6 +68,12 @@ class ResultObjectStore:
                 (owner_id, task_id, result_index),
             ).fetchone()
             if row:
+                if result.get("progress_state") not in {"pending", "verifying"} and row["status"] in {"queued", "running"}:
+                    connection.execute(
+                        "UPDATE result_objects SET status=?, verification_method=?, server_response=?, confidence=?, metadata_json=? WHERE id=? AND owner_id=?",
+                        (self._status(result), result.get("verification_method") or result.get("strategy"), result.get("smtp_result") or result.get("message"), result.get("confidence") or row["confidence"], json.dumps({k: result[k] for k in ("domain_type", "original_index", "first_name", "last_name", "domain") if k in result}, ensure_ascii=False), row["id"], owner_id),
+                    )
+                    row = connection.execute("SELECT * FROM result_objects WHERE id=?", (row["id"],)).fetchone()
                 return self._row(row, self._list_ids(connection, row["id"]))
             result_id = uuid.uuid4().hex
             created_at = now_iso()
@@ -84,7 +90,7 @@ class ResultObjectStore:
                  result.get("verification_method") or result.get("strategy"),
                  result.get("smtp_result") or result.get("message"),
                  result.get("confidence") or "unknown", source, created_at,
-                previous["id"] if previous else None,
+                result.get("supersedes_result_id") or (previous["id"] if previous else None),
                 json.dumps({k: result[k] for k in ("domain_type", "original_index", "first_name", "last_name", "domain") if k in result}, ensure_ascii=False)),
             )
             row = connection.execute("SELECT * FROM result_objects WHERE id=?", (result_id,)).fetchone()
