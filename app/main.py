@@ -120,13 +120,14 @@ def robots() -> str:
 def sitemap() -> Response:
     body = """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
 <urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">
-  <url><loc>https://verigo.site/</loc></url>
-  <url><loc>https://verigo.site/pricing</loc></url>
-  <url><loc>https://verigo.site/privacy</loc></url>
-  <url><loc>https://verigo.site/acceptable-use</loc></url>
-  <url><loc>https://verigo.site/email-verification</loc></url>
-  <url><loc>https://verigo.site/bulk-email-verification</loc></url>
-  <url><loc>https://verigo.site/email-list-cleaning</loc></url>
+  <url><loc>https://verigo.site/</loc><changefreq>weekly</changefreq><priority>1.0</priority></url>
+  <url><loc>https://verigo.site/pricing</loc><changefreq>monthly</changefreq><priority>0.8</priority></url>
+  <url><loc>https://verigo.site/api-docs</loc><changefreq>monthly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://verigo.site/email-verification</loc><changefreq>monthly</changefreq><priority>0.8</priority></url>
+  <url><loc>https://verigo.site/bulk-email-verification</loc><changefreq>monthly</changefreq><priority>0.8</priority></url>
+  <url><loc>https://verigo.site/email-list-cleaning</loc><changefreq>monthly</changefreq><priority>0.8</priority></url>
+  <url><loc>https://verigo.site/privacy</loc><changefreq>yearly</changefreq><priority>0.3</priority></url>
+  <url><loc>https://verigo.site/acceptable-use</loc><changefreq>yearly</changefreq><priority>0.3</priority></url>
 </urlset>
 """
     return Response(content=body, media_type="application/xml")
