@@ -1525,8 +1525,6 @@ def _ensure_saved_result(user: User, job_id: str, result_index: int, guest_token
     raw = page[0] if page else {"email": job.emails[result_index], "progress_state": "pending", "original_index": result_index}
     normalized = normalize_result(raw)
     source = "discovery" if job.execution_target == "discovery" else ("reverify" if job.execution_target == "reverify" else ("single" if len(job.emails) == 1 else "batch"))
-    if job.parent_id:
-        normalized["supersedes_result_id"] = job.parent_id
     return result_object_store.ensure_result(user.id, job.id, result_index, normalized, source)
 
 
@@ -1671,7 +1669,8 @@ def reverify_list_results(list_id: str, payload: ReverifyRequest, user: Annotate
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     selected = set(payload.result_ids)
-    emails = [row["email"] for row in rows if row["id"] in selected]
+    selected_rows = [row for row in rows if row["id"] in selected]
+    emails = [row["email"] for row in selected_rows]
     if not emails:
         raise HTTPException(status_code=422, detail="列表中没有可再次验证的结果")
     job_id = uuid.uuid4().hex[:12]
@@ -1680,6 +1679,14 @@ def reverify_list_results(list_id: str, payload: ReverifyRequest, user: Annotate
         if charged:
             auth_store.consume_credits(user.id, charged, f"reverify:{job_id}")
         job = submit_routed_job(emails, 2, owner_id=user.id, owner_email=user.email, job_id=job_id)
+        for index, previous in enumerate(selected_rows):
+            result_object_store.ensure_result(
+                user.id,
+                job.id,
+                index,
+                {"email": previous["email"], "progress_state": "pending", "supersedes_result_id": previous["id"]},
+                "reverify",
+            )
     except (ValueError, RuntimeError) as exc:
         if charged:
             auth_store.refund_credits(user.id, charged, f"reverify:{job_id}")
