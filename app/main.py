@@ -106,6 +106,13 @@ def api_docs() -> FileResponse:
 def robots() -> str:
     return "\n".join(
         [
+            # Keep crawler access explicit so search engines do not infer a
+            # restrictive default while the API remains private.
+            "User-agent: bingbot",
+            "Allow: /",
+            "Disallow: /api/",
+            "Disallow: /dashboard",
+            "",
             "User-agent: *",
             "Allow: /",
             "Disallow: /api/",
