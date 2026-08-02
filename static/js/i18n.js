@@ -108,6 +108,18 @@ const VerigoI18n = (() => {
   function localizeText(value) {
     const text = String(value || "");
     if (locale !== "en") return text;
+    const nativeEnglish = {
+      "邮箱验证": "Email verification", "邮箱查找": "Email finder", "历史记录": "History", "价格": "Pricing",
+      "额度与账单": "Credits & billing", "验证邮箱是否可投递": "Check if an email is deliverable",
+      "在发送邮件或导入客户名单前，快速识别无效邮箱，减少退信和无效触达。": "Identify invalid emails before sending or importing lists.",
+      "每天免费验证": "Free checks daily", "无需信用卡": "No credit card required", "支持批量名单": "Bulk lists supported",
+      "验证任务": "Verification job", "复制可投递": "Copy deliverable", "复制不可投递": "Copy undeliverable", "复制无法确认": "Copy unconfirmed", "复制全部": "Copy all",
+      "状态": "Status", "查看详情": "View details", "结果详情": "Result details", "邮箱详情": "Email details",
+      "可以通过 API 集成吗？": "Can I integrate through the API?",
+      "可以。已登录账户可在产品中创建 API Key，并通过 API 文档将验证能力接入 CRM、表单或内部流程。": "Yes. Signed-in accounts can create API keys and connect verification to a CRM, form, or internal workflow.",
+      "Verigo · 邮箱验证、名单清洗与企业邮箱查找": "Verigo · Email verification, list cleaning, and company email finder",
+    };
+    if (nativeEnglish[text]) return nativeEnglish[text];
     if (english[text] || backend[text]) return english[text] || backend[text];
     if (/^(\d+) \/ (\d+) 已处理$/.test(text)) return text.replace(/^(\d+) \/ (\d+) 已处理$/, "$1 / $2 processed");
     if (/^排队中，前方还有 (\d+) 个任务$/.test(text)) return text.replace(/^排队中，前方还有 (\d+) 个任务$/, "Queued; $1 job(s) ahead");

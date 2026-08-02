@@ -559,7 +559,7 @@ function renderResults() {
     const row = document.createElement("tr");
     row.className = "empty-row";
     const cell = document.createElement("td");
-    cell.colSpan = 3;
+    cell.colSpan = 5;
     cell.textContent = state.results.length ? "没有符合条件的结果" : "正在等待首条验证结果";
     row.append(cell);
     body.append(row);
@@ -569,7 +569,13 @@ function renderResults() {
   rows.forEach((item) => {
     const [label, className] = resultMeta(item);
     const row = document.createElement("tr");
-    const values = [item.email, label, "详情"];
+    const values = [
+      item.email,
+      label,
+      VerigoI18n.resultValue(item.verification_method || item.strategy || "-"),
+      VerigoI18n.resultValue(item.smtp_result || item.message || "-"),
+      "详情",
+    ];
     values.forEach((value, index) => {
       const cell = document.createElement("td");
       if (index === 0) {
@@ -587,13 +593,16 @@ function renderResults() {
         pill.className = `result-pill ${className}`;
         pill.textContent = label;
         cell.append(pill);
-      } else if (index === 2) {
+      } else if (index === 4) {
         const action = document.createElement("button");
         action.type = "button";
         action.className = "text-action result-detail-action";
         action.textContent = "查看详情";
         action.addEventListener("click", () => openResultDetails(item));
         cell.append(action);
+      } else {
+        cell.className = "detail-cell";
+        cell.textContent = value;
       }
       row.append(cell);
     });
