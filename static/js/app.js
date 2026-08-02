@@ -1091,6 +1091,8 @@ async function loadAccount() {
 
 async function loadWorkspaceHome() {
   if (!state.user) return;
+  const loading = el("workspace-recent-jobs");
+  if (loading) loading.textContent = VerigoI18n.text("正在加载任务…");
   const credits = Number(state.user.credits || 0) + Number(state.user.trial_credits || 0);
   el("workspace-credits").textContent = credits.toLocaleString("zh-CN");
   try {
@@ -1113,7 +1115,7 @@ async function loadWorkspaceHome() {
       item.append(name, meta);
       item.addEventListener("click", () => { switchView("single"); showJob(job); state.results = []; state.page = 0; loadResults(); }); list.append(item);
     });
-  } catch (error) { el("workspace-recent-jobs").textContent = VerigoI18n.text("任务加载失败，请稍后刷新。"); }
+  } catch (error) { el("workspace-recent-jobs").textContent = `${VerigoI18n.text("任务加载失败，请稍后刷新。")} ${error.message || ""}`; }
 }
 
 /* Lists were intentionally retired from the product UI. */
@@ -1661,6 +1663,7 @@ el("auth-form").addEventListener("submit", async (event) => {
       state.pendingView = null;
       switchView(nextView);
     }
+    if (state.user && state.view === "workspace") await loadWorkspaceHome();
   } catch (error) {
     el("auth-error").textContent = error.message;
   } finally {
