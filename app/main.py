@@ -166,6 +166,14 @@ def admin_credits() -> FileResponse:
 def wallet() -> FileResponse:
     return FileResponse(STATIC_DIR / "index.html", headers={"X-Robots-Tag": "noindex, nofollow"})
 
+@app.get("/workspace", include_in_schema=False)
+def workspace() -> FileResponse:
+    return FileResponse(STATIC_DIR / "index.html", headers={"X-Robots-Tag": "noindex, nofollow"})
+
+@app.get("/history", include_in_schema=False)
+def history() -> FileResponse:
+    return FileResponse(STATIC_DIR / "index.html", headers={"X-Robots-Tag": "noindex, nofollow"})
+
 
 @app.get("/privacy", include_in_schema=False)
 def privacy() -> FileResponse:

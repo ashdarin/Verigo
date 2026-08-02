@@ -30,6 +30,7 @@
       <button class="nav-item" type="button" data-view="batch">批量清洗</button>
       <button class="nav-item" type="button" data-view="discovery">邮箱查找</button>
       <button class="nav-item" type="button" data-view="history">历史记录</button>
+      <button id="workspace-nav" class="nav-item hidden" type="button" data-view="workspace">工作台</button>
       <a class="nav-item nav-link" href="/pricing">价格</a>
       <button id="api-nav" class="nav-item" type="button">API</button>
       <button id="dashboard-nav" class="nav-item hidden" type="button" data-view="dashboard">运营监控</button>
@@ -54,16 +55,47 @@
     </div>
   </header>
 
-  <section class="commercial-hero" aria-labelledby="commercial-hero-title">
+  <section class="commercial-hero public-marketing" aria-labelledby="commercial-hero-title">
     <div>
       <p class="eyebrow">EMAIL VERIFICATION</p>
       <h1 id="commercial-hero-title">验证邮箱是否可投递</h1>
-      <p>在发送邮件或导入客户名单前，快速识别无效邮箱，减少退信和无效触达。</p>
-      <div class="hero-actions"><a class="hero-primary" href="#verify-workspace">免费验证邮箱</a><a class="hero-secondary" href="/pricing">查看价格与额度</a></div>
-      <ul class="hero-points"><li>每天免费验证</li><li>无需信用卡</li><li>支持批量名单</li></ul>
+      <p>在发送邮件或导入名单前，先确认这个地址是否值得继续使用。</p>
+      <div class="hero-actions"><a class="hero-primary" href="#verify-workspace">免费验证一个邮箱</a><a class="hero-secondary" href="/pricing">查看价格与额度</a></div>
+      <ul class="hero-points"><li>单个验证免费</li><li>约 2 分钟内返回结果</li><li>支持 CSV / Excel 批量清洗</li></ul>
     </div>
-    <aside class="hero-proof" aria-label="产品能力概览"><strong>减少无效触达</strong><span>在发信、导入 CRM 或联系候选人前，先识别明显不可用的邮箱。</span><hr><strong>直接找到企业邮箱</strong><span>输入公司域名，查找用于销售开发、招聘和合作联络的工作邮箱。</span><hr><strong>按量付费，先免费体验</strong><span>单个邮箱验证免费；批量验证低至 ¥0.50 / 100 次。</span></aside>
+    <aside class="hero-proof" aria-label="验证结果预览">
+      <div class="preview-heading"><span>验证结果预览</span><small>示例数据</small></div>
+      <div class="preview-email"><strong>hello@company.com</strong><span class="result-pill result-good">可投递</span></div>
+      <div class="preview-row"><span>验证方式</span><strong>MX + SMTP</strong></div>
+      <div class="preview-row"><span>服务器响应</span><strong>250 Deliverable</strong></div>
+      <div class="preview-row"><span>处理时间</span><strong>约 2 分钟</strong></div>
+      <p class="preview-note">结果用于名单质量判断，不替代实际发信测试。</p>
+    </aside>
   </section>
+
+  <section class="trust-strip public-marketing" aria-label="服务事实">
+    <div><strong>多层检查</strong><span>语法、域名、MX 与 SMTP</span></div>
+    <div><strong>结果可解释</strong><span>状态、方式、服务器响应</span></div>
+    <div><strong>按量使用</strong><span>单个免费，批量按额度计费</span></div>
+  </section>
+
+  <main id="workspace-home" class="workspace-home hidden">
+    <section class="workspace-welcome">
+      <div><p class="eyebrow">VERIGO WORKSPACE</p><h1>今天先把名单质量做好</h1><p>从最近任务继续，或选择一个动作开始。</p></div>
+      <a class="hero-secondary" href="/api-docs">查看 API 文档</a>
+    </section>
+    <section class="workspace-metrics" aria-label="账户摘要">
+      <article><span>可用额度</span><strong id="workspace-credits">—</strong><small>批量验证</small></article>
+      <article><span>今日已处理</span><strong id="workspace-processed">—</strong><small>邮箱地址</small></article>
+      <article><span>可投递率</span><strong id="workspace-deliverable-rate">—</strong><small>最近任务</small></article>
+      <article><span>最近任务</span><strong id="workspace-job-count">—</strong><small>可继续查看</small></article>
+    </section>
+    <section class="workspace-grid">
+      <article class="workspace-card workspace-quick-start"><div class="workspace-card-heading"><div><p class="eyebrow">QUICK START</p><h2>选择下一步</h2></div></div><div class="quick-start-grid"><button type="button" data-view="single"><strong>验证一个邮箱</strong><span>快速判断地址是否可投递</span></button><button type="button" data-view="batch"><strong>清洗一份名单</strong><span>导入 CSV 或 Excel 批量处理</span></button><button type="button" data-view="discovery"><strong>查找企业邮箱</strong><span>从姓名和域名开始寻找候选地址</span></button></div></article>
+      <article class="workspace-card"><div class="workspace-card-heading"><div><p class="eyebrow">RECENT JOBS</p><h2>最近任务</h2></div><button id="workspace-history-link" class="text-action" type="button">查看全部</button></div><div id="workspace-recent-jobs" class="workspace-recent-jobs"><p class="workspace-empty">正在加载任务…</p></div></article>
+    </section>
+    <section class="workspace-help"><div><strong>需要接入自动化流程？</strong><span>使用 API Key 将验证能力接入 CRM、表单或内部工具。</span></div><button id="workspace-api-button" class="download-action" type="button">管理 API Key</button></section>
+  </main>
 
   <main id="verify-workspace" class="workspace">
     <aside class="control-panel">
@@ -176,17 +208,17 @@
     </section>
   </main>
 
-  <section class="commercial-section" aria-labelledby="solutions-title">
+  <section class="commercial-section public-marketing" aria-labelledby="solutions-title">
     <div class="commercial-heading"><p class="eyebrow">一条可行动的工作流</p><h2 id="solutions-title">从名单质量到目标企业邮箱</h2><p>选择你当前最需要完成的动作，几分钟内得到可用于下一步决策的结果。</p></div>
     <div class="solution-grid"><article><span>01</span><h3>验证单个邮箱</h3><p>在回复、邀请或导入 CRM 前，快速判断一个邮箱是否值得继续使用。</p><a href="#verify-workspace">立即验证</a></article><article><span>02</span><h3>批量清洗名单</h3><p>导入 CSV 或 Excel，识别明显不可用的地址，让营销和销售名单更干净。</p><a href="#verify-workspace" data-commercial-view="batch">批量清洗</a></article><article><span>03</span><h3>企业邮箱查找</h3><p>输入目标公司域名，找到适合销售开发、招聘和商务合作的工作邮箱。</p><a href="#verify-workspace" data-commercial-view="discovery">查找企业邮箱</a></article></div>
   </section>
 
-  <section class="commercial-section trust-section" aria-labelledby="trust-title">
+  <section class="commercial-section trust-section public-marketing" aria-labelledby="trust-title">
     <div class="commercial-heading"><p class="eyebrow">为业务动作而设计</p><h2 id="trust-title">让下一封邮件、更值得发出去</h2></div>
     <div class="trust-grid"><article><h3>保护发信信誉</h3><p>在发送前排除明显无效邮箱，减少退信对发件域名和账号信誉的影响。</p></article><article><h3>更快启动企业开发</h3><p>不用先拿到姓名或猜邮箱格式；从目标企业域名开始，直接查找可联系的工作邮箱。</p></article><article><h3>适合团队工作流</h3><p>支持 Excel、CSV、批量任务和 API，可在 CRM 导入、活动发送或招聘触达前完成检查。</p></article></div>
   </section>
 
-  <section class="commercial-section faq-section" aria-labelledby="faq-title">
+  <section class="commercial-section faq-section public-marketing" aria-labelledby="faq-title">
     <div class="commercial-heading"><p class="eyebrow">常见问题</p><h2 id="faq-title">购买或开始验证前，你需要知道这些</h2></div>
     <details><summary>批量验证怎么收费？</summary><p>批量验证按额度计费，当前公开价格为 ¥0.50 / 100 次。单个邮箱验证和企业邮箱查找可免费开始使用。</p></details>
     <details><summary>Catch-all 邮箱是什么意思？</summary><p>Catch-all 是企业邮箱域名的一种设置：例如对方公司启用它后，发往任意前缀的邮件都可能被服务器接收或转发。因此服务器的“接受”响应不能证明某个具体员工邮箱真实存在，建议单独处理。</p></details>

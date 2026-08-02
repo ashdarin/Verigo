@@ -1,5 +1,6 @@
 const state = {
-  view: window.location.pathname === "/dashboard"
+  view: window.location.pathname === "/workspace" ? "workspace"
+    : window.location.pathname === "/dashboard"
     ? "dashboard"
     : window.location.pathname === "/admin/credits" ? "admin-credits" : window.location.pathname === "/wallet" ? "wallet" : "single",
   mode: "paste",
@@ -24,6 +25,8 @@ const state = {
   retryCountdownTimer: null,
   onboardingTimer: null,
   history: { offset: 0, limit: 10, total: 0 },
+  workspace: { loaded: false },
+  pendingView: null,
 };
 
 const pageSize = 50;
@@ -143,7 +146,9 @@ function switchView(view) {
   const adminCredits = view === "admin-credits";
   const wallet = view === "wallet";
   const history = view === "history";
+  const workspace = view === "workspace";
   if ((wallet || history) && !state.user) { el("auth-dialog").showModal(); setAuthMode("login"); el("auth-error").textContent = "Please sign in to view account data"; return; }
+  if (workspace && !state.user) { state.pendingView = "workspace"; el("auth-dialog").showModal(); setAuthMode("login"); el("auth-error").textContent = "Please sign in to open your workspace"; return; }
   if (discovery && !state.user) {
     el("auth-dialog").showModal();
     setAuthMode("login");
@@ -151,7 +156,9 @@ function switchView(view) {
     return;
   }
   state.view = view;
-  el("verify-workspace").classList.toggle("hidden", discovery || dashboard || adminCredits || wallet || history);
+  document.querySelectorAll(".public-marketing").forEach((section) => section.classList.toggle("workspace-mode-hidden", workspace));
+  el("verify-workspace").classList.toggle("hidden", discovery || dashboard || adminCredits || wallet || history || workspace);
+  el("workspace-home").classList.toggle("hidden", !workspace);
   el("discovery-workspace").classList.toggle("hidden", !discovery);
   el("dashboard-workspace").classList.toggle("hidden", !dashboard);
   el("admin-credits-workspace").classList.toggle("hidden", !adminCredits);
@@ -187,17 +194,21 @@ function switchView(view) {
     document.title = "历史记录 | Verigo";
     if (window.location.pathname !== "/history") window.history.pushState({}, "", "/history");
     loadHistoryPage();
+  } else if (workspace) {
+    document.title = "Workspace | Verigo";
+    if (window.location.pathname !== "/workspace") window.history.pushState({}, "", "/workspace");
+    loadWorkspaceHome();
   } else {
     document.title = "Verigo";
     clearInterval(state.metricsTimer);
     state.metricsTimer = null;
-    if (["/dashboard", "/admin/credits", "/wallet", "/history"].includes(window.location.pathname)) window.history.replaceState({}, "", "/");
+    if (["/dashboard", "/admin/credits", "/wallet", "/history", "/workspace"].includes(window.location.pathname)) window.history.replaceState({}, "", "/");
   }
   updateCount();
 }
 
 window.addEventListener("popstate", () => {
-  const pathView = { "/dashboard": "dashboard", "/admin/credits": "admin-credits", "/wallet": "wallet", "/history": "history" }[window.location.pathname] || "single";
+  const pathView = { "/workspace": "workspace", "/dashboard": "dashboard", "/admin/credits": "admin-credits", "/wallet": "wallet", "/history": "history" }[window.location.pathname] || "single";
   switchView(pathView);
 });
 
@@ -1070,6 +1081,7 @@ function updateAccount() {
   el("dashboard-nav").classList.toggle("hidden", !state.user?.is_admin);
   el("admin-credits-nav").classList.toggle("hidden", !state.user?.is_admin);
   el("wallet-nav").classList.toggle("hidden", !state.user);
+  el("workspace-nav").classList.toggle("hidden", !state.user);
   el("notification-button").classList.toggle("hidden", !state.user);
   el("claim-trial-button").classList.toggle(
     "hidden", !state.user || state.user.needs_email_binding || state.user.email_verified,
@@ -1094,6 +1106,37 @@ window.addEventListener("verigo:localechange", () => {
 async function loadAccount() {
   try { state.user = await api("/api/auth/me"); } catch (_) { state.user = null; }
   updateAccount();
+}
+
+async function loadWorkspaceHome() {
+  if (!state.user) return;
+  const credits = Number(state.user.credits || 0) + Number(state.user.trial_credits || 0);
+  el("workspace-credits").textContent = credits.toLocaleString("zh-CN");
+  try {
+    const data = await api("/api/jobs?offset=0&limit=8");
+    const jobs = data.items || [];
+    el("workspace-job-count").textContent = Number(data.total || jobs.length).toLocaleString("zh-CN");
+    const today = new Date();
+    const dayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
+    const processed = jobs.reduce((sum, job) => {
+      const created = Date.parse(job.created_at || "");
+      return created >= dayStart ? sum + Number(job.completed || 0) : sum;
+    }, 0);
+    el("workspace-processed").textContent = processed.toLocaleString("zh-CN");
+    const rates = jobs.map((job) => Number(job.summary?.deliverable || 0) / Math.max(1, Number(job.summary?.total || job.total || 0))).filter(Number.isFinite);
+    el("workspace-deliverable-rate").textContent = rates.length ? `${Math.round(rates.reduce((a, b) => a + b, 0) / rates.length * 100)}%` : "—";
+    const list = el("workspace-recent-jobs"); list.replaceChildren();
+    if (!jobs.length) { const empty = document.createElement("p"); empty.className = "workspace-empty"; empty.textContent = "还没有任务，先验证一个邮箱吧。"; list.append(empty); }
+    jobs.slice(0, 5).forEach((job) => {
+      const item = document.createElement("button"); item.type = "button"; item.className = "workspace-job-row";
+      const name = document.createElement("strong");
+      name.textContent = formatJobName(job.created_at);
+      const meta = document.createElement("span");
+      meta.textContent = `${VerigoI18n.text(statusLabels[job.status] || job.status)} · ${Number(job.total || 0).toLocaleString("zh-CN")} 个邮箱`;
+      item.append(name, meta);
+      item.addEventListener("click", () => { switchView("single"); showJob(job); state.results = []; state.page = 0; loadResults(); }); list.append(item);
+    });
+  } catch (error) { el("workspace-recent-jobs").textContent = "任务加载失败，请稍后刷新。"; }
 }
 
 el("dashboard-refresh").addEventListener("click", loadDashboardMetrics);
@@ -1634,6 +1677,11 @@ el("auth-form").addEventListener("submit", async (event) => {
     // prominent trial-credit action and can be completed when the user is ready.
     if (window.location.pathname === "/dashboard" && state.user.is_admin) switchView("dashboard");
     if (window.location.pathname === "/admin/credits" && state.user.is_admin) switchView("admin-credits");
+    if (state.pendingView && state.user) {
+      const nextView = state.pendingView;
+      state.pendingView = null;
+      switchView(nextView);
+    }
   } catch (error) {
     el("auth-error").textContent = error.message;
   } finally {
@@ -1677,14 +1725,27 @@ el("reset-confirm-form").addEventListener("submit", async (event) => {
 });
 
 el("refresh-jobs").addEventListener("click", loadRecentJobs);
+el("workspace-history-link")?.addEventListener("click", () => switchView("history"));
+el("workspace-api-button")?.addEventListener("click", () => el("api-nav").click());
+document.querySelectorAll("#workspace-home [data-view]").forEach((button) => button.addEventListener("click", () => switchView(button.dataset.view)));
 
 (async function init() {
   setAuthMode(state.authMode);
   updateCount();
   await loadAccount();
   await loadPublicConfig();
-  if (["/dashboard", "/admin/credits", "/wallet"].includes(window.location.pathname)) {
-    if (window.location.pathname === "/wallet" && state.user) {
+  if (["/workspace", "/dashboard", "/admin/credits", "/wallet"].includes(window.location.pathname)) {
+    if (window.location.pathname === "/workspace" && state.user) {
+      switchView("workspace");
+    } else if (window.location.pathname === "/workspace" && !state.user) {
+      window.history.replaceState({}, "", "/");
+      switchView("single");
+      state.pendingView = "workspace";
+      el("auth-dialog").showModal();
+      setAuthMode("login");
+      el("auth-error").textContent = "Please sign in to open your workspace";
+      return;
+    } else if (window.location.pathname === "/wallet" && state.user) {
       switchView("wallet");
     } else if (state.user?.is_admin) {
       switchView(window.location.pathname === "/admin/credits" ? "admin-credits" : "dashboard");

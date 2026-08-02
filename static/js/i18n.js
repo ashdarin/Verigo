@@ -109,6 +109,12 @@ const VerigoI18n = (() => {
     const text = String(value || "");
     if (locale !== "en") return text;
     const nativeEnglish = {
+      "工作台": "Workspace", "批量清洗": "List cleaning", "邮箱查找": "Email finder",
+      "验证邮箱是否可投递": "Check if an email is deliverable", "在发送邮件或导入名单前，先确认这个地址是否值得继续使用。": "Confirm an address is worth using before sending or importing a list.",
+      "免费验证一个邮箱": "Verify one email free", "查看价格与额度": "View pricing and credits", "单个验证免费": "Single check is free", "约 2 分钟内返回结果": "Results usually return within 2 minutes", "支持 CSV / Excel 批量清洗": "CSV / Excel list cleaning",
+      "验证结果预览": "Verification preview", "示例数据": "Example data", "可投递": "Deliverable", "验证方式": "Verification method", "服务器响应": "Server response", "处理时间": "Processing time", "约 2 分钟": "About 2 minutes", "结果用于名单质量判断，不替代实际发信测试。": "Use results for list decisions; they do not replace a real send test.",
+      "多层检查": "Layered checks", "语法、域名、MX 与 SMTP": "Syntax, domain, MX, and SMTP", "结果可解释": "Explainable results", "状态、方式、服务器响应": "Status, method, and server response", "按量使用": "Pay as you go", "单个免费，批量按额度计费": "Single checks free; bulk uses credits",
+      "今天先把名单质量做好": "Improve list quality today", "从最近任务继续，或选择一个动作开始。": "Continue a recent job or choose an action to begin.", "查看 API 文档": "View API docs", "账户摘要": "Account summary", "可用额度": "Available credits", "批量验证": "Bulk verification", "今日已处理": "Processed today", "邮箱地址": "Email addresses", "最近任务": "Recent jobs", "可继续查看": "Available to reopen", "选择下一步": "Choose your next step", "验证一个邮箱": "Verify one email", "快速判断地址是否可投递": "Quickly check deliverability", "清洗一份名单": "Clean a list", "导入 CSV 或 Excel 批量处理": "Import CSV or Excel in bulk", "查找企业邮箱": "Find company emails", "从姓名和域名开始寻找候选地址": "Find candidates by name and domain", "需要接入自动化流程？": "Need an automated workflow?", "使用 API Key 将验证能力接入 CRM、表单或内部工具。": "Connect verification to your CRM, forms, or internal tools with an API key.", "管理 API Key": "Manage API keys", "查看全部": "View all", "还没有任务，先验证一个邮箱吧。": "No jobs yet. Verify an email to get started.", "任务加载失败，请稍后刷新。": "Unable to load jobs. Please refresh later.",
       "邮箱验证": "Email verification", "邮箱查找": "Email finder", "历史记录": "History", "价格": "Pricing",
       "额度与账单": "Credits & billing", "验证邮箱是否可投递": "Check if an email is deliverable",
       "在发送邮件或导入客户名单前，快速识别无效邮箱，减少退信和无效触达。": "Identify invalid emails before sending or importing lists.",
