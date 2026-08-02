@@ -110,6 +110,8 @@ const VerigoI18n = (() => {
     if (locale !== "en") return text;
     const nativeEnglish = {
       "工作台": "Workspace", "批量清洗": "List cleaning", "邮箱查找": "Email finder",
+      "个邮箱": "emails", "还没有任务，先验证一个邮箱吧。": "No jobs yet. Verify an email to get started.", "任务加载失败，请稍后刷新。": "Unable to load jobs. Please refresh later.", "请先登录后查看账户数据": "Sign in to view account data", "请先登录后打开工作台": "Sign in to open your workspace",
+      "运营监控": "Operations", "额度管理": "Credit management", "资金与使用": "Credits & billing", "历史记录": "History",
       "验证邮箱是否可投递": "Check if an email is deliverable", "在发送邮件或导入名单前，先确认这个地址是否值得继续使用。": "Confirm an address is worth using before sending or importing a list.",
       "免费验证一个邮箱": "Verify one email free", "查看价格与额度": "View pricing and credits", "单个验证免费": "Single check is free", "约 2 分钟内返回结果": "Results usually return within 2 minutes", "支持 CSV / Excel 批量清洗": "CSV / Excel list cleaning",
       "验证结果预览": "Verification preview", "示例数据": "Example data", "可投递": "Deliverable", "验证方式": "Verification method", "服务器响应": "Server response", "处理时间": "Processing time", "约 2 分钟": "About 2 minutes", "结果用于名单质量判断，不替代实际发信测试。": "Use results for list decisions; they do not replace a real send test.",

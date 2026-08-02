@@ -7,6 +7,8 @@ import hmac
 import json
 import time
 import uuid
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from io import StringIO
 from typing import Annotated
 from urllib.parse import quote
@@ -1396,6 +1398,36 @@ def list_jobs(
     return {
         "total": total, "offset": offset, "limit": limit,
         "items": [serialize_job(job) for job in jobs],
+    }
+
+@router.get("/workspace")
+def workspace_snapshot(user: Annotated[User, Depends(require_user)]) -> dict[str, object]:
+    """Return workspace aggregates with server-side Asia/Shanghai day semantics."""
+    total, jobs = job_store.page_for_owner(user.id, offset=0, limit=50)
+    all_jobs = list(jobs)
+    offset = len(all_jobs)
+    while offset < total:
+        _, page = job_store.page_for_owner(user.id, offset=offset, limit=50)
+        if not page:
+            break
+        all_jobs.extend(page)
+        offset += len(page)
+    today = datetime.now(ZoneInfo("Asia/Shanghai")).date()
+    processed_today = 0
+    deliverable = 0
+    settled = 0
+    for job in all_jobs:
+        if job.created_at.astimezone(ZoneInfo("Asia/Shanghai")).date() == today:
+            processed_today += max(0, int(job_progress(job)[0]))
+        overview = job_store.result_overview(job.id)
+        deliverable += max(0, int(overview.deliverable))
+        settled += max(0, int(overview.total))
+    return {
+        "total": total,
+        "processed_today": processed_today,
+        "deliverable": deliverable,
+        "settled": settled,
+        "items": [serialize_job(job) for job in all_jobs[:8]],
     }
 
 

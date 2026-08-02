@@ -147,7 +147,7 @@ function switchView(view) {
   const wallet = view === "wallet";
   const history = view === "history";
   const workspace = view === "workspace";
-  if ((wallet || history) && !state.user) { el("auth-dialog").showModal(); setAuthMode("login"); el("auth-error").textContent = "Please sign in to view account data"; return; }
+  if ((wallet || history) && !state.user) { state.pendingView = view; el("auth-dialog").showModal(); setAuthMode("login"); el("auth-error").textContent = VerigoI18n.text("请先登录后查看账户数据"); return; }
   if (workspace && !state.user) { state.pendingView = "workspace"; el("auth-dialog").showModal(); setAuthMode("login"); el("auth-error").textContent = "Please sign in to open your workspace"; return; }
   if (discovery && !state.user) {
     el("auth-dialog").showModal();
@@ -174,24 +174,24 @@ function switchView(view) {
     button.classList.toggle("active", button.dataset.view === view);
   });
   if (dashboard) {
-    document.title = "运营监控 | Verigo";
+    document.title = `${VerigoI18n.text("运营监控")} | Verigo`;
     if (window.location.pathname !== "/dashboard") window.history.pushState({}, "", "/dashboard");
     loadDashboardMetrics();
     clearInterval(state.metricsTimer);
     state.metricsTimer = window.setInterval(loadDashboardMetrics, 30000);
   } else if (adminCredits) {
-    document.title = "额度管理 | Verigo";
+    document.title = `${VerigoI18n.text("额度管理")} | Verigo`;
     if (window.location.pathname !== "/admin/credits") window.history.pushState({}, "", "/admin/credits");
     clearInterval(state.metricsTimer);
     state.metricsTimer = null;
     loadAdminAccounts();
     loadAdminFeatureUsage();
   } else if (wallet) {
-    document.title = "资金与使用 | Verigo";
+    document.title = `${VerigoI18n.text("资金与使用")} | Verigo`;
     if (window.location.pathname !== "/wallet") window.history.pushState({}, "", "/wallet");
     loadWallet();
   } else if (history) {
-    document.title = "历史记录 | Verigo";
+    document.title = `${VerigoI18n.text("历史记录")} | Verigo`;
     if (window.location.pathname !== "/history") window.history.pushState({}, "", "/history");
     loadHistoryPage();
   } else if (workspace) {
@@ -1113,30 +1113,24 @@ async function loadWorkspaceHome() {
   const credits = Number(state.user.credits || 0) + Number(state.user.trial_credits || 0);
   el("workspace-credits").textContent = credits.toLocaleString("zh-CN");
   try {
-    const data = await api("/api/jobs?offset=0&limit=8");
+    const data = await api("/api/workspace");
     const jobs = data.items || [];
-    el("workspace-job-count").textContent = Number(data.total || jobs.length).toLocaleString("zh-CN");
-    const today = new Date();
-    const dayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
-    const processed = jobs.reduce((sum, job) => {
-      const created = Date.parse(job.created_at || "");
-      return created >= dayStart ? sum + Number(job.completed || 0) : sum;
-    }, 0);
-    el("workspace-processed").textContent = processed.toLocaleString("zh-CN");
-    const rates = jobs.map((job) => Number(job.summary?.deliverable || 0) / Math.max(1, Number(job.summary?.total || job.total || 0))).filter(Number.isFinite);
-    el("workspace-deliverable-rate").textContent = rates.length ? `${Math.round(rates.reduce((a, b) => a + b, 0) / rates.length * 100)}%` : "—";
+    const locale = VerigoI18n.locale === "en" ? "en-US" : "zh-CN";
+    el("workspace-job-count").textContent = Number(data.total || jobs.length).toLocaleString(locale);
+    el("workspace-processed").textContent = Number(data.processed_today || 0).toLocaleString(locale);
+    el("workspace-deliverable-rate").textContent = Number(data.settled || 0) ? `${Math.round(Number(data.deliverable || 0) / Number(data.settled) * 100)}%` : "—";
     const list = el("workspace-recent-jobs"); list.replaceChildren();
-    if (!jobs.length) { const empty = document.createElement("p"); empty.className = "workspace-empty"; empty.textContent = "还没有任务，先验证一个邮箱吧。"; list.append(empty); }
+    if (!jobs.length) { const empty = document.createElement("p"); empty.className = "workspace-empty"; empty.textContent = VerigoI18n.text("还没有任务，先验证一个邮箱吧。"); list.append(empty); }
     jobs.slice(0, 5).forEach((job) => {
       const item = document.createElement("button"); item.type = "button"; item.className = "workspace-job-row";
       const name = document.createElement("strong");
       name.textContent = formatJobName(job.created_at);
       const meta = document.createElement("span");
-      meta.textContent = `${VerigoI18n.text(statusLabels[job.status] || job.status)} · ${Number(job.total || 0).toLocaleString("zh-CN")} 个邮箱`;
+      meta.textContent = `${VerigoI18n.text(statusLabels[job.status] || job.status)} · ${Number(job.total || 0).toLocaleString(locale)} ${VerigoI18n.text("个邮箱")}`;
       item.append(name, meta);
       item.addEventListener("click", () => { switchView("single"); showJob(job); state.results = []; state.page = 0; loadResults(); }); list.append(item);
     });
-  } catch (error) { el("workspace-recent-jobs").textContent = "任务加载失败，请稍后刷新。"; }
+  } catch (error) { el("workspace-recent-jobs").textContent = VerigoI18n.text("任务加载失败，请稍后刷新。"); }
 }
 
 el("dashboard-refresh").addEventListener("click", loadDashboardMetrics);
@@ -1734,7 +1728,7 @@ document.querySelectorAll("#workspace-home [data-view]").forEach((button) => but
   updateCount();
   await loadAccount();
   await loadPublicConfig();
-  if (["/workspace", "/dashboard", "/admin/credits", "/wallet"].includes(window.location.pathname)) {
+  if (["/workspace", "/history", "/dashboard", "/admin/credits", "/wallet"].includes(window.location.pathname)) {
     if (window.location.pathname === "/workspace" && state.user) {
       switchView("workspace");
     } else if (window.location.pathname === "/workspace" && !state.user) {
@@ -1744,6 +1738,15 @@ document.querySelectorAll("#workspace-home [data-view]").forEach((button) => but
       el("auth-dialog").showModal();
       setAuthMode("login");
       el("auth-error").textContent = "Please sign in to open your workspace";
+      return;
+    } else if (window.location.pathname === "/history" && state.user) {
+      switchView("history");
+    } else if (window.location.pathname === "/history" && !state.user) {
+      window.history.replaceState({}, "", "/");
+      state.pendingView = "history";
+      el("auth-dialog").showModal();
+      setAuthMode("login");
+      el("auth-error").textContent = VerigoI18n.text("请先登录后查看账户数据");
       return;
     } else if (window.location.pathname === "/wallet" && state.user) {
       switchView("wallet");
