@@ -575,6 +575,7 @@ function renderResults() {
   rows.forEach((item) => {
     const [label, className] = resultMeta(item);
     const row = document.createElement("tr");
+    row.className = "result-email-row";
     const values = [
       item.email,
       label,
@@ -837,6 +838,7 @@ function renderDiscoveryResults() {
   state.discovery.results.forEach((item) => {
     const [label, className] = resultMeta(item);
     const row = document.createElement("tr");
+    row.className = "result-email-row";
     [
       item.email,
       label,
@@ -844,7 +846,16 @@ function renderDiscoveryResults() {
       VerigoI18n.resultValue(item.smtp_result || item.message || "-"),
     ].forEach((value, index) => {
       const cell = document.createElement("td");
-      if (index === 1) {
+      if (index === 0) {
+        cell.className = "result-email-cell";
+        const content = document.createElement("span"); content.className = "result-email-content";
+        const valueNode = document.createElement("span"); valueNode.className = "result-email-value"; valueNode.textContent = value;
+        const copy = document.createElement("button"); copy.type = "button"; copy.className = "copy-button result-copy-button";
+        copy.setAttribute("aria-label", VerigoI18n.text("复制邮箱")); copy.title = VerigoI18n.text("复制邮箱");
+        copy.innerHTML = '<i class="fa-regular fa-copy" aria-hidden="true"></i>';
+        copy.addEventListener("click", (event) => { event.stopPropagation(); copyEmailValue(item.email, copy); });
+        content.append(valueNode, copy); cell.append(content);
+      } else if (index === 1) {
         const pill = document.createElement("span");
         pill.className = `result-pill ${className}`;
         pill.textContent = value;
