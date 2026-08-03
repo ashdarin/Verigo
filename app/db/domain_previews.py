@@ -11,7 +11,7 @@ from typing import Any
 from app.config import settings
 from app.db.sqlite import connect as connect_sqlite
 
-CACHE_SCHEMA_VERSION = 5
+CACHE_SCHEMA_VERSION = 7
 
 
 class DomainPreviewStore:
@@ -74,6 +74,31 @@ class DomainPreviewStore:
                 """,
                 (domain, serialized, now, now),
             )
+
+    def suggestions(self, prefix: str) -> list[dict[str, Any]]:
+        """Return only domains previously verified and stored in the cache."""
+        self._ensure_schema()
+        with closing(self._connect()) as connection:
+            rows = connection.execute("SELECT domain, payload_json FROM domain_relation_cache WHERE domain NOT LIKE 'query:%'").fetchall()
+        matches: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            try:
+                payload = json.loads(row[1])
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if not isinstance(payload, dict) or payload.get("cache_version") != CACHE_SCHEMA_VERSION:
+                continue
+            root = str(payload.get("domain") or row[0])
+            candidates = [{"domain": root, "url": payload.get("url"), "title": payload.get("title"), "legal_name": payload.get("title"), "verified": True}]
+            candidates.extend(payload.get("related_domains") or [])
+            for item in candidates:
+                if not isinstance(item, dict) or not item.get("verified", True):
+                    continue
+                candidate = str(item.get("domain") or "").lower()
+                stem = candidate.split(".", 1)[0]
+                if candidate and stem.startswith(prefix) and candidate not in matches:
+                    matches[candidate] = dict(item)
+        return list(matches.values())[:24]
 
 
 domain_preview_store = DomainPreviewStore()

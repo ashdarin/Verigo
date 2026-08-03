@@ -118,8 +118,9 @@ def _normalize_domain_query(value: str) -> str:
 def _domain_suggestions(query: str) -> list[dict[str, object]]:
     if "." in query:
         return []
+    cached = domain_preview_store.suggestions(query)
     stems = [stem for stem in KNOWN_DOMAIN_CATALOG if stem.startswith(query)]
-    domains: list[str] = []
+    domains: list[str] = [str(item.get("domain")) for item in cached if item.get("domain")]
     for stem in stems:
         domains.extend(KNOWN_DOMAIN_CATALOG[stem])
     if not domains:
@@ -134,11 +135,12 @@ def _domain_suggestions(query: str) -> list[dict[str, object]]:
         if legal_name:
             return legal_name
         return stem.title()
+    cached_by_domain = {str(item.get("domain")): item for item in cached if item.get("domain")}
     return [
         {
             "domain": domain,
-            "url": f"https://{domain}",
-            "title": suggestion_title(domain, next((stem for stem, values in KNOWN_DOMAIN_CATALOG.items() if domain in values), None)),
+            "url": cached_by_domain.get(domain, {}).get("url") or f"https://{domain}",
+            "title": cached_by_domain.get(domain, {}).get("legal_name") or cached_by_domain.get(domain, {}).get("title") or suggestion_title(domain, next((stem for stem, values in KNOWN_DOMAIN_CATALOG.items() if domain in values), None)),
             "logo_url": f"https://logos.hunter.io/{domain}",
         }
         for domain in dict.fromkeys(domains[:16])

@@ -198,6 +198,8 @@ def discover_related(domain: str, title: str | None = None) -> tuple[list[dict[s
                 "url": f"https://{candidate}",
                 "country": suffix.upper(),
                 "title": f"{brand} {COUNTRY_NAMES.get(suffix, suffix.upper())}".strip(),
+                "verified": True,
+                "identity_confidence": "unconfirmed",
             }
         except Exception: return None
     if catalogued:
@@ -214,7 +216,7 @@ def discover_related(domain: str, title: str | None = None) -> tuple[list[dict[s
                           list(pool.map(lambda item: resolve_official_entity(str(item["domain"])), related)))
     for item, resolved in zip(related, entity_results):
         if resolved:
-            item.update(resolved, title=resolved["legal_name"])
+            item.update(resolved, title=resolved["legal_name"], identity_confidence=resolved.get("confidence", "medium"))
     entities = [title] if title else []
     main_suffix = "uk" if domain.endswith(".co.uk") else domain.rsplit(".", 1)[-1].lower()
     main_entity = None
@@ -243,4 +245,5 @@ def discover_related(domain: str, title: str | None = None) -> tuple[list[dict[s
             item["title"] = resolved_name
             if sld in LEGAL_ENTITY_OVERRIDES and suffix in LEGAL_ENTITY_OVERRIDES[sld]:
                 item["legal_name"] = resolved_name
+                item["identity_confidence"] = "high"
     return related, entities[:8]

@@ -951,7 +951,8 @@ function createDomainPreviewRow(item, { primary = false, selectable = false } = 
   const copy = document.createElement("div");
   copy.className = "domain-preview-copy";
   const title = document.createElement("strong");
-  title.textContent = item.title || item.entity || (primary ? `${previewBrandName(domain)} Official Website` : previewCountryName(item.country));
+  const legalNameUnconfirmed = item.identity_confidence === "unconfirmed" && !item.legal_name;
+  title.textContent = legalNameUnconfirmed ? "Legal entity name not confirmed" : (item.title || item.entity || (primary ? `${previewBrandName(domain)} Official Website` : previewCountryName(item.country)));
   const domainText = document.createElement("span");
   domainText.textContent = domain;
   copy.append(title, domainText);
