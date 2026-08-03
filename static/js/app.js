@@ -930,6 +930,10 @@ function domainLogoUrl(item) {
   const domain = item.domain || "";
   return item.logo_url || `https://logos.hunter.io/${domain}`;
 }
+const previewCountryNames = { DE: "Germany", NL: "Netherlands", FR: "France", IT: "Italy", ES: "Spain", BE: "Belgium", CH: "Switzerland", AT: "Austria", UK: "United Kingdom", SG: "Singapore", AE: "United Arab Emirates", AU: "Australia", ZA: "South Africa", IN: "India", CN: "China", JP: "Japan", KR: "South Korea", HK: "Hong Kong", TW: "Taiwan" };
+function previewCountryName(country) {
+  return previewCountryNames[String(country || "").toUpperCase()] || "Related site";
+}
 function createDomainPreviewRow(item, { primary = false, selectable = false } = {}) {
   const domain = item.domain || "";
   const row = document.createElement("article");
@@ -994,15 +998,24 @@ async function previewDomain(value) {
       status.textContent = "请选择一个匹配的域名继续";
       return;
     }
-    renderDomainPreviewRows([{ domain: response.domain, url: response.url, title: response.title || "官网已识别", logo_url: response.logo_url }], { primary: true });
+    const primary = { domain: response.domain, url: response.url, title: response.title || "官网已识别", logo_url: response.logo_url };
+    const cachedRelated = (response.related_domains || []).map((item, index) => ({
+      ...item,
+      title: item.title || response.entities?.[index] || previewCountryName(item.country),
+    })).slice(0, 8);
+    renderDomainPreviewRows([primary, ...cachedRelated], { primary: !cachedRelated.length });
+    if (!response.relations_pending) {
+      status.textContent = cachedRelated.length ? "官网及关联站点" : "未发现可确认的关联站点";
+      return;
+    }
     status.textContent = response.reachable ? "正在补充关联站点…" : "域名暂时无法访问，仍可继续提交邮箱查找";
     api(`/api/domain-relations?q=${encodeURIComponent(domain)}`).then((relations) => {
       if (requestId !== domainPreviewRequestId) return;
       const related = (relations.related_domains || []).map((item, index) => ({
         ...item,
-        title: item.title || relations.entities?.[index] || item.country || "关联站点",
+        title: item.title || relations.entities?.[index] || previewCountryName(item.country),
       })).slice(0, 8);
-      if (related.length) renderDomainPreviewRows([{ domain: response.domain, url: response.url, title: response.title || "官网已识别", logo_url: response.logo_url }, ...related]);
+      if (related.length) renderDomainPreviewRows([primary, ...related]);
       status.textContent = related.length ? "官网及关联站点" : "未发现可确认的关联站点";
     }).catch(() => { if (requestId === domainPreviewRequestId) status.textContent = "关联站点暂不可用"; });
   } catch (error) {

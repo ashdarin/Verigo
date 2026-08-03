@@ -80,6 +80,7 @@ from app.core.provider_policy import (
     yahoo_addresses,
 )
 from app.db.auth import User, auth_store
+from app.db.domain_previews import domain_preview_store
 from app.db.jobs import Job, job_store, utc_now
 from app.db.metrics import metrics_store
 from app.db.prospecting import ProspectingRun, prospecting_store
@@ -897,6 +898,18 @@ def domain_preview(
         )
     if not re.fullmatch(r"(?=.{3,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}", domain):
         raise HTTPException(status_code=422, detail="请输入有效的公司域名")
+    cached = domain_preview_store.get(domain)
+    if cached is not None:
+        return DomainPreviewResponse(
+            domain=domain,
+            url=cached.get("url") or f"https://{domain}",
+            title=cached.get("title"),
+            reachable=bool(cached.get("reachable")),
+            related_domains=cached.get("related_domains") or [],
+            entities=cached.get("entities") or [],
+            logo_url=cached.get("logo_url") or f"https://logos.hunter.io/{domain}",
+            relations_pending=False,
+        )
     try:
         addresses = {ipaddress.ip_address(item[4][0]) for item in socket.getaddrinfo(domain, 443, type=socket.SOCK_STREAM)}
         if not addresses or any(not address.is_global for address in addresses):
@@ -930,9 +943,30 @@ def domain_relations(q: str = Query(min_length=3, max_length=253)) -> DomainPrev
         )
     if not re.fullmatch(r"(?=.{3,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}", domain):
         raise HTTPException(status_code=422, detail="请输入有效的公司域名")
+    cached = domain_preview_store.get(domain)
+    if cached is not None:
+        return DomainPreviewResponse(
+            domain=domain,
+            url=cached.get("url") or f"https://{domain}",
+            title=cached.get("title"),
+            reachable=bool(cached.get("reachable")),
+            related_domains=cached.get("related_domains") or [],
+            entities=cached.get("entities") or [],
+            logo_url=cached.get("logo_url") or f"https://logos.hunter.io/{domain}",
+            relations_pending=False,
+        )
     related_domains, entities = discover_related(domain)
-    return DomainPreviewResponse(domain=domain, url=f"https://{domain}", related_domains=related_domains, entities=entities,
-        logo_url=f"https://logos.hunter.io/{domain}")
+    payload = {
+        "domain": domain,
+        "url": f"https://{domain}",
+        "related_domains": related_domains,
+        "entities": entities,
+        "logo_url": f"https://logos.hunter.io/{domain}",
+        "reachable": bool(related_domains),
+    }
+    domain_preview_store.put(domain, payload)
+    return DomainPreviewResponse(domain=domain, url=payload["url"], related_domains=related_domains, entities=entities,
+        logo_url=payload["logo_url"], relations_pending=False)
 
 
 @router.post("/discovery/verify", response_model=JobResponse, status_code=202)
