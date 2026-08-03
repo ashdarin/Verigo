@@ -38,6 +38,19 @@ SUGGESTION_SEEDS: tuple[tuple[str, str, str, int], ...] = (
     ("dieseltechnic.sg", "Diesel Technic Asia Pacific Pte Ltd", "seed", 115),
     ("dieseltechnic.ae", "Diesel Technic (M.E.) FZE", "seed", 116),
 )
+SEED_LEGAL_NAMES = {
+    "bosch.com": "Robert Bosch GmbH",
+    "bosch.de": "Robert Bosch GmbH",
+    "bosch.nl": "Robert Bosch B.V.",
+    "bosch.fr": "Robert Bosch (France) SAS",
+    "dieseltechnic.com": "Diesel Technic SE",
+    "dieseltechnic.de": "Diesel Technic SE",
+    "dieseltechnic.fr": "Diesel Technic France SARL",
+    "dieseltechnic.it": "Diesel Technic Italia S.R.L.",
+    "dieseltechnic.co.uk": "Diesel Technic UK & Ireland LTD.",
+    "dieseltechnic.sg": "Diesel Technic Asia Pacific Pte Ltd",
+    "dieseltechnic.ae": "Diesel Technic (M.E.) FZE",
+}
 
 
 class DomainPreviewStore:
@@ -93,14 +106,15 @@ class DomainPreviewStore:
                     """
                     INSERT INTO domain_suggestion_index
                         (domain, stem, title, legal_name, url, logo_url, verified, evidence, rank, updated_at)
-                    VALUES (?, ?, ?, NULL, ?, ?, 1, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
                     ON CONFLICT(domain) DO UPDATE SET
                         title=COALESCE(domain_suggestion_index.title, excluded.title),
+                        legal_name=COALESCE(domain_suggestion_index.legal_name, excluded.legal_name),
                         url=excluded.url, logo_url=excluded.logo_url,
                         evidence=CASE WHEN domain_suggestion_index.evidence = 'cache' THEN excluded.evidence ELSE domain_suggestion_index.evidence END,
                         rank=excluded.rank, updated_at=excluded.updated_at
                     """,
-                    (domain, stem, title, f"https://{domain}", f"https://logos.hunter.io/{domain}", evidence, rank, now),
+                    (domain, stem, title, SEED_LEGAL_NAMES.get(domain), f"https://{domain}", f"https://logos.hunter.io/{domain}", evidence, rank, now),
                 )
             # Backfill the index once for relation payloads written by older
             # versions. Prefix requests never need to decode the full payload.

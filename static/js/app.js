@@ -982,6 +982,58 @@ function createDomainPreviewRow(item, { primary = false, selectable = false } = 
   row.append(link);
   return row;
 }
+// Keep each suggestion self-contained: logo, verified name, and a clickable
+// canonical URL are visible together so users can distinguish similar domains.
+function createDomainPreviewRow(item, { primary = false, selectable = false } = {}) {
+  const domain = item.domain || "";
+  const url = item.url || `https://${domain}`;
+  const row = document.createElement("article");
+  row.className = `domain-preview-row${primary ? " is-primary" : ""}`;
+  const logo = document.createElement("img");
+  logo.className = "domain-preview-logo";
+  logo.alt = item.title || domain;
+  logo.loading = "lazy";
+  logo.src = domainLogoUrl(item);
+  logo.onerror = () => { logo.onerror = null; logo.src = `https://www.google.com/s2/favicons?domain=${encodeURIComponent(domain)}&sz=128`; };
+  row.append(logo);
+
+  const copy = document.createElement("div");
+  copy.className = "domain-preview-copy";
+  const title = document.createElement("strong");
+  const legalNameUnconfirmed = item.identity_confidence === "unconfirmed" && !item.legal_name;
+  title.textContent = legalNameUnconfirmed ? "法律实体名称未确认" : (item.legal_name || item.title || (primary ? `${previewBrandName(domain)} 官网` : "关联站点"));
+  const website = document.createElement("a");
+  website.className = "domain-preview-url";
+  website.href = url;
+  website.target = "_blank";
+  website.rel = "noopener noreferrer";
+  website.textContent = `(${url})`;
+  website.title = url;
+  copy.append(title, website);
+  row.append(copy);
+
+  if (selectable) {
+    const use = document.createElement("button");
+    use.type = "button";
+    use.className = "domain-preview-use";
+    use.textContent = "使用此域名";
+    use.addEventListener("click", () => {
+      const input = el("discovery-domain");
+      input.value = domain;
+      previewDomain(domain);
+    });
+    row.append(use);
+  }
+  const link = document.createElement("a");
+  link.className = "domain-preview-link";
+  link.href = url;
+  link.target = "_blank";
+  link.rel = "noopener noreferrer";
+  link.setAttribute("aria-label", `打开 ${domain}`);
+  link.innerHTML = '<i class="fa-solid fa-arrow-up-right-from-square" aria-hidden="true"></i>';
+  row.append(link);
+  return row;
+}
 function renderDomainPreviewRows(items, options = {}) {
   const list = el("domain-preview-list");
   list.replaceChildren(...items.map((item) => createDomainPreviewRow(item, options)));
