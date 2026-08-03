@@ -53,7 +53,7 @@ from app.config import settings
 from app.core.company_imports import extract_companies
 from app.core.imports import extract_emails
 from app.core.discovery import candidate_emails
-from app.core.domain_relations import discover_related
+from app.core.domain_relations import COUNTRY_NAMES, LEGAL_ENTITY_OVERRIDES, discover_related
 from app.core.prospecting import (
     generate_candidates,
     infer_email_pattern,
@@ -110,7 +110,7 @@ DOMAIN_SUFFIXES = (".com", ".de", ".nl", ".fr", ".it", ".es", ".be", ".ch", ".at
 # it can later be replaced by a maintained company-domain index.
 KNOWN_DOMAIN_CATALOG: dict[str, tuple[str, ...]] = {
     "porsche": ("porsche.com", "porsche.de"),
-    "dieseltechnic": ("dieseltechnic.com", "dieseltechnic.de"),
+    "dieseltechnic": ("dieseltechnic.com", "dieseltechnic.de", "dieseltechnic.nl", "dieseltechnic.fr", "dieseltechnic.it", "dieseltechnic.es", "dieseltechnic.co.uk", "dieseltechnic.sg", "dieseltechnic.ae"),
 }
 
 
@@ -127,14 +127,24 @@ def _domain_suggestions(query: str) -> list[dict[str, object]]:
         domains.extend(KNOWN_DOMAIN_CATALOG[stem])
     if not domains:
         domains = [f"{query}{suffix}" for suffix in DOMAIN_SUFFIXES]
+    def suggestion_title(domain: str, stem: str | None) -> str | None:
+        if not stem:
+            return None
+        suffix = domain.rsplit(".", 1)[-1].lower()
+        if domain.endswith(".co.uk"):
+            suffix = "uk"
+        legal_name = LEGAL_ENTITY_OVERRIDES.get(stem, {}).get(suffix)
+        if legal_name:
+            return legal_name
+        return stem.title()
     return [
         {
             "domain": domain,
             "url": f"https://{domain}",
-            "title": next((stem.title() for stem, values in KNOWN_DOMAIN_CATALOG.items() if domain in values), None),
+            "title": suggestion_title(domain, next((stem for stem, values in KNOWN_DOMAIN_CATALOG.items() if domain in values), None)),
             "logo_url": f"https://logos.hunter.io/{domain}",
         }
-        for domain in dict.fromkeys(domains[:8])
+        for domain in dict.fromkeys(domains[:16])
     ]
 DOMESTIC_EMAIL_DOMAINS = frozenset({
     "qq.com", "vip.qq.com", "foxmail.com", "163.com", "126.com", "yeah.net",

@@ -38,7 +38,10 @@ COUNTRY_ENTITY_HINTS = {
 }
 
 
-def entity_for_country(sld: str, suffix: str, entities: list[str], fallback: str) -> str:
+LEGAL_SUFFIX_RE = re.compile(r"\b(?:SE|SARL|S\.L\.|S\.R\.L\.|B\.V\.|Ltd|LTD\.?|Limited|GmbH|Pte\.?\s+Ltd|FZE|AG|SAS|S\.A\.)\b", re.I)
+
+
+def entity_for_country(sld: str, suffix: str, entities: list[str], fallback: str, index: int) -> str:
     override = LEGAL_ENTITY_OVERRIDES.get(sld, {}).get(suffix)
     if override:
         return override
@@ -47,6 +50,11 @@ def entity_for_country(sld: str, suffix: str, entities: list[str], fallback: str
         lowered = entity.lower()
         if any(hint in lowered for hint in hints):
             return entity
+    legal_entities = [entity for entity in entities if LEGAL_SUFFIX_RE.search(entity)]
+    if len(legal_entities) == 1:
+        return legal_entities[0]
+    if legal_entities and index < len(legal_entities):
+        return legal_entities[index]
     return fallback
 
 def discover_related(domain: str, title: str | None = None) -> tuple[list[dict[str, object]], list[str]]:
@@ -70,7 +78,7 @@ def discover_related(domain: str, title: str | None = None) -> tuple[list[dict[s
             }
         except Exception: return None
     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
-        related = [item for item in pool.map(probe, candidates) if item][:8]
+        related = [item for item in pool.map(probe, candidates) if item][:16]
     entities = [title] if title else []
     for path in LOCATION_PATHS:
         try:
@@ -83,8 +91,8 @@ def discover_related(domain: str, title: str | None = None) -> tuple[list[dict[s
                 if item not in entities: entities.append(item)
             if len(entities) >= 8: break
         except Exception: continue
-    for item in related:
+    for index, item in enumerate(related):
         suffix = str(item.get("country", "")).lower()
         if suffix:
-            item["title"] = entity_for_country(sld, suffix, entities, str(item.get("title") or ""))
+            item["title"] = entity_for_country(sld, suffix, entities, str(item.get("title") or ""), index)
     return related, entities[:8]

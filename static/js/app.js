@@ -1005,7 +1005,7 @@ async function previewDomain(value) {
     const cachedRelated = (response.related_domains || []).map((item, index) => ({
       ...item,
       title: item.title || response.entities?.[index] || previewCountryName(item.country),
-    })).slice(0, 8);
+    })).slice(0, 16);
     renderDomainPreviewRows([primary, ...cachedRelated], { primary: !cachedRelated.length });
     if (!response.relations_pending) {
       status.textContent = cachedRelated.length ? "官网及关联站点" : "未发现可确认的关联站点";
@@ -1017,7 +1017,7 @@ async function previewDomain(value) {
       const related = (relations.related_domains || []).map((item, index) => ({
         ...item,
         title: item.title || relations.entities?.[index] || previewCountryName(item.country),
-      })).slice(0, 8);
+      })).slice(0, 16);
       if (related.length) renderDomainPreviewRows([primary, ...related]);
       status.textContent = related.length ? "官网及关联站点" : "未发现可确认的关联站点";
     }).catch(() => { if (requestId === domainPreviewRequestId) status.textContent = "关联站点暂不可用"; });

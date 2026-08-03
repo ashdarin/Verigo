@@ -11,7 +11,7 @@ from typing import Any
 from app.config import settings
 from app.db.sqlite import connect as connect_sqlite
 
-CACHE_SCHEMA_VERSION = 2
+CACHE_SCHEMA_VERSION = 3
 
 
 class DomainPreviewStore:
