@@ -20,7 +20,9 @@ assert "CloudStudio-Probe-Token" in script
 assert "app.tencent_qq_worker" in script
 assert "[a]pp.tencent_qq_worker" in script
 assert "git clone --depth 1 --branch main https://github.com/ashdarin/Verigo.git" in script
-assert "git pull --ff-only" in script
+assert "git pull --ff-only" not in script
+assert "pip install" not in script
+assert "worker environment is not initialized" in script
 assert "setsid -f" in script
 
 command = worker_start_command()
