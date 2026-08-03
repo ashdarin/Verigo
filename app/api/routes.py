@@ -53,7 +53,7 @@ from app.config import settings
 from app.core.company_imports import extract_companies
 from app.core.imports import extract_emails
 from app.core.discovery import candidate_emails
-from app.core.domain_relations import COUNTRY_NAMES, LEGAL_ENTITY_OVERRIDES, VERIFIED_DOMAIN_VARIANTS, discover_related
+from app.core.domain_relations import discover_related
 from app.core.prospecting import (
     generate_candidates,
     infer_email_pattern,
@@ -105,12 +105,6 @@ from app.tasks.verification import (
 
 router = APIRouter(prefix="/api")
 
-DOMAIN_SUFFIXES = (".com", ".de", ".nl", ".fr", ".it", ".es", ".be", ".ch", ".at", ".co.uk")
-# Keep fuzzy matching bounded and evidence-based. This catalog is intentionally small;
-# it can later be replaced by a maintained company-domain index.
-KNOWN_DOMAIN_CATALOG: dict[str, tuple[str, ...]] = VERIFIED_DOMAIN_VARIANTS
-
-
 def _normalize_domain_query(value: str) -> str:
     return value.strip().lower().replace("https://", "").replace("http://", "").removeprefix("www.").split("/", 1)[0]
 
@@ -118,33 +112,7 @@ def _normalize_domain_query(value: str) -> str:
 def _domain_suggestions(query: str) -> list[dict[str, object]]:
     if "." in query:
         return []
-    cached = domain_preview_store.suggestions(query)
-    stems = [stem for stem in KNOWN_DOMAIN_CATALOG if stem.startswith(query)]
-    domains: list[str] = [str(item.get("domain")) for item in cached if item.get("domain")]
-    for stem in stems:
-        domains.extend(KNOWN_DOMAIN_CATALOG[stem])
-    if not domains:
-        return []
-    def suggestion_title(domain: str, stem: str | None) -> str | None:
-        if not stem:
-            return None
-        suffix = domain.rsplit(".", 1)[-1].lower()
-        if domain.endswith(".co.uk"):
-            suffix = "uk"
-        legal_name = LEGAL_ENTITY_OVERRIDES.get(stem, {}).get(suffix)
-        if legal_name:
-            return legal_name
-        return stem.title()
-    cached_by_domain = {str(item.get("domain")): item for item in cached if item.get("domain")}
-    return [
-        {
-            "domain": domain,
-            "url": cached_by_domain.get(domain, {}).get("url") or f"https://{domain}",
-            "title": cached_by_domain.get(domain, {}).get("legal_name") or cached_by_domain.get(domain, {}).get("title") or suggestion_title(domain, next((stem for stem, values in KNOWN_DOMAIN_CATALOG.items() if domain in values), None)),
-            "logo_url": f"https://logos.hunter.io/{domain}",
-        }
-        for domain in dict.fromkeys(domains[:16])
-    ]
+    return domain_preview_store.suggestions(query)[:6]
 DOMESTIC_EMAIL_DOMAINS = frozenset({
     "qq.com", "vip.qq.com", "foxmail.com", "163.com", "126.com", "yeah.net",
     "sina.com", "sina.cn", "sohu.com", "aliyun.com", "aliyun.cn", "139.com",
@@ -892,18 +860,26 @@ def discovery_candidates(
     return DiscoveryResponse(candidates=candidates)
 
 
+@router.get("/domain-suggestions")
+def domain_suggestions(q: str = Query(min_length=1, max_length=63)) -> dict[str, object]:
+    """Fast prefix lookup; it never starts network discovery or legal parsing."""
+    query = _normalize_domain_query(q)
+    if "." in query or not re.fullmatch(r"[a-z0-9-]+", query):
+        return {"query": query, "suggestions": []}
+    return {"query": query, "suggestions": _domain_suggestions(query)}
+
+
 @router.get("/domain-preview", response_model=DomainPreviewResponse)
 def domain_preview(
-    q: str = Query(min_length=3, max_length=253),
+    q: str = Query(min_length=1, max_length=253),
 ) -> DomainPreviewResponse:
     """Return a lightweight website identity preview for the finder domain."""
     domain = _normalize_domain_query(q)
     if "." not in domain:
         suggestions = _domain_suggestions(domain)
-        domain_preview_store.put(f"query:{domain}", {"domain": domain, "suggestions": suggestions, "url": suggestions[0]["url"] if suggestions else f"https://{domain}.com"})
         return DomainPreviewResponse(
             domain=domain,
-            url=suggestions[0]["url"] if suggestions else f"https://{domain}.com",
+            url=suggestions[0]["url"] if suggestions else "",
             suggestions=suggestions,
         )
     if not re.fullmatch(r"(?=.{3,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}", domain):
@@ -946,10 +922,9 @@ def domain_relations(q: str = Query(min_length=3, max_length=253)) -> DomainPrev
     domain = _normalize_domain_query(q)
     if "." not in domain:
         suggestions = _domain_suggestions(domain)
-        domain_preview_store.put(f"query:{domain}", {"domain": domain, "suggestions": suggestions, "url": suggestions[0]["url"] if suggestions else f"https://{domain}.com"})
         return DomainPreviewResponse(
             domain=domain,
-            url=suggestions[0]["url"] if suggestions else f"https://{domain}.com",
+            url=suggestions[0]["url"] if suggestions else "",
             suggestions=suggestions,
         )
     if not re.fullmatch(r"(?=.{3,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}", domain):

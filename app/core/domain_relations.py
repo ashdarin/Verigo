@@ -158,7 +158,11 @@ def resolve_official_entity(domain: str) -> dict[str, str] | None:
             break
         except Exception:
             continue
-    candidate_urls = [(active_host, f"https://{active_host}{path}") for path in LEGAL_PATHS]
+    # Keep custom legal links discovered from the homepage and add static
+    # fallbacks after them. The previous reassignment silently discarded the
+    # most authoritative URL on many sites.
+    discovered_urls = candidate_urls
+    candidate_urls = discovered_urls + [(active_host, f"https://{active_host}{path}") for path in LEGAL_PATHS]
     seen: set[str] = set()
     prioritized_urls = []
     for _, url in candidate_urls:
@@ -223,47 +227,44 @@ def entity_for_country(sld: str, suffix: str, entities: list[str], fallback: str
         lowered = entity.lower()
         if any(hint in lowered for hint in hints):
             return entity
-    legal_entities = [entity for entity in entities if LEGAL_SUFFIX_RE.search(entity)]
-    if len(legal_entities) == 1:
-        return legal_entities[0]
-    if legal_entities and index < len(legal_entities):
-        return legal_entities[index]
+    # A legal entity without jurisdiction evidence must not be copied to an
+    # unrelated country domain. Leave the UI explicitly unconfirmed instead.
     return fallback
 
 def discover_related(domain: str, title: str | None = None) -> tuple[list[dict[str, object]], list[str]]:
     sld = domain.split(".")[0] if domain.endswith((".co.uk", ".com.au", ".co.za")) else domain.rsplit(".", 1)[0]
     candidates = [candidate for candidate in VERIFIED_DOMAIN_VARIANTS.get(sld, ()) if candidate != domain]
-    if not candidates:
-        candidates = [f"{sld}{suffix}" for suffix in SUFFIXES[:12] if f"{sld}{suffix}" != domain]
     catalogued = sld in VERIFIED_DOMAIN_VARIANTS
     def probe(candidate: str):
         try:
             addresses = {ipaddress.ip_address(item[4][0]) for item in socket.getaddrinfo(candidate, 443, type=socket.SOCK_STREAM)}
             if not addresses or any(not address.is_global for address in addresses): return None
-            with urlopen(Request(f"https://{candidate}", headers={"User-Agent": "VerigoDomainPreview/1.0"}, method="HEAD"), timeout=2) as response:
+            with urlopen(Request(f"https://{candidate}", headers={"User-Agent": "VerigoDomainPreview/1.0"}), timeout=2) as response:
                 if response.status not in {200, 301, 302, 303, 307, 308}: return None
+                final_host = (urlparse(response.geturl()).hostname or "").lower().rstrip(".")
+                allowed_hosts = {candidate.lower().rstrip("."), f"www.{candidate}".lower().rstrip(".")}
+                if final_host not in allowed_hosts:
+                    return None
             suffix = candidate.rsplit(".", 1)[-1].lower()
             if candidate.endswith(".co.uk"):
                 suffix = "uk"
-            brand = re.sub(r"[-_]+", " ", sld).strip().title()
             return {
                 "domain": candidate,
                 "url": f"https://{candidate}",
                 "country": suffix.upper(),
-                "title": f"{brand} {COUNTRY_NAMES.get(suffix, suffix.upper())}".strip(),
+                "title": None,
                 "verified": True,
                 "identity_confidence": "unconfirmed",
             }
         except Exception: return None
+    # A catalog entry is only a candidate. Probe it just like any other
+    # evidence-backed domain; unknown SLDs are never expanded into guessed
+    # country suffixes.
     if catalogued:
-        related = []
-        for candidate in candidates[:16]:
-            suffix = "uk" if candidate.endswith(".co.uk") else candidate.rsplit(".", 1)[-1].lower()
-            brand = re.sub(r"[-_]+", " ", sld).strip().title()
-            related.append({"domain": candidate, "url": f"https://{candidate}", "country": suffix.upper(), "title": f"{brand} {COUNTRY_NAMES.get(suffix, suffix.upper())}", "verified": True})
-    else:
         with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
             related = [item for item in pool.map(probe, candidates) if item][:16]
+    else:
+        related = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
         entity_results = ([None] * len(related) if sld in LEGAL_ENTITY_OVERRIDES else
                           list(pool.map(lambda item: resolve_official_entity(str(item["domain"])), related)))
@@ -294,12 +295,13 @@ def discover_related(domain: str, title: str | None = None) -> tuple[list[dict[s
     for index, item in enumerate(related):
         suffix = str(item.get("country", "")).lower()
         if suffix:
-            resolved_name = item.get("legal_name") or entity_for_country(sld, suffix, entities, str(item.get("title") or ""), index)
-            item["title"] = resolved_name
-            if not item.get("legal_name") and LEGAL_SUFFIX_RE.search(resolved_name):
-                item["legal_name"] = resolved_name
-                item["identity_confidence"] = "medium"
-            if sld in LEGAL_ENTITY_OVERRIDES and suffix in LEGAL_ENTITY_OVERRIDES[sld]:
-                item["legal_name"] = resolved_name
-                item["identity_confidence"] = "high"
+            resolved_name = item.get("legal_name") or entity_for_country(sld, suffix, entities, "", index)
+            if resolved_name:
+                item["title"] = resolved_name
+                if not item.get("legal_name") and LEGAL_SUFFIX_RE.search(resolved_name):
+                    item["legal_name"] = resolved_name
+                    item["identity_confidence"] = "medium"
+                if sld in LEGAL_ENTITY_OVERRIDES and suffix in LEGAL_ENTITY_OVERRIDES[sld]:
+                    item["legal_name"] = resolved_name
+                    item["identity_confidence"] = "high"
     return related, entities[:8]

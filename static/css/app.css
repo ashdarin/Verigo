@@ -392,7 +392,8 @@ th:nth-child(1) { width: 28%; } th:nth-child(2) { width: 14%; } th:nth-child(3) 
 .domain-preview-logo { object-fit:contain; background:#f4f8f5; }
 .domain-preview-icon { display:grid; place-items:center; background:#dcefe5; color:var(--accent-dark); }
 .domain-preview-copy { display:grid; min-width:0; gap:2px; }
-.domain-preview-copy strong, .domain-preview-copy span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.domain-preview-copy strong { min-width:0; overflow-wrap:anywhere; white-space:normal; line-height:1.35; }
+.domain-preview-copy span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .domain-preview-copy strong { font-size:13px; }
 .domain-preview-copy span { color:var(--muted); font-size:11px; }
 .domain-preview-link { display:grid; place-items:center; width:30px; height:30px; color:var(--accent-dark); }

@@ -922,6 +922,8 @@ async function loadDiscoveryResults() {
 
 let domainPreviewTimer;
 let domainPreviewController;
+let domainSuggestionsController;
+let domainRelationsController;
 let domainPreviewRequestId = 0;
 function normalizePreviewDomain(value) {
   return value.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").split("/", 1)[0];
@@ -952,7 +954,7 @@ function createDomainPreviewRow(item, { primary = false, selectable = false } = 
   copy.className = "domain-preview-copy";
   const title = document.createElement("strong");
   const legalNameUnconfirmed = item.identity_confidence === "unconfirmed" && !item.legal_name;
-  title.textContent = legalNameUnconfirmed ? "Legal entity name not confirmed" : (item.title || item.entity || (primary ? `${previewBrandName(domain)} Official Website` : previewCountryName(item.country)));
+  title.textContent = legalNameUnconfirmed ? "法律实体名称未确认" : (item.title || item.entity || (primary ? `${previewBrandName(domain)} 官网` : "关联站点"));
   const domainText = document.createElement("span");
   domainText.textContent = domain;
   copy.append(title, domainText);
@@ -967,6 +969,7 @@ function createDomainPreviewRow(item, { primary = false, selectable = false } = 
       input.value = domain;
       previewDomain(domain);
     });
+    use.textContent = "使用此域名";
     row.append(use);
   }
   const link = document.createElement("a");
@@ -986,19 +989,38 @@ function renderDomainPreviewRows(items, options = {}) {
 async function previewDomain(value) {
   const card = el("domain-preview");
   const domain = normalizePreviewDomain(value);
-  if (!domain || domain.length < 3) { card.classList.add("hidden"); return; }
+  if (!domain) { card.classList.add("hidden"); return; }
   const requestId = ++domainPreviewRequestId;
   const status = el("domain-preview-status");
   status.textContent = "正在识别官网…";
   el("domain-preview-list").replaceChildren();
+  status.textContent = "正在搜索匹配域名…";
   card.classList.remove("hidden");
   domainPreviewController?.abort();
+  domainRelationsController?.abort();
+  domainSuggestionsController?.abort();
+  if (!domain.includes(".")) {
+    domainSuggestionsController = new AbortController();
+    try {
+      const response = await api(`/api/domain-suggestions?q=${encodeURIComponent(domain)}`, { signal: domainSuggestionsController.signal });
+      if (requestId !== domainPreviewRequestId) return;
+      const suggestions = (response.suggestions || []).slice(0, 6);
+      renderDomainPreviewRows(suggestions, { selectable: true });
+      status.textContent = suggestions.length ? "请选择一个域名继续" : "暂未找到匹配域名";
+      status.textContent = suggestions.length ? "请选择一个域名继续" : "暂未找到匹配域名";
+    } catch (error) {
+      if (error.name !== "AbortError" && requestId === domainPreviewRequestId) status.textContent = "域名建议暂不可用";
+    }
+    return;
+  }
+  if (domain.length < 3) { card.classList.add("hidden"); return; }
   domainPreviewController = new AbortController();
   try {
     const response = await api(`/api/domain-preview?q=${encodeURIComponent(domain)}`, { signal: domainPreviewController.signal });
     if (requestId !== domainPreviewRequestId) return;
     if (response.suggestions?.length) {
       renderDomainPreviewRows(response.suggestions, { selectable: true });
+      status.textContent = "请选择一个域名继续";
       status.textContent = "请选择一个匹配的域名继续";
       return;
     }
@@ -1010,21 +1032,25 @@ async function previewDomain(value) {
     const primary = { domain: response.domain, url: response.url, title: response.title || `${previewBrandName(response.domain)} Official Website`, logo_url: response.logo_url };
     const cachedRelated = (response.related_domains || []).map((item, index) => ({
       ...item,
-      title: item.title || response.entities?.[index] || previewCountryName(item.country),
-    })).slice(0, 16);
+      title: item.title || response.entities?.[index] || "关联站点",
+    })).slice(0, 6);
     renderDomainPreviewRows([primary, ...cachedRelated], { primary: !cachedRelated.length });
+    status.textContent = cachedRelated.length ? "官网及关联站点" : "暂未发现可确认的关联站点";
     if (!response.relations_pending) {
       status.textContent = cachedRelated.length ? "官网及关联站点" : "未发现可确认的关联站点";
       return;
     }
     status.textContent = response.reachable ? "正在补充关联站点…" : "域名暂时无法访问，仍可继续提交邮箱查找";
-    api(`/api/domain-relations?q=${encodeURIComponent(domain)}`).then((relations) => {
+    status.textContent = response.reachable ? "正在补充关联站点…" : "域名暂时无法访问，仍可继续提交邮箱查找";
+    domainRelationsController = new AbortController();
+    api(`/api/domain-relations?q=${encodeURIComponent(domain)}`, { signal: domainRelationsController.signal }).then((relations) => {
       if (requestId !== domainPreviewRequestId) return;
       const related = (relations.related_domains || []).map((item, index) => ({
         ...item,
-        title: item.title || relations.entities?.[index] || previewCountryName(item.country),
-      })).slice(0, 16);
+        title: item.title || relations.entities?.[index] || "关联站点",
+      })).slice(0, 6);
       if (related.length) renderDomainPreviewRows([primary, ...related]);
+      status.textContent = related.length ? "官网及关联站点" : "暂未发现可确认的关联站点";
       status.textContent = related.length ? "官网及关联站点" : "未发现可确认的关联站点";
     }).catch(() => { if (requestId === domainPreviewRequestId) status.textContent = "关联站点暂不可用"; });
   } catch (error) {
@@ -1036,7 +1062,7 @@ async function previewDomain(value) {
 }
 el("discovery-domain")?.addEventListener("input", (event) => {
   clearTimeout(domainPreviewTimer);
-  domainPreviewTimer = setTimeout(() => previewDomain(event.target.value), 350);
+  domainPreviewTimer = setTimeout(() => previewDomain(event.target.value), 180);
 });
 
 async function pollDiscovery() {
