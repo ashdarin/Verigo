@@ -935,6 +935,8 @@ async function previewDomain(value) {
     const response = await api(`/api/domain-preview?q=${encodeURIComponent(domain)}`, { signal: domainPreviewController.signal });
     el("domain-preview-title").textContent = response.title || "官网已识别";
     el("domain-preview-domain").textContent = response.reachable ? response.domain : `${response.domain} · 暂时无法访问`;
+    const related = [...(response.entities || []), ...(response.related_domains || []).map((item) => item.domain)].slice(0, 6);
+    el("domain-preview-related").textContent = related.length ? `关联站点：${related.join("、")}` : "";
     el("domain-preview-link").href = response.url;
     card.classList.remove("hidden");
   } catch (error) {

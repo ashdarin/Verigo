@@ -53,6 +53,7 @@ from app.config import settings
 from app.core.company_imports import extract_companies
 from app.core.imports import extract_emails
 from app.core.discovery import candidate_emails
+from app.core.domain_relations import discover_related
 from app.core.prospecting import (
     generate_candidates,
     infer_email_pattern,
@@ -876,7 +877,8 @@ def domain_preview(
                 title = re.sub(r"\s+", " ", match.group(1)).strip()[:160] or None
     except Exception:
         pass
-    return DomainPreviewResponse(domain=domain, url=f"https://{domain}", title=title, reachable=reachable)
+    related_domains, entities = discover_related(domain, title)
+    return DomainPreviewResponse(domain=domain, url=f"https://{domain}", title=title, reachable=reachable, related_domains=related_domains, entities=entities)
 
 
 @router.post("/discovery/verify", response_model=JobResponse, status_code=202)

@@ -119,6 +119,8 @@ class DomainPreviewResponse(BaseModel):
     url: str
     title: str | None = None
     reachable: bool = False
+    related_domains: list[dict[str, object]] = Field(default_factory=list)
+    entities: list[str] = Field(default_factory=list)
 
 
 class ProspectingRunRequest(BaseModel):
