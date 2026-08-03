@@ -376,6 +376,14 @@ th:nth-child(1) { width: 28%; } th:nth-child(2) { width: 14%; } th:nth-child(3) 
 .list-result-row strong { font-size:13px; }
 .list-result-row span { color:#68746f; font-size:12px; }
 .list-empty { padding:36px 15px; color:#68746f; text-align:center; }
+.result-email-cell { min-width:0; }
+.result-email-content { display:flex; align-items:center; gap:8px; min-width:0; max-width:100%; }
+.result-email-value { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.copy-button { display:inline-flex; align-items:center; justify-content:center; width:30px; height:30px; flex:0 0 30px; padding:0; border:1px solid #cfe0d7; border-radius:6px; background:#f7fbf8; color:var(--accent-dark); cursor:pointer; opacity:0; pointer-events:none; transition:opacity .15s ease, background .15s ease, color .15s ease; }
+.copy-button:hover, .copy-button:focus-visible { background:#e3f4ea; color:var(--accent-dark); outline:0; }
+.copy-button.copied { background:#ddf3e8; color:#08784f; }
+.result-email-cell:hover .copy-button, .result-email-cell:focus-within .copy-button { opacity:1; pointer-events:auto; }
+@media (max-width: 700px) { .result-email-cell .copy-button { opacity:1; pointer-events:auto; } }
 @media (max-width: 560px) {
   .topbar { min-height: 150px; padding: 10px 16px 8px; }
   .product-nav { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 3px; }

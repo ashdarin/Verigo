@@ -585,7 +585,29 @@ function renderResults() {
     values.forEach((value, index) => {
       const cell = document.createElement("td");
       if (index === 0) {
-        cell.textContent = item.email;
+        cell.className = "result-email-cell";
+        const emailContent = document.createElement("span");
+        emailContent.className = "result-email-content";
+        const email = document.createElement("span");
+        email.className = "result-email-value";
+        email.textContent = item.email;
+        emailContent.append(email);
+        // Keep the row compact while making the most common action available
+        // as soon as the pointer reaches the email.
+        if (item.progress_state !== "pending" && item.progress_state !== "verifying") {
+          const copy = document.createElement("button");
+          copy.type = "button";
+          copy.className = "copy-button result-copy-button";
+          copy.setAttribute("aria-label", VerigoI18n.text("复制邮箱"));
+          copy.title = VerigoI18n.text("复制邮箱");
+          copy.innerHTML = '<i class="fa-regular fa-copy" aria-hidden="true"></i>';
+          copy.addEventListener("click", (event) => {
+            event.stopPropagation();
+            copyEmailValue(item.email, copy);
+          });
+          emailContent.append(copy);
+        }
+        cell.append(emailContent);
         if (item.retry_updated) {
           const dot = document.createElement("i"); dot.className = "result-email-update";
           dot.title = VerigoI18n.text("该邮箱的复核结果已更新"); cell.append(dot);
@@ -615,6 +637,30 @@ function renderResults() {
     body.append(row);
   });
   renderPagination();
+}
+
+async function copyEmailValue(email, button) {
+  if (!email) return;
+  try {
+    if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(email);
+    else {
+      const area = document.createElement("textarea"); area.value = email;
+      area.setAttribute("readonly", ""); area.style.position = "fixed"; area.style.opacity = "0";
+      document.body.append(area); area.select(); document.execCommand("copy"); area.remove();
+    }
+    const icon = button.querySelector("i");
+    if (icon) { icon.className = "fa-solid fa-check"; }
+    button.classList.add("copied");
+    button.title = VerigoI18n.text("已复制");
+    window.setTimeout(() => {
+      if (!button.isConnected) return;
+      if (icon) icon.className = "fa-regular fa-copy";
+      button.classList.remove("copied");
+      button.title = VerigoI18n.text("复制邮箱");
+    }, 1200);
+  } catch (error) {
+    errorBox.textContent = error.message || VerigoI18n.text("复制失败，请重试");
+  }
 }
 
 function renderPagination() {
