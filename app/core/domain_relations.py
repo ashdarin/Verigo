@@ -50,6 +50,9 @@ LEGAL_ENTITY_OVERRIDES = {
         "uk": "Robert Bosch UK Holdings Ltd",
         "au": "Robert Bosch (Australia) Pty Ltd",
     },
+    "microsoft": {
+        "com": "Microsoft Corporation",
+    },
 }
 COUNTRY_ENTITY_HINTS = {
     "de": ("germany", "deutschland"), "nl": ("netherlands", "benelux", "nederland"),
@@ -264,7 +267,7 @@ def discover_related(domain: str, title: str | None = None) -> tuple[list[dict[s
     for index, item in enumerate(related):
         suffix = str(item.get("country", "")).lower()
         if suffix:
-            resolved_name = entity_for_country(sld, suffix, entities, str(item.get("title") or ""), index)
+            resolved_name = item.get("legal_name") or entity_for_country(sld, suffix, entities, str(item.get("title") or ""), index)
             item["title"] = resolved_name
             if sld in LEGAL_ENTITY_OVERRIDES and suffix in LEGAL_ENTITY_OVERRIDES[sld]:
                 item["legal_name"] = resolved_name
