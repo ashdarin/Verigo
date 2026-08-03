@@ -7,6 +7,10 @@ import hmac
 import json
 import time
 import uuid
+import ipaddress
+import re
+import socket
+from urllib.request import Request as UrlRequest, urlopen
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from io import StringIO
@@ -23,6 +27,7 @@ from app.api.schemas import (
     CreateJobRequest,
     DiscoveryRequest,
     DiscoveryResponse,
+    DomainPreviewResponse,
     ImportResponse,
     JobResponse,
     NotificationListResponse,
@@ -842,6 +847,36 @@ def discovery_candidates(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return DiscoveryResponse(candidates=candidates)
+
+
+@router.get("/domain-preview", response_model=DomainPreviewResponse)
+def domain_preview(
+    q: str = Query(min_length=3, max_length=253),
+    _: Annotated[User, Depends(require_user)] = None,
+) -> DomainPreviewResponse:
+    """Return a lightweight website identity preview for the finder domain."""
+    domain = q.strip().lower().replace("https://", "").replace("http://", "").removeprefix("www.").split("/", 1)[0]
+    if not re.fullmatch(r"(?=.{3,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}", domain):
+        raise HTTPException(status_code=422, detail="请输入有效的公司域名")
+    try:
+        addresses = {ipaddress.ip_address(item[4][0]) for item in socket.getaddrinfo(domain, 443, type=socket.SOCK_STREAM)}
+        if not addresses or any(not address.is_global for address in addresses):
+            return DomainPreviewResponse(domain=domain, url=f"https://{domain}")
+    except OSError:
+        return DomainPreviewResponse(domain=domain, url=f"https://{domain}")
+    title = None
+    reachable = False
+    try:
+        request = UrlRequest(f"https://{domain}", headers={"User-Agent": "VerigoDomainPreview/1.0"})
+        with urlopen(request, timeout=3) as response:
+            reachable = 200 <= response.status < 500
+            sample = response.read(200_000).decode("utf-8", "ignore")
+            match = re.search(r"<title[^>]*>(.*?)</title>", sample, re.I | re.S)
+            if match:
+                title = re.sub(r"\s+", " ", match.group(1)).strip()[:160] or None
+    except Exception:
+        pass
+    return DomainPreviewResponse(domain=domain, url=f"https://{domain}", title=title, reachable=reachable)
 
 
 @router.post("/discovery/verify", response_model=JobResponse, status_code=202)

@@ -920,6 +920,32 @@ async function loadDiscoveryResults() {
   renderDiscoveryResults();
 }
 
+let domainPreviewTimer;
+let domainPreviewController;
+function normalizePreviewDomain(value) {
+  return value.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").split("/", 1)[0];
+}
+async function previewDomain(value) {
+  const card = el("domain-preview");
+  const domain = normalizePreviewDomain(value);
+  if (!domain || domain.length < 3) { card.classList.add("hidden"); return; }
+  domainPreviewController?.abort();
+  domainPreviewController = new AbortController();
+  try {
+    const response = await api(`/api/domain-preview?q=${encodeURIComponent(domain)}`, { signal: domainPreviewController.signal });
+    el("domain-preview-title").textContent = response.title || "官网已识别";
+    el("domain-preview-domain").textContent = response.reachable ? response.domain : `${response.domain} · 暂时无法访问`;
+    el("domain-preview-link").href = response.url;
+    card.classList.remove("hidden");
+  } catch (error) {
+    if (error.name !== "AbortError") card.classList.add("hidden");
+  }
+}
+el("discovery-domain")?.addEventListener("input", (event) => {
+  clearTimeout(domainPreviewTimer);
+  domainPreviewTimer = setTimeout(() => previewDomain(event.target.value), 350);
+});
+
 async function pollDiscovery() {
   if (!state.discovery.jobId) return;
   try {

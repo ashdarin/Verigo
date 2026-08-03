@@ -114,6 +114,13 @@ class DiscoveryResponse(BaseModel):
     candidates: list[str]
 
 
+class DomainPreviewResponse(BaseModel):
+    domain: str
+    url: str
+    title: str | None = None
+    reachable: bool = False
+
+
 class ProspectingRunRequest(BaseModel):
     domain: str = Field(min_length=3, max_length=253)
     country: str = Field(min_length=2, max_length=8)
