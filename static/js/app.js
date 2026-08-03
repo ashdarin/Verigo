@@ -1001,6 +1001,11 @@ async function previewDomain(value) {
       status.textContent = "请选择一个匹配的域名继续";
       return;
     }
+    if (!domain.includes(".")) {
+      el("domain-preview-list").replaceChildren();
+      status.textContent = "没有找到已验证的匹配域名，请输入完整域名";
+      return;
+    }
     const primary = { domain: response.domain, url: response.url, title: response.title || `${previewBrandName(response.domain)} Official Website`, logo_url: response.logo_url };
     const cachedRelated = (response.related_domains || []).map((item, index) => ({
       ...item,

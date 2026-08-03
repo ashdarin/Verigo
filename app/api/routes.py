@@ -53,7 +53,7 @@ from app.config import settings
 from app.core.company_imports import extract_companies
 from app.core.imports import extract_emails
 from app.core.discovery import candidate_emails
-from app.core.domain_relations import COUNTRY_NAMES, LEGAL_ENTITY_OVERRIDES, discover_related
+from app.core.domain_relations import COUNTRY_NAMES, LEGAL_ENTITY_OVERRIDES, VERIFIED_DOMAIN_VARIANTS, discover_related
 from app.core.prospecting import (
     generate_candidates,
     infer_email_pattern,
@@ -108,10 +108,7 @@ router = APIRouter(prefix="/api")
 DOMAIN_SUFFIXES = (".com", ".de", ".nl", ".fr", ".it", ".es", ".be", ".ch", ".at", ".co.uk")
 # Keep fuzzy matching bounded and evidence-based. This catalog is intentionally small;
 # it can later be replaced by a maintained company-domain index.
-KNOWN_DOMAIN_CATALOG: dict[str, tuple[str, ...]] = {
-    "porsche": ("porsche.com", "porsche.de"),
-    "dieseltechnic": ("dieseltechnic.com", "dieseltechnic.de", "dieseltechnic.nl", "dieseltechnic.fr", "dieseltechnic.it", "dieseltechnic.es", "dieseltechnic.co.uk", "dieseltechnic.sg", "dieseltechnic.ae"),
-}
+KNOWN_DOMAIN_CATALOG: dict[str, tuple[str, ...]] = VERIFIED_DOMAIN_VARIANTS
 
 
 def _normalize_domain_query(value: str) -> str:
@@ -126,7 +123,7 @@ def _domain_suggestions(query: str) -> list[dict[str, object]]:
     for stem in stems:
         domains.extend(KNOWN_DOMAIN_CATALOG[stem])
     if not domains:
-        domains = [f"{query}{suffix}" for suffix in DOMAIN_SUFFIXES]
+        return []
     def suggestion_title(domain: str, stem: str | None) -> str | None:
         if not stem:
             return None
@@ -971,13 +968,14 @@ def domain_relations(q: str = Query(min_length=3, max_length=253)) -> DomainPrev
     payload = {
         "domain": domain,
         "url": f"https://{domain}",
+        "title": entities[0] if entities else None,
         "related_domains": related_domains,
         "entities": entities,
         "logo_url": f"https://logos.hunter.io/{domain}",
         "reachable": bool(related_domains),
     }
     domain_preview_store.put(domain, payload)
-    return DomainPreviewResponse(domain=domain, url=payload["url"], related_domains=related_domains, entities=entities,
+    return DomainPreviewResponse(domain=domain, url=payload["url"], title=payload["title"], related_domains=related_domains, entities=entities,
         logo_url=payload["logo_url"], relations_pending=False)
 
 
