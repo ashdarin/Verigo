@@ -876,8 +876,17 @@ def domain_preview(
                 title = re.sub(r"\s+", " ", match.group(1)).strip()[:160] or None
     except Exception:
         pass
-    related_domains, entities = discover_related(domain, title)
-    return DomainPreviewResponse(domain=domain, url=f"https://{domain}", title=title, reachable=reachable, related_domains=related_domains, entities=entities)
+    return DomainPreviewResponse(domain=domain, url=f"https://{domain}", title=title, reachable=reachable,
+        logo_url=f"https://logos.hunter.io/{domain}", relations_pending=True)
+
+@router.get("/domain-relations", response_model=DomainPreviewResponse)
+def domain_relations(q: str = Query(min_length=3, max_length=253)) -> DomainPreviewResponse:
+    domain = q.strip().lower().replace("https://", "").replace("http://", "").removeprefix("www.").split("/", 1)[0]
+    if not re.fullmatch(r"(?=.{3,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}", domain):
+        raise HTTPException(status_code=422, detail="请输入有效的公司域名")
+    related_domains, entities = discover_related(domain)
+    return DomainPreviewResponse(domain=domain, url=f"https://{domain}", related_domains=related_domains, entities=entities,
+        logo_url=f"https://logos.hunter.io/{domain}")
 
 
 @router.post("/discovery/verify", response_model=JobResponse, status_code=202)

@@ -386,6 +386,7 @@ th:nth-child(1) { width: 28%; } th:nth-child(2) { width: 14%; } th:nth-child(3) 
 @media (max-width: 700px) { .result-email-cell .copy-button { opacity:1; pointer-events:auto; } }
 .domain-preview { display:flex; align-items:center; gap:10px; margin:-4px 0 16px; padding:10px 12px; border:1px solid #cfe0d7; border-radius:8px; background:#f4faf6; color:var(--ink); }
 .domain-preview-icon { display:grid; place-items:center; width:30px; height:30px; flex:0 0 30px; border-radius:7px; background:#dcefe5; color:var(--accent-dark); }
+.domain-preview-logo { width:32px; height:32px; flex:0 0 32px; border-radius:8px; object-fit:contain; background:#fff; }
 .domain-preview > div { display:grid; min-width:0; gap:2px; }
 .domain-preview strong, .domain-preview span:not(.domain-preview-icon) { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .domain-preview strong { font-size:13px; }

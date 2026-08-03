@@ -933,6 +933,9 @@ async function previewDomain(value) {
   el("domain-preview-domain").textContent = domain;
   el("domain-preview-related").textContent = "正在检查关联站点";
   el("domain-preview-link").href = `https://${domain}`;
+  const logo = el("domain-preview-logo");
+  logo.src = `https://logos.hunter.io/${domain}`;
+  logo.onerror = () => { logo.onerror = null; logo.src = `https://www.google.com/s2/favicons?domain=${domain}&sz=128`; };
   card.classList.remove("hidden");
   domainPreviewController?.abort();
   domainPreviewController = new AbortController();
@@ -944,6 +947,11 @@ async function previewDomain(value) {
     el("domain-preview-related").textContent = related.length ? `关联站点：${related.join("、")}` : "";
     el("domain-preview-link").href = response.url;
     card.classList.remove("hidden");
+    el("domain-preview-related").textContent = "正在补充关联站点…";
+    api(`/api/domain-relations?q=${encodeURIComponent(domain)}`).then((relations) => {
+      const related = [...(relations.entities || []), ...(relations.related_domains || []).map((item) => item.domain)].slice(0, 6);
+      el("domain-preview-related").textContent = related.length ? `关联站点：${related.join("、")}` : "未发现关联站点";
+    }).catch(() => { el("domain-preview-related").textContent = "关联站点暂不可用"; });
   } catch (error) {
     if (error.name !== "AbortError") {
       el("domain-preview-title").textContent = "暂时无法识别官网";
