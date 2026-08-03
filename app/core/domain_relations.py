@@ -269,6 +269,9 @@ def discover_related(domain: str, title: str | None = None) -> tuple[list[dict[s
         if suffix:
             resolved_name = item.get("legal_name") or entity_for_country(sld, suffix, entities, str(item.get("title") or ""), index)
             item["title"] = resolved_name
+            if not item.get("legal_name") and LEGAL_SUFFIX_RE.search(resolved_name):
+                item["legal_name"] = resolved_name
+                item["identity_confidence"] = "medium"
             if sld in LEGAL_ENTITY_OVERRIDES and suffix in LEGAL_ENTITY_OVERRIDES[sld]:
                 item["legal_name"] = resolved_name
                 item["identity_confidence"] = "high"
