@@ -8,6 +8,7 @@ import ipaddress
 import re
 import socket
 import ssl
+import time
 from urllib.parse import quote, urljoin, urlparse
 from urllib.request import Request, urlopen
 
@@ -135,12 +136,15 @@ def resolve_official_entity(domain: str) -> dict[str, str] | None:
     """Find a legal entity from the company's own legal/corporate pages."""
     hosts = (domain, f"www.{domain}")
     candidate_urls: list[tuple[str, str]] = [(host, f"https://{host}{path}") for host in hosts for path in LEGAL_PATHS]
+    deadline = time.monotonic() + 10.0
+    active_host = domain
     for host in hosts:
         try:
             homepage_url = f"https://{host}"
             with urlopen(Request(homepage_url, headers={"User-Agent": "VerigoDomainPreview/1.0"}), timeout=2.5) as response:
                 source = response.read(220_000).decode("utf-8", "ignore")
                 homepage_url = response.geturl() or homepage_url
+            active_host = urlparse(homepage_url).netloc or host
             for href, label in re.findall(r"<a[^>]+href=[\"']([^\"']+)[\"'][^>]*>([\s\S]{0,180}?)</a>", source, re.I):
                 marker = f"{href} {re.sub(r'<[^>]+>', ' ', label)}".lower()
                 parsed = urlparse(urljoin(homepage_url, href))
@@ -149,23 +153,46 @@ def resolve_official_entity(domain: str) -> dict[str, str] | None:
             homepage_name = _jsonld_legal_name(source) or _text_legal_name(source)
             if homepage_name:
                 return {"legal_name": homepage_name, "source_url": homepage_url, "confidence": "medium"}
+            # The www host is normally just a redirect alias. Avoid crawling it twice
+            # when the canonical host already responded successfully.
+            break
         except Exception:
             continue
+    candidate_urls = [(active_host, f"https://{active_host}{path}") for path in LEGAL_PATHS]
     seen: set[str] = set()
+    prioritized_urls = []
     for _, url in candidate_urls:
-        if url in seen:
-            continue
-        seen.add(url)
+        if url not in seen:
+            seen.add(url)
+            prioritized_urls.append(url)
+
+    def fetch_candidate(url: str) -> tuple[str, str, str] | None:
         try:
+            if time.monotonic() >= deadline:
+                return None
             path = urlparse(url).path.rstrip("/")
-            with urlopen(Request(url, headers={"User-Agent": "VerigoDomainPreview/1.0"}), timeout=2.5) as response:
+            timeout = max(0.8, min(2.5, deadline - time.monotonic()))
+            with urlopen(Request(url, headers={"User-Agent": "VerigoDomainPreview/1.0"}), timeout=timeout) as response:
                 source = response.read(220_000).decode("utf-8", "ignore")
             name = _jsonld_legal_name(source) or _text_legal_name(source)
             if name:
                 confidence = "high" if any(marker in path.lower() for marker in ("corporate", "legal", "imprint", "impressum")) else "medium"
-                return {"legal_name": name, "source_url": url, "confidence": confidence}
+                return name, url, confidence
         except Exception:
-            continue
+            return None
+        return None
+
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=8)
+    futures = [pool.submit(fetch_candidate, url) for url in prioritized_urls]
+    try:
+        for future in concurrent.futures.as_completed(futures):
+            result = future.result()
+            if result:
+                name, source_url, confidence = result
+                pool.shutdown(wait=False, cancel_futures=True)
+                return {"legal_name": name, "source_url": source_url, "confidence": confidence}
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
     ssl_organization = get_ssl_organization(domain)
     # Public knowledge-graph fallback for sites that block automated legal pages.
     # The result is treated as medium confidence and retained with its source URL.
