@@ -103,6 +103,38 @@ from app.tasks.verification import (
 
 
 router = APIRouter(prefix="/api")
+
+DOMAIN_SUFFIXES = (".com", ".de", ".nl", ".fr", ".it", ".es", ".be", ".ch", ".at", ".co.uk")
+# Keep fuzzy matching bounded and evidence-based. This catalog is intentionally small;
+# it can later be replaced by a maintained company-domain index.
+KNOWN_DOMAIN_CATALOG: dict[str, tuple[str, ...]] = {
+    "porsche": ("porsche.com", "porsche.de"),
+    "dieseltechnic": ("dieseltechnic.com", "dieseltechnic.de"),
+}
+
+
+def _normalize_domain_query(value: str) -> str:
+    return value.strip().lower().replace("https://", "").replace("http://", "").removeprefix("www.").split("/", 1)[0]
+
+
+def _domain_suggestions(query: str) -> list[dict[str, object]]:
+    if "." in query:
+        return []
+    stems = [stem for stem in KNOWN_DOMAIN_CATALOG if stem.startswith(query)]
+    domains: list[str] = []
+    for stem in stems:
+        domains.extend(KNOWN_DOMAIN_CATALOG[stem])
+    if not domains:
+        domains = [f"{query}{suffix}" for suffix in DOMAIN_SUFFIXES]
+    return [
+        {
+            "domain": domain,
+            "url": f"https://{domain}",
+            "title": next((stem.title() for stem, values in KNOWN_DOMAIN_CATALOG.items() if domain in values), None),
+            "logo_url": f"https://logos.hunter.io/{domain}",
+        }
+        for domain in dict.fromkeys(domains[:8])
+    ]
 DOMESTIC_EMAIL_DOMAINS = frozenset({
     "qq.com", "vip.qq.com", "foxmail.com", "163.com", "126.com", "yeah.net",
     "sina.com", "sina.cn", "sohu.com", "aliyun.com", "aliyun.cn", "139.com",
@@ -855,7 +887,14 @@ def domain_preview(
     q: str = Query(min_length=3, max_length=253),
 ) -> DomainPreviewResponse:
     """Return a lightweight website identity preview for the finder domain."""
-    domain = q.strip().lower().replace("https://", "").replace("http://", "").removeprefix("www.").split("/", 1)[0]
+    domain = _normalize_domain_query(q)
+    if "." not in domain:
+        suggestions = _domain_suggestions(domain)
+        return DomainPreviewResponse(
+            domain=domain,
+            url=suggestions[0]["url"] if suggestions else f"https://{domain}.com",
+            suggestions=suggestions,
+        )
     if not re.fullmatch(r"(?=.{3,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}", domain):
         raise HTTPException(status_code=422, detail="请输入有效的公司域名")
     try:
@@ -881,7 +920,14 @@ def domain_preview(
 
 @router.get("/domain-relations", response_model=DomainPreviewResponse)
 def domain_relations(q: str = Query(min_length=3, max_length=253)) -> DomainPreviewResponse:
-    domain = q.strip().lower().replace("https://", "").replace("http://", "").removeprefix("www.").split("/", 1)[0]
+    domain = _normalize_domain_query(q)
+    if "." not in domain:
+        suggestions = _domain_suggestions(domain)
+        return DomainPreviewResponse(
+            domain=domain,
+            url=suggestions[0]["url"] if suggestions else f"https://{domain}.com",
+            suggestions=suggestions,
+        )
     if not re.fullmatch(r"(?=.{3,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}", domain):
         raise HTTPException(status_code=422, detail="请输入有效的公司域名")
     related_domains, entities = discover_related(domain)

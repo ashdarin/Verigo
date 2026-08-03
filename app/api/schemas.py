@@ -123,6 +123,7 @@ class DomainPreviewResponse(BaseModel):
     entities: list[str] = Field(default_factory=list)
     logo_url: str | None = None
     relations_pending: bool = False
+    suggestions: list[dict[str, object]] = Field(default_factory=list)
 
 
 class ProspectingRunRequest(BaseModel):
