@@ -7,6 +7,7 @@ import html as html_lib
 import ipaddress
 import re
 import socket
+import ssl
 from urllib.parse import quote, urljoin, urlparse
 from urllib.request import Request, urlopen
 
@@ -17,7 +18,7 @@ VERIFIED_DOMAIN_VARIANTS = {
     "bosch": ("bosch.com", "bosch.de", "bosch.nl", "bosch.fr", "bosch.it", "bosch.be", "bosch.ch", "bosch.at", "bosch.co.uk", "bosch.com.au"),
 }
 LOCATION_PATHS = ("/en/corporate-group/locations/", "/corporate-group/locations/", "/locations/", "/about/locations/", "/group/", "/worldwide/", "/contact/")
-LEGAL_PATHS = ("/corporate-information/", "/legal-notice/", "/imprint/", "/impressum/", "/contact/")
+LEGAL_PATHS = ("/impressum/", "/imprint/", "/legal/", "/legal-notice/", "/legal-information/", "/mentions-legales/", "/note-legali/", "/en/impressum/", "/de/impressum/", "/fr/mentions-legales/", "/it/note-legali/", "/corporate-information/", "/about/", "/about-us/", "/company/", "/en/about/", "/en/company/", "/contact/", "/en/contact/")
 LEGAL_LINK_HINTS = ("legal", "imprint", "impressum", "corporate", "company-information", "terms", "about")
 COUNTRY_NAMES = {
     "com": "Global", "de": "Germany", "nl": "Netherlands", "fr": "France", "it": "Italy",
@@ -60,7 +61,7 @@ COUNTRY_ENTITY_HINTS = {
 }
 
 
-LEGAL_SUFFIX_RE = re.compile(r"\b(?:SE|SARL|S\.L\.|S\.R\.L\.|B\.V\.|Ltd|LTD\.?|Limited|GmbH|Pte\.?\s+Ltd|FZE|AG|SAS|S\.A\.)\b", re.I)
+LEGAL_SUFFIX_RE = re.compile(r"\b(?:SE|SARL|S\.L\.|S\.R\.L\.|B\.V\.|Ltd|LTD\.?|Limited|GmbH|Pte\.?\s+Ltd|FZE|AG|SAS|S\.A\.|S\.p\.A\.|Corporation|Incorporated|Inc\.?|N\.V\.)\b", re.I)
 
 
 def _visible_text(source: str) -> str:
@@ -76,6 +77,9 @@ def _jsonld_legal_name(source: str) -> str | None:
             legal = value.get("legalName")
             if isinstance(legal, str) and legal.strip():
                 return re.sub(r"\s+", " ", legal).strip()[:180]
+            name = value.get("name")
+            if isinstance(name, str) and LEGAL_SUFFIX_RE.search(name):
+                return re.sub(r"\s+", " ", name).strip()[:180]
             for child in value.values():
                 found = walk(child)
                 if found:
@@ -106,6 +110,22 @@ def _text_legal_name(source: str) -> str | None:
     footer_pattern = r"(?:©|copyright|website of|internet pages of|all rights reserved)[^.;]{0,180}?([A-Z][A-Za-z0-9().&,'’\-/]+(?:\s+[A-Z][A-Za-z0-9().&,'’\-/]+){0,8}\s+(?:GmbH|B\.V\.|Ltd|AG|SAS|S\.p\.A\.|S\.A\.|Corporation|Inc\.?|Incorporated|N\.V\.))"
     match = re.search(footer_pattern, text, re.I)
     return re.sub(r"\s+", " ", match.group(1)).strip(" ,.;:")[:180] if match else None
+
+
+def get_ssl_organization(domain: str) -> str | None:
+    """Read the certificate organization when an OV/EV certificate exposes one."""
+    try:
+        context = ssl.create_default_context()
+        with socket.create_connection((domain, 443), timeout=2.5) as sock:
+            with context.wrap_socket(sock, server_hostname=domain) as secure_socket:
+                certificate = secure_socket.getpeercert()
+        subject = dict(item[0] for item in certificate.get("subject", []))
+        organization = str(subject.get("organizationName") or "").strip()
+        if organization and organization.lower() not in {"cloudflare, inc.", "let's encrypt"} and len(organization) > 3:
+            return organization[:180]
+    except Exception:
+        pass
+    return None
 
 
 def resolve_official_entity(domain: str) -> dict[str, str] | None:
@@ -143,6 +163,9 @@ def resolve_official_entity(domain: str) -> dict[str, str] | None:
                 return {"legal_name": name, "source_url": url, "confidence": confidence}
         except Exception:
             continue
+    ssl_organization = get_ssl_organization(domain)
+    if ssl_organization:
+        return {"legal_name": ssl_organization, "source_url": f"ssl://{domain}", "confidence": "low"}
     # Public knowledge-graph fallback for sites that block automated legal pages.
     # The result is treated as medium confidence and retained with its source URL.
     sites = " ".join(f"<https://{host}{suffix}>" for host in (domain, f"www.{domain}") for suffix in ("", "/"))
