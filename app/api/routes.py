@@ -891,6 +891,7 @@ def domain_preview(
     domain = _normalize_domain_query(q)
     if "." not in domain:
         suggestions = _domain_suggestions(domain)
+        domain_preview_store.put(f"query:{domain}", {"domain": domain, "suggestions": suggestions, "url": suggestions[0]["url"] if suggestions else f"https://{domain}.com"})
         return DomainPreviewResponse(
             domain=domain,
             url=suggestions[0]["url"] if suggestions else f"https://{domain}.com",
@@ -936,6 +937,7 @@ def domain_relations(q: str = Query(min_length=3, max_length=253)) -> DomainPrev
     domain = _normalize_domain_query(q)
     if "." not in domain:
         suggestions = _domain_suggestions(domain)
+        domain_preview_store.put(f"query:{domain}", {"domain": domain, "suggestions": suggestions, "url": suggestions[0]["url"] if suggestions else f"https://{domain}.com"})
         return DomainPreviewResponse(
             domain=domain,
             url=suggestions[0]["url"] if suggestions else f"https://{domain}.com",
