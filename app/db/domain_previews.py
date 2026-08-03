@@ -11,6 +11,8 @@ from typing import Any
 from app.config import settings
 from app.db.sqlite import connect as connect_sqlite
 
+CACHE_SCHEMA_VERSION = 2
+
 
 class DomainPreviewStore:
     def __init__(self) -> None:
@@ -54,11 +56,14 @@ class DomainPreviewStore:
             payload = json.loads(row[0])
         except (TypeError, json.JSONDecodeError):
             return None
-        return payload if isinstance(payload, dict) else None
+        if not isinstance(payload, dict) or payload.get("cache_version") != CACHE_SCHEMA_VERSION:
+            return None
+        return payload
 
     def put(self, domain: str, payload: dict[str, Any]) -> None:
         self._ensure_schema()
         now = datetime.now(timezone.utc).isoformat()
+        payload = {**payload, "cache_version": CACHE_SCHEMA_VERSION}
         serialized = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
         with self._lock, closing(self._connect()) as connection:
             connection.execute(

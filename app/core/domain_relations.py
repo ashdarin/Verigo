@@ -15,6 +15,39 @@ COUNTRY_NAMES = {
     "sg": "Singapore", "ae": "United Arab Emirates", "au": "Australia", "za": "South Africa",
     "in": "India", "cn": "China", "jp": "Japan", "kr": "South Korea", "hk": "Hong Kong", "tw": "Taiwan",
 }
+LEGAL_ENTITY_OVERRIDES = {
+    "dieseltechnic": {
+        "com": "Diesel Technic SE",
+        "de": "Diesel Technic SE",
+        "nl": "Diesel Technic Benelux B.V.",
+        "fr": "Diesel Technic France SARL",
+        "es": "Diesel Technic Iberia S.L.",
+        "it": "Diesel Technic Italia S.R.L.",
+        "uk": "Diesel Technic UK & Ireland LTD.",
+        "ae": "Diesel Technic (M.E.) FZE",
+        "sg": "Diesel Technic Asia Pacific Pte Ltd",
+    },
+}
+COUNTRY_ENTITY_HINTS = {
+    "de": ("germany", "deutschland"), "nl": ("netherlands", "benelux", "nederland"),
+    "fr": ("france", "français"), "it": ("italia", "italy"), "es": ("iberia", "spain", "españa"),
+    "uk": ("united kingdom", "uk", "ireland"), "sg": ("singapore", "asia pacific"),
+    "ae": ("united arab emirates", "m.e.", "middle east"), "au": ("australia",),
+    "za": ("south africa",), "in": ("india",), "cn": ("china",), "jp": ("japan",),
+    "kr": ("south korea", "korea"), "hk": ("hong kong",), "tw": ("taiwan",),
+}
+
+
+def entity_for_country(sld: str, suffix: str, entities: list[str], fallback: str) -> str:
+    override = LEGAL_ENTITY_OVERRIDES.get(sld, {}).get(suffix)
+    if override:
+        return override
+    hints = COUNTRY_ENTITY_HINTS.get(suffix, ())
+    for entity in entities:
+        lowered = entity.lower()
+        if any(hint in lowered for hint in hints):
+            return entity
+    return fallback
 
 def discover_related(domain: str, title: str | None = None) -> tuple[list[dict[str, object]], list[str]]:
     sld = domain.split(".")[0] if domain.endswith((".co.uk", ".com.au", ".co.za")) else domain.rsplit(".", 1)[0]
@@ -43,9 +76,15 @@ def discover_related(domain: str, title: str | None = None) -> tuple[list[dict[s
         try:
             with urlopen(Request(f"https://{domain}{path}", headers={"User-Agent": "VerigoDomainPreview/1.0"}), timeout=2) as response:
                 html = response.read(120_000).decode("utf-8", "ignore")
-            for item in re.findall(r"(?:[A-Z][A-Za-z]+\s+){1,4}(?:SE|SARL|S\.L\.|Ltd|Limited|GmbH|S\.R\.L\.)", html):
+            text = re.sub(r"<[^>]+>", " ", html)
+            text = re.sub(r"\s+", " ", text)
+            for item in re.findall(r"(?:[A-Z][A-Za-z().&-]+\s+){1,7}(?:SE|SARL|S\.L\.|S\.R\.L\.|B\.V\.|Ltd|LTD\.?|Limited|GmbH|Pte\.?\s+Ltd|FZE)", text):
                 item = re.sub(r"\s+", " ", item).strip()
                 if item not in entities: entities.append(item)
             if len(entities) >= 8: break
         except Exception: continue
+    for item in related:
+        suffix = str(item.get("country", "")).lower()
+        if suffix:
+            item["title"] = entity_for_country(sld, suffix, entities, str(item.get("title") or ""))
     return related, entities[:8]
