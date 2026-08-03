@@ -244,6 +244,60 @@ class CloudShellLifecycle:
             if exc.code != 409:
                 raise
 
+    def _refresh_host_key(self, host: str, port: str) -> None:
+        """Refresh one recycled Cloud Shell endpoint without disabling host checks."""
+        scan = subprocess.run(
+            [
+                "ssh-keyscan",
+                "-T",
+                "10",
+                "-p",
+                str(port),
+                "-t",
+                "ecdsa-sha2-nistp256",
+                host,
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        if scan.returncode or not scan.stdout.strip():
+            detail = scan.stderr.strip() or "Cloud Shell returned no ECDSA host key"
+            raise RuntimeError(f"Cloud Shell host key refresh failed: {detail[:300]}")
+
+        known_hosts = self._ssh_known_hosts_path
+        known_hosts.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(
+            ["ssh-keygen", "-R", f"[{host}]:{port}", "-f", str(known_hosts)],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        with known_hosts.open("a", encoding="utf-8") as handle:
+            handle.write(scan.stdout)
+        try:
+            known_hosts.chmod(0o600)
+        except OSError:
+            # Windows-based local smoke tests may not support POSIX permissions.
+            pass
+
+        fingerprint = subprocess.run(
+            ["ssh-keygen", "-lf", "-"],
+            input=scan.stdout,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        ).stdout.strip().split()
+        logger.warning(
+            "Refreshed Cloud Shell host key for %s:%s (fingerprint=%s)",
+            host,
+            port,
+            fingerprint[1] if len(fingerprint) > 1 else "unknown",
+        )
+
     def _start(self) -> None:
         try:
             token = self._token()
@@ -262,9 +316,14 @@ class CloudShellLifecycle:
                 )
                 if probe.returncode == 0:
                     break
+                detail = probe.stderr.decode(errors="replace")
+                if "REMOTE HOST IDENTIFICATION HAS CHANGED" in detail:
+                    self._refresh_host_key(host, port)
+                    continue
                 if attempt == 17:
-                    detail = probe.stderr.decode(errors="replace").strip()
-                    raise RuntimeError(f"Cloud Shell SSH did not become ready: {detail}")
+                    raise RuntimeError(
+                        f"Cloud Shell SSH did not become ready: {detail.strip()}"
+                    )
                 time.sleep(5)
             source_root = Path(__file__).resolve().parents[2]
             archive = subprocess.run(["tar", "-C", str(source_root), "-czf", "-", "app", "验证8.py"], check=True, capture_output=True).stdout
