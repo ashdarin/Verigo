@@ -1065,6 +1065,17 @@ class AuthStore:
                 connection.execute("UPDATE users SET credits=credits+? WHERE id=?", (amount, user_id))
             connection.commit()
 
+    def refund_failed_submission(self, user_id: str, emails: list[str], reference: str) -> int:
+        """Refund a failed verification exactly once; Yahoo addresses are free."""
+        charged = sum(
+            not any(str(email).lower().endswith(suffix) for suffix in
+                    ("@yahoo.com", "@yahoo.co.jp", "@ymail.com", "@rocketmail.com"))
+            for email in emails
+        )
+        if charged:
+            self.refund_credits(user_id, charged, reference)
+        return charged
+
     def reserve_free_usage(self, user_id: str, kind: str, limit: int) -> int:
         """Atomically reserve one daily free use and return the remaining allowance."""
         self.initialize()

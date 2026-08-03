@@ -1113,6 +1113,9 @@ class JobStore:
             if failures:
                 parent.status = "failed"
                 parent.error = "；".join(failures[:2])[:500]
+                if parent.owner_id:
+                    from app.db.auth import auth_store
+                    auth_store.refund_failed_submission(parent.owner_id, parent.emails, f"verification:{parent.id}")
             elif any(row[0] == "stopped" for row in children):
                 parent.status = "stopped"
                 parent.error = "已由用户停止验证"

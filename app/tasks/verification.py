@@ -923,6 +923,8 @@ def run_job(job: Job) -> None:
             if protected is not None:
                 job = protected
                 return
+        if job.owner_id:
+            auth_store.refund_failed_submission(job.owner_id, job.emails, f"verification:{job.id}")
         if job.retry_parent_id:
             job.finished_at = utc_now()
             job.error = None
