@@ -934,6 +934,9 @@ const previewCountryNames = { DE: "Germany", NL: "Netherlands", FR: "France", IT
 function previewCountryName(country) {
   return previewCountryNames[String(country || "").toUpperCase()] || "Related site";
 }
+function previewBrandName(domain) {
+  return String(domain || "").split(".")[0].replace(/[-_]+/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase()) || "Company";
+}
 function createDomainPreviewRow(item, { primary = false, selectable = false } = {}) {
   const domain = item.domain || "";
   const row = document.createElement("article");
@@ -948,7 +951,7 @@ function createDomainPreviewRow(item, { primary = false, selectable = false } = 
   const copy = document.createElement("div");
   copy.className = "domain-preview-copy";
   const title = document.createElement("strong");
-  title.textContent = item.title || item.entity || (primary ? "官网" : "关联站点");
+  title.textContent = item.title || item.entity || (primary ? `${previewBrandName(domain)} Official Website` : previewCountryName(item.country));
   const domainText = document.createElement("span");
   domainText.textContent = domain;
   copy.append(title, domainText);
@@ -998,7 +1001,7 @@ async function previewDomain(value) {
       status.textContent = "请选择一个匹配的域名继续";
       return;
     }
-    const primary = { domain: response.domain, url: response.url, title: response.title || "官网已识别", logo_url: response.logo_url };
+    const primary = { domain: response.domain, url: response.url, title: response.title || `${previewBrandName(response.domain)} Official Website`, logo_url: response.logo_url };
     const cachedRelated = (response.related_domains || []).map((item, index) => ({
       ...item,
       title: item.title || response.entities?.[index] || previewCountryName(item.country),
