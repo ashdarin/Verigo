@@ -164,8 +164,6 @@ def resolve_official_entity(domain: str) -> dict[str, str] | None:
         except Exception:
             continue
     ssl_organization = get_ssl_organization(domain)
-    if ssl_organization:
-        return {"legal_name": ssl_organization, "source_url": f"ssl://{domain}", "confidence": "low"}
     # Public knowledge-graph fallback for sites that block automated legal pages.
     # The result is treated as medium confidence and retained with its source URL.
     sites = " ".join(f"<https://{host}{suffix}>" for host in (domain, f"www.{domain}") for suffix in ("", "/"))
@@ -181,6 +179,8 @@ def resolve_official_entity(domain: str) -> dict[str, str] | None:
                 return {"legal_name": name.strip()[:180], "source_url": "https://www.wikidata.org/", "confidence": "medium"}
     except Exception:
         pass
+    if ssl_organization:
+        return {"legal_name": ssl_organization, "source_url": f"ssl://{domain}", "confidence": "low"}
     return None
 
 
