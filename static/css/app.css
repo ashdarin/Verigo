@@ -404,8 +404,8 @@ th:nth-child(1) { width: 28%; } th:nth-child(2) { width: 14%; } th:nth-child(3) 
   .domain-preview-list { max-height:260px; }
   .domain-preview-row { grid-template-columns:32px minmax(0, 1fr) auto; gap:8px; padding:7px; }
   .domain-preview-logo, .domain-preview-icon { width:28px; height:28px; }
-  .domain-preview-use { grid-column:2 / -1; justify-self:start; min-height:28px; }
-  .domain-preview-link { width:28px; height:28px; }
+  .domain-preview-use { grid-column:2; grid-row:2; justify-self:start; min-height:28px; }
+  .domain-preview-link { grid-column:3; grid-row:1; width:28px; height:28px; }
 }
 @media (max-width: 560px) {
   .topbar { min-height: 150px; padding: 10px 16px 8px; }
