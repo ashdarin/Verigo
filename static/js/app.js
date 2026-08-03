@@ -929,6 +929,11 @@ async function previewDomain(value) {
   const card = el("domain-preview");
   const domain = normalizePreviewDomain(value);
   if (!domain || domain.length < 3) { card.classList.add("hidden"); return; }
+  el("domain-preview-title").textContent = "正在识别官网…";
+  el("domain-preview-domain").textContent = domain;
+  el("domain-preview-related").textContent = "正在检查关联站点";
+  el("domain-preview-link").href = `https://${domain}`;
+  card.classList.remove("hidden");
   domainPreviewController?.abort();
   domainPreviewController = new AbortController();
   try {
@@ -940,7 +945,11 @@ async function previewDomain(value) {
     el("domain-preview-link").href = response.url;
     card.classList.remove("hidden");
   } catch (error) {
-    if (error.name !== "AbortError") card.classList.add("hidden");
+    if (error.name !== "AbortError") {
+      el("domain-preview-title").textContent = "暂时无法识别官网";
+      el("domain-preview-domain").textContent = domain;
+      el("domain-preview-related").textContent = "你仍可以继续提交邮箱查找";
+    }
   }
 }
 el("discovery-domain")?.addEventListener("input", (event) => {

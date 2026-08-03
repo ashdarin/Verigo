@@ -853,7 +853,6 @@ def discovery_candidates(
 @router.get("/domain-preview", response_model=DomainPreviewResponse)
 def domain_preview(
     q: str = Query(min_length=3, max_length=253),
-    _: Annotated[User, Depends(require_user)] = None,
 ) -> DomainPreviewResponse:
     """Return a lightweight website identity preview for the finder domain."""
     domain = q.strip().lower().replace("https://", "").replace("http://", "").removeprefix("www.").split("/", 1)[0]
