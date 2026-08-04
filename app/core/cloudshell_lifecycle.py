@@ -14,6 +14,7 @@ from typing import Any
 
 from app.config import settings
 from app.db.jobs import job_store
+from app.core.cloudshell_coordinator import cloudshell_coordinator
 
 logger = logging.getLogger(__name__)
 GMAIL_TARGET = "gmail"
@@ -374,6 +375,7 @@ class CloudShellLifecycle:
             if any(token in detail for token in ("quota", "resource_exhausted", "weekly", "rate limit")):
                 delay = settings.cloudshell_quota_cooldown_seconds
             self._retry_after = time.monotonic() + delay
+            cloudshell_coordinator.record_failure(self._worker_id, str(exc))
             logger.exception("Cloud Shell Gmail worker bootstrap failed: %s", exc)
             job_store.set_queued_target_message(
                 GMAIL_TARGET,

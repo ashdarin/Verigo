@@ -72,6 +72,7 @@ from app.core.cloudshell_lifecycle import (
     cloudshell_lifecycle,
     notify_cloudshell_job_queued,
 )
+from app.core.cloudshell_coordinator import cloudshell_coordinator
 from app.core.provider_policy import (
     YAHOO_UNSUPPORTED_MESSAGE,
     is_qq_email,
@@ -574,39 +575,62 @@ async def claim_tencent_qq_job(
     if not 1 <= worker_capacity <= 128:
         raise HTTPException(status_code=422, detail="Remote worker capacity is invalid")
     job_store.record_worker_seen(execution_target, worker_name, worker_capacity)
-    deadline = time.monotonic() + wait_seconds
-    while True:
-        job = job_store.claim_remote_lease(
-            worker_name, execution_target, capacity=worker_capacity,
-            shard_size=min(
-                settings.scheduler_remote_shard_size,
-                settings.remote_worker_max_emails_per_job,
-            ),
-            allow_local_fallback=True,
-            prospecting_shard_size=settings.prospecting_scheduler_shard_size,
+    rotation_token: str | None = None
+    if execution_target == GMAIL_TARGET:
+        # Only the least-used account is allowed to claim the next Gmail shard.
+        # A short reservation prevents concurrent polling processes from winning
+        # the same rotation slot before the lease is committed.
+        rotation_token = cloudshell_coordinator.reserve(
+            worker_name,
+            min(settings.scheduler_remote_shard_size, settings.remote_worker_max_emails_per_job),
         )
-        if job is not None:
-            sync_parent_job(job)
-            return {
-                "job": {
-                    "id": job.id,
-                    "items": [
-                        {"email": job.emails[index], "original_index": index}
-                        for index in job.pending_indices
-                    ],
-                    "pending_indices": job.pending_indices,
-                    "lease_id": job.lease_id,
-                    "worker_count": remote_worker_count(
-                        execution_target, job.worker_count
-                    ),
-                    "stop_on_deliverable": job.stop_on_deliverable,
-                    "control_probe_email": prospecting_store.control_sample_for_job(job.id),
-                }
-            }
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
+        if rotation_token is None:
+            await asyncio.sleep(min(0.25, wait_seconds))
             return {"job": None}
-        await asyncio.sleep(min(0.25, remaining))
+    try:
+        deadline = time.monotonic() + wait_seconds
+        while True:
+            job = job_store.claim_remote_lease(
+                worker_name, execution_target, capacity=worker_capacity,
+                shard_size=min(
+                    settings.scheduler_remote_shard_size,
+                    settings.remote_worker_max_emails_per_job,
+                ),
+                allow_local_fallback=True,
+                prospecting_shard_size=settings.prospecting_scheduler_shard_size,
+            )
+            if job is not None:
+                if execution_target == GMAIL_TARGET:
+                    cloudshell_coordinator.commit(rotation_token or "", len(job.pending_indices))
+                sync_parent_job(job)
+                return {
+                    "job": {
+                        "id": job.id,
+                        "items": [
+                            {"email": job.emails[index], "original_index": index}
+                            for index in job.pending_indices
+                        ],
+                        "pending_indices": job.pending_indices,
+                        "lease_id": job.lease_id,
+                        "worker_count": remote_worker_count(
+                            execution_target, job.worker_count
+                        ),
+                        "stop_on_deliverable": job.stop_on_deliverable,
+                        "control_probe_email": prospecting_store.control_sample_for_job(job.id),
+                    }
+                }
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return {"job": None}
+            await asyncio.sleep(min(0.25, remaining))
+    except Exception:
+        if execution_target == GMAIL_TARGET:
+            cloudshell_coordinator.release(rotation_token)
+        raise
+    finally:
+        # A successful claim is committed above; release is a no-op afterwards.
+        if execution_target == GMAIL_TARGET and rotation_token:
+            cloudshell_coordinator.release(rotation_token)
 
 
 @router.post("/workers/{worker_target}/jobs/{job_id}/heartbeat")
@@ -730,6 +754,8 @@ def fail_tencent_qq_job(
     job = require_remote_job(job_id, worker_name, execution_target, payload.lease_id)
     if not job_store.abandon_lease(job.id, worker_name, payload.lease_id):
         raise HTTPException(status_code=409, detail="Remote worker lease is no longer active")
+    if execution_target == GMAIL_TARGET:
+        cloudshell_coordinator.record_failure(worker_name, payload.error)
     job.error = f"{remote_worker_label(execution_target)} will retry: {payload.error}"
     job.status = "queued"
     job.worker_id = None
@@ -816,6 +842,12 @@ def admin_accounts(offset: int = Query(default=0, ge=0), limit: int = Query(defa
 @router.get("/admin/feature-usage")
 def admin_feature_usage(_: Annotated[User, Depends(require_admin)]) -> dict[str, object]:
     return metrics_store.feature_usage()
+
+
+@router.get("/admin/cloudshell/accounts")
+def admin_cloudshell_accounts(_: Annotated[User, Depends(require_admin)]) -> dict[str, object]:
+    """Expose daily rotation counters without exposing ADC or SSH paths."""
+    return {"items": cloudshell_coordinator.snapshot()}
 
 
 @router.get("/notifications", response_model=NotificationListResponse)

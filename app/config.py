@@ -240,6 +240,9 @@ class Settings:
     cloudshell_quota_cooldown_seconds: int = max(
         300, int(os.getenv("VERIGO_CLOUDSHELL_QUOTA_COOLDOWN_SECONDS", "3600"))
     )
+    cloudshell_coordinator_enabled: bool = env_bool(
+        "VERIGO_CLOUDSHELL_COORDINATOR_ENABLED", True
+    )
     google_cloudshell_secondary_enabled: bool = env_bool(
         "VERIGO_GOOGLE_CLOUDSHELL_SECONDARY_ENABLED", False
     )
