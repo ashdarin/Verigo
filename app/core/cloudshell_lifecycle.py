@@ -10,6 +10,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
+from typing import Any
 
 from app.config import settings
 from app.db.jobs import job_store
@@ -31,6 +32,7 @@ class CloudShellLifecycle:
         worker_id: str = "cloudshell-gmail-1",
         worker_processes: int | None = None,
         register_ssh_public_key: bool = False,
+        account_id: str | None = None,
     ) -> None:
         self._enabled = settings.google_cloudshell_enabled if enabled is None else enabled
         self._user = settings.google_cloudshell_user if user is None else user
@@ -49,6 +51,7 @@ class CloudShellLifecycle:
             else ssh_known_hosts_path
         )
         self._worker_id = worker_id
+        self._account_id = account_id or worker_id
         self._worker_processes = max(
             1,
             settings.cloudshell_worker_processes
@@ -60,6 +63,8 @@ class CloudShellLifecycle:
         self._stop_event = threading.Event()
         self._wake_event = threading.Event()
         self._thread: threading.Thread | None = None
+        self._failure_count = 0
+        self._retry_after = 0.0
 
     @property
     def configured(self) -> bool:
@@ -75,6 +80,8 @@ class CloudShellLifecycle:
 
     def notify_job_queued(self) -> None:
         self._wake_event.set()
+        if time.monotonic() < self._retry_after:
+            return
         if not self.configured or not self._lock.acquire(blocking=False):
             return
         threading.Thread(target=self._start, name="cloudshell-gmail", daemon=True).start()
@@ -87,8 +94,6 @@ class CloudShellLifecycle:
             target=self._run, name="cloudshell-gmail-lifecycle", daemon=True
         )
         self._thread.start()
-        if self is globals().get("cloudshell_lifecycle"):
-            cloudshell_secondary_lifecycle.start()
 
     def stop(self) -> None:
         self._stop_event.set()
@@ -96,8 +101,6 @@ class CloudShellLifecycle:
         if self._thread:
             self._thread.join(timeout=5)
         self._thread = None
-        if self is globals().get("cloudshell_lifecycle"):
-            cloudshell_secondary_lifecycle.stop()
 
     def _run(self) -> None:
         while not self._stop_event.is_set():
@@ -356,7 +359,21 @@ class CloudShellLifecycle:
                 "Cloud Shell Gmail worker bootstrap completed with %s processes",
                 self._worker_processes,
             )
+            self._failure_count = 0
+            self._retry_after = 0.0
         except Exception as exc:
+            self._failure_count += 1
+            # Quota exhaustion can last for hours. Exponential backoff keeps a
+            # depleted account out of the wake-up loop while other accounts
+            # continue claiming Gmail work.
+            delay = min(
+                settings.cloudshell_quota_cooldown_seconds,
+                300 * (2 ** min(self._failure_count - 1, 4)),
+            )
+            detail = str(exc).lower()
+            if any(token in detail for token in ("quota", "resource_exhausted", "weekly", "rate limit")):
+                delay = settings.cloudshell_quota_cooldown_seconds
+            self._retry_after = time.monotonic() + delay
             logger.exception("Cloud Shell Gmail worker bootstrap failed: %s", exc)
             job_store.set_queued_target_message(
                 GMAIL_TARGET,
@@ -364,6 +381,52 @@ class CloudShellLifecycle:
             )
         finally:
             self._lock.release()
+
+
+def _load_cloudshell_account_specs(path: Path) -> list[dict[str, Any]]:
+    """Read extra account settings without ever accepting inline secrets."""
+    if not str(path) or not path.is_file():
+        return []
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.error("Cloud Shell account manifest could not be read: %s", exc)
+        return []
+    raw_accounts = payload.get("accounts") if isinstance(payload, dict) else payload
+    if not isinstance(raw_accounts, list):
+        logger.error("Cloud Shell account manifest must contain an accounts list")
+        return []
+    specs: list[dict[str, Any]] = []
+    for index, raw in enumerate(raw_accounts, start=3):
+        if not isinstance(raw, dict):
+            continue
+        account_id = str(raw.get("id") or f"account{index}").strip()
+        worker_id = str(raw.get("worker_id") or f"cloudshell-gmail-{account_id}").strip()
+        required = ("user", "quota_project", "adc_path", "ssh_key_path")
+        if not account_id or not worker_id or any(not str(raw.get(key) or "").strip() for key in required):
+            logger.error("Skipping incomplete Cloud Shell account manifest entry %s", index)
+            continue
+        if any(char not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_" for char in worker_id):
+            logger.error("Skipping Cloud Shell account with unsafe worker id %s", worker_id)
+            continue
+        try:
+            worker_processes = min(8, max(1, int(raw.get("worker_processes", 1))))
+        except (TypeError, ValueError):
+            logger.error("Skipping Cloud Shell account %s with invalid worker_processes", account_id)
+            continue
+        specs.append({
+            "account_id": account_id,
+            "worker_id": worker_id,
+            "enabled": bool(raw.get("enabled", True)),
+            "user": str(raw["user"]).strip(),
+            "quota_project": str(raw["quota_project"]).strip(),
+            "adc_path": Path(str(raw["adc_path"]).strip()),
+            "ssh_key_path": Path(str(raw["ssh_key_path"]).strip()),
+            "ssh_known_hosts_path": Path(str(raw.get("ssh_known_hosts_path") or f"/opt/verigo/data/{worker_id}_known_hosts").strip()),
+            "worker_processes": worker_processes,
+            "register_ssh_public_key": bool(raw.get("register_ssh_public_key", True)),
+        })
+    return specs
 
 
 cloudshell_lifecycle = CloudShellLifecycle()
@@ -378,7 +441,16 @@ cloudshell_secondary_lifecycle = CloudShellLifecycle(
     worker_processes=settings.cloudshell_secondary_worker_processes,
     register_ssh_public_key=True,
 )
-cloudshell_lifecycles = (cloudshell_lifecycle, cloudshell_secondary_lifecycle)
+_configured_extra_lifecycles = tuple(
+    CloudShellLifecycle(**spec)
+    for spec in _load_cloudshell_account_specs(settings.google_cloudshell_accounts_file)
+    if spec["worker_id"] not in {"cloudshell-gmail-1", "cloudshell-gmail-2"}
+)
+cloudshell_lifecycles = (
+    cloudshell_lifecycle,
+    cloudshell_secondary_lifecycle,
+    *_configured_extra_lifecycles,
+)
 
 
 def notify_cloudshell_job_queued() -> None:

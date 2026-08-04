@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
+import tempfile
 import sys
 from types import SimpleNamespace
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.core.cloudshell_lifecycle import CloudShellLifecycle
+from app.core.cloudshell_lifecycle import CloudShellLifecycle, _load_cloudshell_account_specs
 
 
 command = CloudShellLifecycle._worker_command(2, "release-123")
@@ -33,6 +35,27 @@ except RuntimeError as exc:
     assert str(exc) == "Cloud Shell public key must use RSA or ECDSA"
 else:
     raise AssertionError("Cloud Shell must reject unsupported Ed25519 API keys")
+
+with tempfile.TemporaryDirectory() as directory:
+    manifest = Path(directory) / "accounts.json"
+    manifest.write_text(json.dumps({"accounts": [{
+        "id": "account3",
+        "user": "user-3@example.invalid",
+        "quota_project": "project-3",
+        "adc_path": "/tmp/account3-adc.json",
+        "ssh_key_path": "/tmp/account3-ed25519",
+        "worker_processes": 3,
+    }, {
+        "id": "invalid",
+        "user": "",
+        "quota_project": "project-invalid",
+        "adc_path": "/tmp/invalid",
+        "ssh_key_path": "/tmp/invalid",
+    }]}), encoding="utf-8")
+    specs = _load_cloudshell_account_specs(manifest)
+    assert len(specs) == 1
+    assert specs[0]["worker_id"] == "cloudshell-gmail-account3"
+    assert specs[0]["worker_processes"] == 3
 lifecycle = CloudShellLifecycle()
 lifecycle.start()
 assert lifecycle._thread is not None and lifecycle._thread.is_alive()

@@ -232,6 +232,14 @@ class Settings:
     google_cloudshell_quota_project: str = os.getenv("VERIGO_GOOGLE_CLOUDSHELL_QUOTA_PROJECT", "")
     google_cloudshell_adc_path: Path = Path(os.getenv("VERIGO_GOOGLE_CLOUDSHELL_ADC_PATH", ""))
     google_cloudshell_ssh_key_path: Path = Path(os.getenv("VERIGO_GOOGLE_CLOUDSHELL_SSH_KEY_PATH", ""))
+    # Optional JSON manifest for additional Cloud Shell accounts. The manifest
+    # contains paths to local ADC/SSH files, never passwords or one-time codes.
+    google_cloudshell_accounts_file: Path = Path(
+        os.getenv("VERIGO_GOOGLE_CLOUDSHELL_ACCOUNTS_FILE", "")
+    )
+    cloudshell_quota_cooldown_seconds: int = max(
+        300, int(os.getenv("VERIGO_CLOUDSHELL_QUOTA_COOLDOWN_SECONDS", "3600"))
+    )
     google_cloudshell_secondary_enabled: bool = env_bool(
         "VERIGO_GOOGLE_CLOUDSHELL_SECONDARY_ENABLED", False
     )

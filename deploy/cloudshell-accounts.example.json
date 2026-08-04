@@ -1,0 +1,16 @@
+{
+  "accounts": [
+    {
+      "id": "account3",
+      "worker_id": "cloudshell-gmail-account3",
+      "enabled": true,
+      "user": "user-3@example.invalid",
+      "quota_project": "google-project-3",
+      "adc_path": "/opt/verigo/data/cloudshell_account3_adc.json",
+      "ssh_key_path": "/opt/verigo/data/cloudshell-account3_ed25519",
+      "ssh_known_hosts_path": "/opt/verigo/data/cloudshell_account3_known_hosts",
+      "worker_processes": 2,
+      "register_ssh_public_key": true
+    }
+  ]
+}
