@@ -1031,19 +1031,28 @@ class JobStore:
 
     def page_for_owner(
         self, owner_id: str, *, offset: int = 0, limit: int = 20,
+        search: str = "", status: str = "all",
     ) -> tuple[int, list[Job]]:
         """Return paginated top-level task history without hydrating results."""
         self.initialize()
         with closing(self._connect()) as connection:
-            total = int(connection.execute("""
-                SELECT COUNT(*) FROM jobs WHERE owner_id=?
-                AND parent_id IS NULL AND retry_parent_id IS NULL
-            """, (owner_id,)).fetchone()[0])
+            clauses = ["owner_id=?", "parent_id IS NULL", "retry_parent_id IS NULL"]
+            params: list[object] = [owner_id]
+            if status in {"queued", "running", "completed", "failed", "stopped"}:
+                clauses.append("status=?")
+                params.append(status)
+            if search.strip():
+                clauses.append("(lower(emails_json) LIKE ? OR lower(COALESCE(csv_path, '')) LIKE ?)")
+                needle = f"%{search.strip().lower()}%"
+                params.extend([needle, needle])
+            where = " AND ".join(clauses)
+            total = int(connection.execute(
+                f"SELECT COUNT(*) FROM jobs WHERE {where}", params
+            ).fetchone()[0])
             rows = connection.execute(
-                f"""SELECT {self._select_columns()} FROM jobs WHERE owner_id=?
-                AND parent_id IS NULL AND retry_parent_id IS NULL
+                f"""SELECT {self._select_columns()} FROM jobs WHERE {where}
                 ORDER BY created_at DESC LIMIT ? OFFSET ?""",
-                (owner_id, limit, offset),
+                [*params, limit, offset],
             ).fetchall()
         return total, [self._job_from_row(row) for row in rows]
 

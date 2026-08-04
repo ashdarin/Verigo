@@ -1503,12 +1503,18 @@ def list_jobs(
     user: Annotated[User, Depends(require_user)],
     offset: int | None = Query(default=None, ge=0),
     limit: int = Query(default=20, ge=1, le=50),
+    search: str = Query(default="", max_length=200),
+    status: str = Query(default="all", max_length=20),
 ) -> dict[str, object] | list[JobResponse]:
+    if status not in {"all", "queued", "running", "completed", "failed", "stopped"}:
+        raise HTTPException(status_code=422, detail="Invalid history status")
     # Keep an old cached browser functional while the new page explicitly
     # opts into the paged response by supplying offset.
     if offset is None:
         return [serialize_job(job) for job in job_store.list_recent(user.id, limit)]
-    total, jobs = job_store.page_for_owner(user.id, offset=offset, limit=limit)
+    total, jobs = job_store.page_for_owner(
+        user.id, offset=offset, limit=limit, search=search, status=status
+    )
     return {
         "total": total, "offset": offset, "limit": limit,
         "items": [serialize_job(job) for job in jobs],
