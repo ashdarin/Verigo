@@ -68,6 +68,10 @@ class CloudShellLifecycle:
         self._retry_after = 0.0
 
     @property
+    def account_id(self) -> str:
+        return self._account_id
+
+    @property
     def configured(self) -> bool:
         return bool(
             settings.gmail_worker_enabled
@@ -80,6 +84,8 @@ class CloudShellLifecycle:
         )
 
     def notify_job_queued(self) -> None:
+        if not cloudshell_coordinator.account_can_wake(self._account_id):
+            return
         self._wake_event.set()
         if time.monotonic() < self._retry_after:
             return

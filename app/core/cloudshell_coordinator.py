@@ -10,6 +10,7 @@ import json
 import logging
 import secrets
 import threading
+import time
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -35,6 +36,7 @@ class CloudShellCoordinator:
     def __init__(self, database_path: Path | None = None) -> None:
         self._lock = threading.Lock()
         self._database_path = database_path or settings.database_path
+        self._pool_refreshed_at = 0.0
 
     def _connect(self):
         return connect(self._database_path)
@@ -57,9 +59,18 @@ class CloudShellCoordinator:
                     cooldown_until TEXT,
                     last_claimed_at TEXT,
                     last_failure_at TEXT,
+                    active INTEGER NOT NULL DEFAULT 1,
+                    soft_quota_units INTEGER NOT NULL DEFAULT 0,
                     PRIMARY KEY(worker_id, usage_date)
                 )"""
             )
+            columns = {row[1] for row in db.execute("PRAGMA table_info(cloudshell_account_usage)")}
+            for name, kind in (
+                ("active", "INTEGER NOT NULL DEFAULT 1"),
+                ("soft_quota_units", "INTEGER NOT NULL DEFAULT 0"),
+            ):
+                if name not in columns:
+                    db.execute(f"ALTER TABLE cloudshell_account_usage ADD COLUMN {name} {kind}")
             db.execute(
                 """CREATE TABLE IF NOT EXISTS cloudshell_claim_reservations (
                     token TEXT PRIMARY KEY,
@@ -83,6 +94,17 @@ class CloudShellCoordinator:
                     health TEXT NOT NULL DEFAULT 'healthy',
                     last_seen_at TEXT NOT NULL,
                     PRIMARY KEY(target, worker_id)
+                )"""
+            )
+            db.execute(
+                """CREATE TABLE IF NOT EXISTS jobs (
+                    id TEXT PRIMARY KEY, execution_target TEXT NOT NULL DEFAULT 'local',
+                    status TEXT NOT NULL DEFAULT 'queued'
+                )"""
+            )
+            db.execute(
+                """CREATE TABLE IF NOT EXISTS job_results (
+                    job_id TEXT NOT NULL, progress_state TEXT NOT NULL DEFAULT 'pending'
                 )"""
             )
             db.commit()
@@ -115,12 +137,19 @@ class CloudShellCoordinator:
                 account_id = str(item.get("account_id") or item.get("id") or worker_id).strip()
                 db.execute(
                     """INSERT INTO cloudshell_account_usage
-                        (worker_id, usage_date, account_id, enabled)
-                        VALUES (?, ?, ?, ?)
+                        (worker_id, usage_date, account_id, enabled, soft_quota_units)
+                        VALUES (?, ?, ?, ?, ?)
                         ON CONFLICT(worker_id, usage_date) DO UPDATE SET
                             account_id=excluded.account_id,
-                            enabled=excluded.enabled""",
-                    (worker_id, today, account_id, int(bool(item.get("enabled", True)))),
+                            enabled=excluded.enabled,
+                            soft_quota_units=excluded.soft_quota_units""",
+                    (
+                        worker_id,
+                        today,
+                        account_id,
+                        int(bool(item.get("enabled", True))),
+                        max(0, int(item.get("soft_quota_units", settings.cloudshell_soft_quota_units) or 0)),
+                    ),
                 )
             db.commit()
 
@@ -169,13 +198,104 @@ class CloudShellCoordinator:
                 return base
         return worker_id
 
+    def refresh_pool(self, *, force: bool = False) -> None:
+        """Resize the active account pool from queue pressure.
+
+        A short process-local throttle keeps the claim endpoint from rewriting
+        the pool on every polling request while still reacting quickly to a
+        queue burst. Active accounts are kept ahead of cold accounts to avoid
+        needless Cloud Shell wakeups.
+        """
+        if not self.enabled:
+            return
+        now_monotonic = time.monotonic()
+        if not force and now_monotonic - self._pool_refreshed_at < 5:
+            return
+        self.sync_accounts()
+        with self._lock:
+            now_monotonic = time.monotonic()
+            if not force and now_monotonic - self._pool_refreshed_at < 5:
+                return
+            today = _day()
+            now = _now()
+            with closing(self._connect()) as db:
+                begin_immediate(db)
+                queue_depth = int(db.execute(
+                    """SELECT COUNT(*) FROM jobs
+                       WHERE execution_target='gmail' AND status IN ('queued', 'running')
+                         AND EXISTS (SELECT 1 FROM job_results r
+                                    WHERE r.job_id=jobs.id AND r.progress_state='pending')"""
+                ).fetchone()[0])
+                desired = max(
+                    settings.cloudshell_active_min_accounts,
+                    (queue_depth + settings.cloudshell_queue_per_active_account - 1)
+                    // settings.cloudshell_queue_per_active_account,
+                )
+                desired = min(settings.cloudshell_active_max_accounts, desired)
+                rows = db.execute(
+                    """SELECT worker_id, enabled, claimed_units, claimed_tasks,
+                              COALESCE(cooldown_until, ''), soft_quota_units, active
+                       FROM cloudshell_account_usage WHERE usage_date=?""",
+                    (today,),
+                ).fetchall()
+                eligible = [
+                    row for row in rows
+                    if int(row[1])
+                    and (not row[4] or row[4] <= now.isoformat())
+                    and (not int(row[5]) or int(row[2]) < int(row[5]))
+                ]
+                # If every account reached its configured soft budget, keep
+                # service available and rely on provider errors for cooling.
+                if not eligible:
+                    eligible = [
+                        row for row in rows
+                        if int(row[1]) and (not row[4] or row[4] <= now.isoformat())
+                    ]
+                eligible.sort(key=lambda row: (
+                    -int(row[6]), int(row[2]), int(row[3]), row[4] or "", row[0]
+                ))
+                selected = {str(row[0]) for row in eligible[: min(desired, len(eligible))]}
+                db.execute(
+                    "UPDATE cloudshell_account_usage SET active=0 WHERE usage_date=?",
+                    (today,),
+                )
+                if selected:
+                    placeholders = ",".join("?" for _ in selected)
+                    db.execute(
+                        f"UPDATE cloudshell_account_usage SET active=1 WHERE usage_date=? "
+                        f"AND worker_id IN ({placeholders})",
+                        (today, *selected),
+                    )
+                db.commit()
+            self._pool_refreshed_at = now_monotonic
+
+    def account_can_wake(self, account_id: str) -> bool:
+        """Return whether a lifecycle may start this account's Cloud Shell."""
+        if not self.enabled:
+            return True
+        self.refresh_pool()
+        today = _day()
+        with closing(self._connect()) as db:
+            row = db.execute(
+                """SELECT active, enabled, COALESCE(cooldown_until, ''), claimed_units,
+                          soft_quota_units
+                   FROM cloudshell_account_usage WHERE usage_date=? AND account_id=?""",
+                (today, account_id),
+            ).fetchone()
+        if not row:
+            return False
+        return bool(
+            int(row[0]) and int(row[1])
+            and (not row[2] or row[2] <= _now().isoformat())
+        )
+
     def reserve(self, worker_id: str, reserved_units: int) -> str | None:
         """Reserve a claim slot if this worker is currently least-used."""
         if not self.enabled:
             return "disabled"
-        # Refresh the manifest at claim time so adding an account only requires
-        # editing the protected JSON file and restarting workers is optional.
-        self.sync_accounts()
+        # Refresh the manifest and active pool at claim time so queue pressure
+        # can wake additional accounts without a process restart.
+        self.refresh_pool()
         self.initialize()
         worker_id = worker_id.strip()
         if not worker_id:
@@ -219,7 +339,7 @@ class CloudShellCoordinator:
                    FROM cloudshell_account_usage u
                    LEFT JOIN cloudshell_claim_reservations r
                      ON r.worker_id=u.worker_id AND r.usage_date=u.usage_date
-                   WHERE u.usage_date=? AND u.enabled=1
+                   WHERE u.usage_date=? AND u.enabled=1 AND u.active=1
                    GROUP BY u.worker_id, u.claimed_units
                    ORDER BY u.claimed_units + reserved, u.last_claimed_at, u.worker_id""",
                 (today,),
@@ -296,16 +416,18 @@ class CloudShellCoordinator:
         self.initialize()
         with closing(self._connect()) as db:
             rows = db.execute(
-                """SELECT account_id, worker_id, enabled, usage_date, claimed_units,
-                          claimed_tasks, failure_count, cooldown_until, last_claimed_at
+                """SELECT account_id, worker_id, enabled, active, usage_date, claimed_units,
+                          claimed_tasks, failure_count, cooldown_until, last_claimed_at,
+                          soft_quota_units
                    FROM cloudshell_account_usage WHERE usage_date=?
                    ORDER BY claimed_units, last_claimed_at, worker_id""",
                 (_day(),),
             ).fetchall()
         return [
-            {"account_id": r[0], "worker_id": r[1], "enabled": bool(r[2]), "usage_date": r[3],
-             "claimed_units": int(r[4]), "claimed_tasks": int(r[5]), "failure_count": int(r[6]),
-             "cooldown_until": r[7], "last_claimed_at": r[8]}
+            {"account_id": r[0], "worker_id": r[1], "enabled": bool(r[2]), "active": bool(r[3]),
+             "usage_date": r[4], "claimed_units": int(r[5]), "claimed_tasks": int(r[6]),
+             "failure_count": int(r[7]), "cooldown_until": r[8], "last_claimed_at": r[9],
+             "soft_quota_units": int(r[10])}
             for r in rows
         ]
 
