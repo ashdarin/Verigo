@@ -414,6 +414,8 @@ class CloudShellCoordinator:
     def snapshot(self) -> list[dict[str, Any]]:
         self.sync_accounts()
         self.initialize()
+        now = _now()
+        stale_before = (now - timedelta(seconds=settings.node_stale_seconds)).isoformat()
         with closing(self._connect()) as db:
             rows = db.execute(
                 """SELECT account_id, worker_id, enabled, active, usage_date, claimed_units,
@@ -423,13 +425,79 @@ class CloudShellCoordinator:
                    ORDER BY claimed_units, last_claimed_at, worker_id""",
                 (_day(),),
             ).fetchall()
-        return [
-            {"account_id": r[0], "worker_id": r[1], "enabled": bool(r[2]), "active": bool(r[3]),
-             "usage_date": r[4], "claimed_units": int(r[5]), "claimed_tasks": int(r[6]),
-             "failure_count": int(r[7]), "cooldown_until": r[8], "last_claimed_at": r[9],
-             "soft_quota_units": int(r[10])}
-            for r in rows
-        ]
+            queue_depth = int(db.execute(
+                """SELECT COUNT(*) FROM jobs
+                   WHERE execution_target='gmail' AND status IN ('queued', 'running')
+                     AND EXISTS (SELECT 1 FROM job_results r WHERE r.job_id=jobs.id
+                                AND r.progress_state='pending')"""
+            ).fetchone()[0])
+            nodes = db.execute(
+                """SELECT worker_id, health, last_seen_at FROM worker_nodes
+                   WHERE target='gmail'""",
+            ).fetchall()
+        node_map: dict[str, list[tuple[str, str]]] = {}
+        for worker_id, health, last_seen_at in nodes:
+            worker_id = str(worker_id)
+            for row in rows:
+                base = str(row[1])
+                if worker_id == base or worker_id.startswith(f"{base}-"):
+                    node_map.setdefault(base, []).append((str(health), str(last_seen_at)))
+                    break
+
+        items: list[dict[str, Any]] = []
+        for row in rows:
+            account_id, worker_id = str(row[0]), str(row[1])
+            cooldown_until = row[8]
+            cooling = bool(cooldown_until and str(cooldown_until) > now.isoformat())
+            health_rows = node_map.get(worker_id, [])
+            health = "healthy" if any(
+                value[0] == "healthy" and value[1] >= stale_before for value in health_rows
+            ) else (
+                "offline" if any(value[0] == "offline" for value in health_rows) else
+                "stale" if any(value[0] == "stale" or value[1] < stale_before for value in health_rows)
+                else "unknown"
+            )
+            last_seen_at = max((value[1] for value in health_rows), default=None)
+            status = "disabled" if not bool(row[2]) else "cooldown" if cooling else (
+                "active" if bool(row[3]) else "idle"
+            )
+            items.append({
+                "account_id": account_id, "worker_id": worker_id,
+                "enabled": bool(row[2]), "active": bool(row[3]), "status": status,
+                "health": health, "last_seen_at": last_seen_at,
+                "usage_date": row[4], "claimed_units": int(row[5]),
+                "claimed_tasks": int(row[6]), "failure_count": int(row[7]),
+                "cooldown_until": cooldown_until, "last_claimed_at": row[9],
+                "soft_quota_units": int(row[10]),
+            })
+        return items
+
+    def dashboard_snapshot(self) -> dict[str, Any]:
+        """Return the account cards plus safe pool-level counters."""
+        items = self.snapshot()
+        now = _now().isoformat()
+        return {
+            "items": items,
+            "summary": {
+                "total_accounts": len(items),
+                "active_accounts": sum(1 for item in items if item["status"] == "active"),
+                "cooldown_accounts": sum(1 for item in items if item["status"] == "cooldown"),
+                "today_units": sum(int(item["claimed_units"]) for item in items),
+                "today_tasks": sum(int(item["claimed_tasks"]) for item in items),
+                "queue_depth": self._queue_depth(),
+                "updated_at": now,
+            },
+        }
+
+    def _queue_depth(self) -> int:
+        self.initialize()
+        with closing(self._connect()) as db:
+            return int(db.execute(
+                """SELECT COUNT(*) FROM jobs
+                   WHERE execution_target='gmail' AND status IN ('queued', 'running')
+                     AND EXISTS (SELECT 1 FROM job_results r WHERE r.job_id=jobs.id
+                                AND r.progress_state='pending')"""
+            ).fetchone()[0])
 
 
 cloudshell_coordinator = CloudShellCoordinator()

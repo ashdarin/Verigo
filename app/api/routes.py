@@ -847,7 +847,7 @@ def admin_feature_usage(_: Annotated[User, Depends(require_admin)]) -> dict[str,
 @router.get("/admin/cloudshell/accounts")
 def admin_cloudshell_accounts(_: Annotated[User, Depends(require_admin)]) -> dict[str, object]:
     """Expose daily rotation counters without exposing ADC or SSH paths."""
-    return {"items": cloudshell_coordinator.snapshot()}
+    return cloudshell_coordinator.dashboard_snapshot()
 
 
 @router.get("/notifications", response_model=NotificationListResponse)

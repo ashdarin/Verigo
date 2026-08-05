@@ -215,6 +215,67 @@ function setMetric(id, value) {
   el(id).textContent = Number(value || 0).toLocaleString("zh-CN");
 }
 
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (character) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[character]));
+}
+
+function cloudShellStatusLabel(status) {
+  return ({ active: "活跃", idle: "待机", cooldown: "冷却中", disabled: "已禁用" }[status] || "待确认");
+}
+
+function cloudShellHealthLabel(health) {
+  return ({ healthy: "健康", stale: "心跳滞后", offline: "离线", unknown: "未连接" }[health] || "未确认");
+}
+
+function renderCloudshellAccounts(payload) {
+  const summary = payload.summary || {};
+  [
+    ["cloudshell-total-accounts", summary.total_accounts],
+    ["cloudshell-active-accounts", summary.active_accounts],
+    ["cloudshell-cooldown-accounts", summary.cooldown_accounts],
+    ["cloudshell-today-units", summary.today_units],
+    ["cloudshell-queue-depth", summary.queue_depth],
+  ].forEach(([id, value]) => setMetric(id, value));
+  const cards = el("cloudshell-account-cards");
+  const items = Array.isArray(payload.items) ? payload.items : [];
+  if (!items.length) {
+    cards.innerHTML = '<div class="cloudshell-crm-state">暂无已配置的 CloudShell 账号</div>';
+    return;
+  }
+  cards.innerHTML = items.map((account) => {
+    const status = escapeHtml(account.status || "unknown");
+    const health = escapeHtml(account.health || "unknown");
+    const claimedUnits = Number(account.claimed_units || 0).toLocaleString("zh-CN");
+    const softQuota = Number(account.soft_quota_units || 0);
+    const quotaText = softQuota > 0 ? `${claimedUnits} / ${softQuota.toLocaleString("zh-CN")}` : `${claimedUnits} / 未设置上限`;
+    const lastSeen = account.last_seen_at ? new Date(account.last_seen_at).toLocaleString("zh-CN") : "暂无心跳";
+    const lastClaimed = account.last_claimed_at ? new Date(account.last_claimed_at).toLocaleString("zh-CN") : "尚未领取";
+    return `<article class="cloudshell-account-card cloudshell-status-${status}" data-worker-id="${escapeHtml(account.worker_id)}">
+      <div class="cloudshell-account-card-top"><div class="cloudshell-account-avatar" aria-hidden="true">CS</div><div class="cloudshell-account-name"><strong>${escapeHtml(account.account_id)}</strong><span>${escapeHtml(account.worker_id)}</span></div><span class="cloudshell-status-badge cloudshell-status-${status}">${cloudShellStatusLabel(account.status)}</span></div>
+      <div class="cloudshell-account-health"><span class="cloudshell-health-dot cloudshell-health-${health}"></span>${cloudShellHealthLabel(account.health)}<span class="cloudshell-health-time">${escapeHtml(lastSeen)}</span></div>
+      <dl class="cloudshell-account-stats"><div><dt>今日处理邮箱</dt><dd>${claimedUnits}</dd></div><div><dt>今日任务</dt><dd>${Number(account.claimed_tasks || 0).toLocaleString("zh-CN")}</dd></div><div><dt>失败次数</dt><dd>${Number(account.failure_count || 0).toLocaleString("zh-CN")}</dd></div><div><dt>软配额</dt><dd>${escapeHtml(quotaText)}</dd></div></dl>
+      <div class="cloudshell-account-footer"><span>最近领取</span><strong>${escapeHtml(lastClaimed)}</strong></div>
+    </article>`;
+  }).join("");
+}
+
+async function loadCloudshellAccounts() {
+  if (!state.user?.is_admin || state.view !== "dashboard") return;
+  try {
+    const data = await api("/api/admin/cloudshell/accounts");
+    renderCloudshellAccounts(data);
+    const updatedAt = data.summary?.updated_at;
+    el("cloudshell-crm-updated").textContent = updatedAt
+      ? `最近更新：${new Date(updatedAt).toLocaleString("zh-CN")}`
+      : "账号池状态已更新";
+  } catch (error) {
+    el("cloudshell-crm-updated").textContent = "账号状态加载失败，请稍后刷新";
+    el("cloudshell-account-cards").innerHTML = `<div class="cloudshell-crm-state cloudshell-crm-state-error">${escapeHtml(error.message || "无法读取账号状态")}</div>`;
+  }
+}
+
 function formatDuration(seconds) {
   const total = Math.round(Number(seconds || 0));
   if (total < 60) return `${total} 秒`;
@@ -311,6 +372,7 @@ async function loadDashboardMetrics() {
     ["queued", "running", "failed"].forEach((status) => setMetric(`metric-jobs-${status}`, data.jobs[status]));
     renderTraffic(data.daily);
     el("dashboard-updated").textContent = `最近更新：${new Date(data.updated_at).toLocaleString("zh-CN")}`;
+    loadCloudshellAccounts();
   } catch (error) {
     el("dashboard-updated").textContent = `数据加载失败：${error.message}`;
   }

@@ -280,6 +280,24 @@ th:nth-child(1) { width: 28%; } th:nth-child(2) { width: 14%; } th:nth-child(3) 
 .report-scorecard:last-child { border-right: 0; }
 .report-scorecard span, .report-scorecard small { color: #5f6368; font-size: 12px; }
 .report-scorecard strong { margin: 7px 0 3px; color: #202124; font-size: 29px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.cloudshell-crm { margin-top: 18px; padding: 23px; border: 1px solid #dadce0; border-radius: 8px; background: #fff; }
+.cloudshell-crm-heading { display:flex; align-items:flex-start; justify-content:space-between; gap:18px; margin-bottom:18px; }
+.cloudshell-crm-heading h2 { margin:4px 0 0; color:#202124; font-size:18px; }
+.cloudshell-crm-strategy { max-width:320px; padding:9px 11px; border:1px solid #d8e8dd; border-radius:6px; background:#f4faf6; color:#456454; font-size:11px; line-height:1.45; text-align:right; }
+.cloudshell-crm-summary { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); margin-bottom:18px; border:1px solid #edf0f2; border-radius:6px; overflow:hidden; background:#fbfcfd; }
+.cloudshell-crm-summary > div { min-width:0; padding:13px 15px; border-right:1px solid #edf0f2; }
+.cloudshell-crm-summary > div:last-child { border-right:0; }
+.cloudshell-crm-summary span { display:block; color:#5f6368; font-size:11px; }
+.cloudshell-crm-summary strong { display:block; margin-top:5px; color:#202124; font-size:21px; font-variant-numeric:tabular-nums; }
+.cloudshell-account-cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:12px; min-width:0; }
+.cloudshell-account-card { min-width:0; padding:16px; border:1px solid #e1e6e3; border-radius:8px; background:#fff; box-shadow:0 2px 8px rgba(32,33,36,.04); }
+.cloudshell-account-card.cloudshell-status-active { border-top:3px solid #188038; }.cloudshell-account-card.cloudshell-status-cooldown { border-top:3px solid #e37400; }.cloudshell-account-card.cloudshell-status-disabled { border-top:3px solid #9aa0a6; }.cloudshell-account-card.cloudshell-status-idle { border-top:3px solid #6b7280; }
+.cloudshell-account-card-top { display:flex; align-items:center; gap:9px; min-width:0; }
+.cloudshell-account-avatar { display:grid; place-items:center; flex:0 0 34px; width:34px; height:34px; border-radius:9px; background:#e7f5ee; color:#137333; font-size:11px; font-weight:700; letter-spacing:.03em; }
+.cloudshell-account-name { display:grid; min-width:0; flex:1; }.cloudshell-account-name strong,.cloudshell-account-name span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }.cloudshell-account-name strong { color:#202124; font-size:13px; }.cloudshell-account-name span { margin-top:3px; color:#80868b; font-size:10px; }
+.cloudshell-status-badge { flex:0 0 auto; padding:4px 7px; border-radius:999px; font-size:10px; font-weight:650; }.cloudshell-status-badge.cloudshell-status-active { background:#e6f4ea; color:#137333; }.cloudshell-status-badge.cloudshell-status-cooldown { background:#fef0e1; color:#b06000; }.cloudshell-status-badge.cloudshell-status-idle { background:#f1f3f4; color:#5f6368; }.cloudshell-status-badge.cloudshell-status-disabled { background:#f1f3f4; color:#80868b; }
+.cloudshell-account-health { display:flex; align-items:center; gap:6px; min-width:0; margin-top:13px; color:#3c4043; font-size:11px; }.cloudshell-health-dot { width:7px; height:7px; flex:0 0 7px; border-radius:50%; background:#9aa0a6; }.cloudshell-health-healthy { background:#34a853; }.cloudshell-health-stale { background:#fbbc04; }.cloudshell-health-offline { background:#ea4335; }.cloudshell-health-time { min-width:0; margin-left:auto; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#80868b; font-size:10px; }
+.cloudshell-account-stats { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px 12px; margin:16px 0 13px; }.cloudshell-account-stats div { min-width:0; }.cloudshell-account-stats dt { color:#80868b; font-size:10px; }.cloudshell-account-stats dd { margin:3px 0 0; overflow-wrap:anywhere; color:#202124; font-size:14px; font-weight:650; font-variant-numeric:tabular-nums; }.cloudshell-account-footer { display:flex; justify-content:space-between; gap:8px; padding-top:10px; border-top:1px solid #edf0f2; color:#80868b; font-size:10px; }.cloudshell-account-footer strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#5f6368; font-size:10px; font-weight:500; }.cloudshell-crm-state { padding:24px 12px; border:1px dashed #cfd8d3; border-radius:6px; color:#5f6368; font-size:12px; text-align:center; }.cloudshell-crm-state-error { border-color:#f1b9b7; background:#fff8f7; color:#b3261e; }
 .report-primary-grid { display: grid; grid-template-columns: minmax(0, 1.75fr) minmax(300px, .8fr); gap: 18px; margin-top: 18px; }
 .report-secondary-grid { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 18px; margin-top: 18px; }
 .report-tertiary-grid { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(300px, .75fr); gap: 18px; margin-top: 18px; }
@@ -465,3 +483,16 @@ th:nth-child(1) { width: 28%; } th:nth-child(2) { width: 14%; } th:nth-child(3) 
 .discovery-guide { display:grid; gap:16px; width:100%; max-width:100%; margin-top:26px; padding:22px; border:1px solid #cfe1d7; border-radius:12px; background:#f4faf6; box-shadow:0 8px 20px rgba(26,42,35,.05); box-sizing:border-box; }.discovery-guide h2 { margin:0; color:var(--ink); font-size:19px; }.discovery-guide p { margin:0; color:var(--muted); font-size:14px; line-height:1.65; }.discovery-guide-grid { display:grid; grid-template-columns:minmax(0,1fr); gap:12px; min-width:0; }.discovery-guide-card { display:grid; gap:8px; min-height:84px; padding:16px; border:1px solid #d5e5dc; border-radius:10px; background:#fff; box-shadow:0 3px 10px rgba(26,42,35,.04); box-sizing:border-box; min-width:0; }.discovery-guide-card strong { display:flex; align-items:center; gap:8px; min-width:0; color:var(--accent-dark); font-size:14px; }.discovery-guide-card strong::before { content:""; width:9px; height:9px; flex:0 0 9px; border-radius:50%; background:var(--lime); box-shadow:0 0 0 3px #edf7cf; }.discovery-guide-card span { display:block; min-width:0; margin:0; color:var(--muted); font-size:13px; line-height:1.6; overflow-wrap:anywhere; }.discovery-empty-panel { display:grid; grid-template-columns:repeat(3,1fr); gap:14px; margin:22px 0; }.discovery-empty-card { min-height:116px; padding:19px; border:1px solid #d5e5dc; border-radius:10px; background:#f8fbf9; }.discovery-empty-card strong { display:block; color:var(--accent-dark); font-size:14px; }.discovery-empty-card span { display:block; margin-top:9px; color:var(--muted); font-size:13px; line-height:1.6; }
 @media (max-width: 600px) { .result-detail-drawer { padding:20px 16px; } .result-detail-actions button { width:100%; } }
 @media (max-width: 700px) { .discovery-guide-grid, .discovery-empty-panel { grid-template-columns:1fr; } .discovery-guide-card, .discovery-empty-card { min-height:0; } }
+@media (max-width: 700px) {
+  .cloudshell-crm { padding:18px; }
+  .cloudshell-crm-heading { flex-direction:column; gap:10px; }
+  .cloudshell-crm-strategy { max-width:none; text-align:left; }
+  .cloudshell-crm-summary { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .cloudshell-crm-summary > div:nth-child(2n) { border-right:0; }
+  .cloudshell-crm-summary > div:nth-child(n+3) { border-top:1px solid #edf0f2; }
+}
+@media (max-width: 390px) {
+  .cloudshell-crm { padding:15px; }
+  .cloudshell-account-cards { grid-template-columns:minmax(0,1fr); }
+  .cloudshell-account-card { padding:14px; }
+}

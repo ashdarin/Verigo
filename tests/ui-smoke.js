@@ -322,6 +322,18 @@ async function checkDashboard(browser) {
       })),
     }),
   }));
+  await page.route("**/api/admin/cloudshell/accounts", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({
+      summary: { total_accounts: 10, active_accounts: 2, cooldown_accounts: 1, today_units: 9, queue_depth: 0, updated_at: new Date().toISOString() },
+      items: Array.from({ length: 10 }, (_, index) => ({
+        account_id: `account${index + 3}`, worker_id: `cloudshell-gmail-account${index + 3}`,
+        status: index === 0 ? "active" : "idle", health: "healthy", claimed_units: index,
+        claimed_tasks: index, failure_count: 0, soft_quota_units: 0,
+        last_seen_at: new Date().toISOString(), last_claimed_at: null,
+      })),
+    }),
+  }));
   await page.goto("http://127.0.0.1:8000/dashboard", { waitUntil: "networkidle" });
   await page.waitForSelector("#dashboard-workspace:not(.hidden)");
   const result = await page.evaluate(() => ({
@@ -332,8 +344,10 @@ async function checkDashboard(browser) {
     trafficLines: document.querySelectorAll("#dashboard-traffic-chart polyline").length,
     reportUsers: document.querySelector("#metric-report-users")?.textContent,
     revenue: document.querySelector("#metric-today-revenue")?.textContent,
+    cloudshellCards: document.querySelectorAll(".cloudshell-account-card").length,
+    cloudshellTotal: document.querySelector("#cloudshell-total-accounts")?.textContent,
   }));
-  if (result.title !== "运营监控 | Verigo" || result.overflow || !result.navVisible || result.credits !== "无限额度" || result.trafficLines !== 2 || result.reportUsers !== "17" || result.revenue !== "¥29.90") {
+  if (result.title !== "运营监控 | Verigo" || result.overflow || !result.navVisible || result.credits !== "无限额度" || result.trafficLines !== 2 || result.reportUsers !== "17" || result.revenue !== "¥29.90" || result.cloudshellCards !== 10 || result.cloudshellTotal !== "10") {
     throw new Error(`dashboard: unexpected rendering ${JSON.stringify(result)}`);
   }
   await page.close();
