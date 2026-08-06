@@ -73,6 +73,21 @@ class ProspectingStore:
                         FOREIGN KEY(run_id) REFERENCES prospecting_runs(id) ON DELETE CASCADE
                     )
                 """)
+                connection.execute("""
+                    CREATE TABLE IF NOT EXISTS prospecting_candidate_claims (
+                        claim_token TEXT NOT NULL, domain TEXT NOT NULL, email TEXT NOT NULL,
+                        name_key TEXT, claimed_at TEXT NOT NULL,
+                        PRIMARY KEY(claim_token, email)
+                    )
+                """)
+                connection.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_prospecting_claim_email "
+                    "ON prospecting_candidate_claims(domain, email)"
+                )
+                connection.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_prospecting_claim_name "
+                    "ON prospecting_candidate_claims(domain, name_key) WHERE name_key IS NOT NULL"
+                )
                 candidate_columns = {
                     row[1] for row in connection.execute("PRAGMA table_info(prospecting_candidates)")
                 }
@@ -217,6 +232,7 @@ class ProspectingStore:
         verification_job_id: str,
         candidates: list[ProspectingCandidate],
         profile_patterns: Iterable[str],
+        claim_token: str | None = None,
     ) -> ProspectingRun:
         self.initialize()
         run = ProspectingRun(
@@ -245,11 +261,78 @@ class ProspectingStore:
                     (run.id, index, item.email, item.category, item.pattern, item.rank, item.source, item.name_key)
                     for index, item in enumerate(candidates)
                 ])
+                if claim_token:
+                    claimed = connection.execute(
+                        "SELECT COUNT(*) FROM prospecting_candidate_claims WHERE claim_token=?",
+                        (claim_token,),
+                    ).fetchone()[0]
+                    if int(claimed) != len(candidates):
+                        raise RuntimeError("Prospecting candidate claim expired")
+                    connection.execute(
+                        "DELETE FROM prospecting_candidate_claims WHERE claim_token=?",
+                        (claim_token,),
+                    )
                 connection.execute("COMMIT")
             except Exception:
                 connection.execute("ROLLBACK")
                 raise
         return run
+
+    def allocate_candidates(
+        self, domain: str, candidates: list[ProspectingCandidate], limit: int,
+    ) -> tuple[str, list[ProspectingCandidate]]:
+        """Atomically reserve globally unique candidates for a new discovery run."""
+        self.initialize()
+        token = uuid.uuid4().hex
+        selected: list[ProspectingCandidate] = []
+        now = utc_now().isoformat()
+        with self._lock, closing(self._connect()) as connection:
+            begin_immediate(connection)
+            connection.execute(
+                "DELETE FROM prospecting_candidate_claims WHERE claimed_at < ?",
+                ((utc_now() - timedelta(minutes=15)).isoformat(),),
+            )
+            issued_rows = list(connection.execute(
+                    """SELECT candidate.email, candidate.name_key
+                    FROM prospecting_candidates AS candidate
+                    JOIN prospecting_runs AS run ON run.id=candidate.run_id
+                    WHERE run.domain=?""", (domain,)
+                ))
+            issued_emails = {str(row[0]) for row in issued_rows}
+            issued_name_keys = {str(row[1]) for row in issued_rows if row[1]}
+            claimed_rows = list(connection.execute(
+                    "SELECT email, name_key FROM prospecting_candidate_claims WHERE domain=?", (domain,)
+                ))
+            claimed_emails = {str(row[0]) for row in claimed_rows}
+            claimed_name_keys = {str(row[1]) for row in claimed_rows if row[1]}
+            for candidate in candidates:
+                if (
+                    candidate.email in issued_emails
+                    or candidate.email in claimed_emails
+                    or (candidate.name_key is not None and (
+                        candidate.name_key in issued_name_keys or candidate.name_key in claimed_name_keys
+                    ))
+                ):
+                    continue
+                try:
+                    connection.execute(
+                        "INSERT INTO prospecting_candidate_claims(claim_token, domain, email, name_key, claimed_at) VALUES (?, ?, ?, ?, ?)",
+                        (token, domain, candidate.email, candidate.name_key, now),
+                    )
+                except sqlite3.IntegrityError:
+                    continue
+                selected.append(candidate)
+                if len(selected) >= max(1, limit):
+                    break
+            connection.commit()
+        return token, selected
+
+    def release_candidate_claim(self, claim_token: str) -> None:
+        self.initialize()
+        with self._lock, closing(self._connect()) as connection:
+            connection.execute(
+                "DELETE FROM prospecting_candidate_claims WHERE claim_token=?", (claim_token,)
+            )
 
     def get(self, run_id: str, owner_id: str) -> ProspectingRun | None:
         self.initialize()

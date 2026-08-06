@@ -1119,6 +1119,13 @@ def submit_prospecting_run(
             raise ValueError("All available unique candidates for this account and domain have already been checked")
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    claim_token, candidates = prospecting_store.allocate_candidates(
+        domain,
+        candidates,
+        1 if business_entry_only else settings.prospecting_beta_max_candidates,
+    )
+    if not candidates:
+        raise HTTPException(status_code=422, detail="All available unique candidates for this account and domain have already been checked")
     job: Job | None = None
     try:
         # Keep company discovery in the shared local pool. Remote nodes may
@@ -1132,7 +1139,8 @@ def submit_prospecting_run(
             execution_target="local",
         )
         run = prospecting_store.create_run(
-            user.id, domain, payload.country, known_pattern or payload.email_pattern, job.id, candidates, learned_patterns
+            user.id, domain, payload.country, known_pattern or payload.email_pattern, job.id, candidates, learned_patterns,
+            claim_token=claim_token,
         )
         # The run is now registered, so all worker pools can apply the
         # discovery-specific MX ceiling before they start claiming shards.
@@ -1140,10 +1148,12 @@ def submit_prospecting_run(
         domestic_worker_lifecycle.notify_job_queued()
         notify_cloudshell_job_queued()
     except RuntimeError as exc:
+        prospecting_store.release_candidate_claim(claim_token)
         if job is not None:
             job_store.stop(job.id)
         raise HTTPException(status_code=429, detail=str(exc)) from exc
     except Exception:
+        prospecting_store.release_candidate_claim(claim_token)
         if job is not None:
             job_store.stop(job.id)
         raise
