@@ -11,7 +11,7 @@ import ipaddress
 import re
 import socket
 from urllib.request import Request as UrlRequest, urlopen
-from datetime import datetime
+from datetime import datetime, time as datetime_time, timedelta, timezone
 from zoneinfo import ZoneInfo
 from io import StringIO
 from typing import Annotated
@@ -85,7 +85,7 @@ from app.db.domain_previews import domain_preview_store
 from app.db.jobs import Job, job_store, utc_now
 from app.db.metrics import metrics_store
 from app.db.prospecting import ProspectingRun, prospecting_store
-from app.db.result_objects import now_iso, result_object_store
+from app.db.result_objects import result_object_store
 from app.tasks.verification import (
     clean_emails,
     job_progress,
@@ -114,6 +114,18 @@ def _domain_suggestions(query: str) -> list[dict[str, object]]:
     if "." in query:
         return []
     return domain_preview_store.suggestions(query)[:6]
+
+
+def _has_only_public_addresses(domain: str) -> bool:
+    """Require every resolved address to be publicly routable before fetching it."""
+    try:
+        addresses = {
+            ipaddress.ip_address(item[4][0])
+            for item in socket.getaddrinfo(domain, 443, type=socket.SOCK_STREAM)
+        }
+    except (OSError, ValueError):
+        return False
+    return bool(addresses) and all(address.is_global for address in addresses)
 DOMESTIC_EMAIL_DOMAINS = frozenset({
     "qq.com", "vip.qq.com", "foxmail.com", "163.com", "126.com", "yeah.net",
     "sina.com", "sina.cn", "sohu.com", "aliyun.com", "aliyun.cn", "139.com",
@@ -415,7 +427,7 @@ def require_remote_job(job_id: str, worker_id: str, execution_target: str, lease
     return job
 
 
-def merge_worker_results(job: Job, worker_id: str, lease_id: str, results: list[dict[str, object]]) -> Job:
+def merge_worker_results(job: Job, results: list[dict[str, object]]) -> list[dict[str, object]]:
     normalized: list[dict[str, object]] = []
     for raw_result in results:
         result = dict(raw_result)
@@ -431,14 +443,7 @@ def merge_worker_results(job: Job, worker_id: str, lease_id: str, results: list[
         result = normalize_result(result)
         result["progress_state"] = "completed"
         normalized.append(result)
-    if not job_store.lease_accepts_results(
-        job.id, worker_id, lease_id, [int(result["original_index"]) for result in normalized]
-    ):
-        raise HTTPException(status_code=409, detail="Remote worker attempted to report results outside its lease")
-    # Durable result rows are independent of the job metadata row. A repeated
-    # callback cannot overwrite a terminal result with a waiting state.
-    job_store.upsert_results(job.id, normalized)
-    return job
+    return normalized
 
 
 def require_job_access(job: Job, user: User | None, guest_token: str | None) -> Job:
@@ -666,9 +671,13 @@ def report_tencent_qq_results(
         return {"status": "stopped", "stop_requested": True}
     worker_name = (worker_id or "").strip()
     job = require_remote_job(job_id, worker_name, execution_target, payload.lease_id)
-    # A callback is acknowledged only after its result rows are durable. The
-    # upsert is idempotent, so workers can safely retry after a network error.
-    merge_worker_results(job, worker_name, payload.lease_id or "", payload.results)
+    # A callback is acknowledged only after its result rows are durable. Lease
+    # validation, the index check, row upsert, and renewal are one transaction.
+    normalized = merge_worker_results(job, payload.results)
+    if not payload.lease_id or not job_store.report_lease_results(
+        job.id, worker_name, payload.lease_id, normalized, execution_target=execution_target,
+    ):
+        raise HTTPException(status_code=409, detail="Remote worker lease is no longer active")
     refreshed = job_store.get(job.id)
     if refreshed is None:
         raise HTTPException(status_code=404, detail="Verification job no longer exists")
@@ -687,8 +696,6 @@ def report_tencent_qq_results(
         }
     if payload.results:
         sync_parent_job(job)
-    if not payload.lease_id or not job_store.heartbeat_lease(job.id, worker_name, payload.lease_id):
-        raise HTTPException(status_code=409, detail="Remote worker lease is no longer active")
     return {
         "status": job.status,
         "stop_requested": False,
@@ -711,7 +718,11 @@ def complete_tencent_qq_job(
         return serialize_job(job)
     worker_name = (worker_id or "").strip()
     job = require_remote_job(job_id, worker_name, execution_target, payload.lease_id)
-    merge_worker_results(job, worker_name, payload.lease_id or "", payload.results)
+    normalized = merge_worker_results(job, payload.results)
+    if not payload.lease_id or not job_store.report_lease_results(
+        job.id, worker_name, payload.lease_id, normalized, execution_target=execution_target,
+    ):
+        raise HTTPException(status_code=409, detail="Remote worker lease is no longer active")
     job_store.reconcile_catch_all_conflicts(job.id)
     if not payload.lease_id or not job_store.complete_lease(job.id, worker_name, payload.lease_id):
         raise HTTPException(status_code=409, detail="Remote worker lease is no longer active")
@@ -928,11 +939,7 @@ def domain_preview(
             logo_url=cached.get("logo_url") or f"https://logos.hunter.io/{domain}",
             relations_pending=False,
         )
-    try:
-        addresses = {ipaddress.ip_address(item[4][0]) for item in socket.getaddrinfo(domain, 443, type=socket.SOCK_STREAM)}
-        if not addresses or any(not address.is_global for address in addresses):
-            return DomainPreviewResponse(domain=domain, url=f"https://{domain}")
-    except OSError:
+    if not _has_only_public_addresses(domain):
         return DomainPreviewResponse(domain=domain, url=f"https://{domain}")
     title = None
     reachable = False
@@ -973,6 +980,8 @@ def domain_relations(q: str = Query(min_length=3, max_length=253)) -> DomainPrev
             logo_url=cached.get("logo_url") or f"https://logos.hunter.io/{domain}",
             relations_pending=False,
         )
+    if not _has_only_public_addresses(domain):
+        raise HTTPException(status_code=422, detail="Company domain must resolve only to public addresses")
     related_domains, entities = discover_related(domain)
     payload = {
         "domain": domain,
@@ -1555,31 +1564,20 @@ def list_jobs(
 @router.get("/workspace")
 def workspace_snapshot(user: Annotated[User, Depends(require_user)]) -> dict[str, object]:
     """Return workspace aggregates with server-side Asia/Shanghai day semantics."""
-    total, jobs = job_store.page_for_owner(user.id, offset=0, limit=50)
-    all_jobs = list(jobs)
-    offset = len(all_jobs)
-    while offset < total:
-        _, page = job_store.page_for_owner(user.id, offset=offset, limit=50)
-        if not page:
-            break
-        all_jobs.extend(page)
-        offset += len(page)
-    today = datetime.now(ZoneInfo("Asia/Shanghai")).date()
-    processed_today = 0
-    deliverable = 0
-    settled = 0
-    for job in all_jobs:
-        if job.created_at.astimezone(ZoneInfo("Asia/Shanghai")).date() == today:
-            processed_today += max(0, int(job_progress(job)[0]))
-        overview = job_store.result_overview(job.id)
-        deliverable += max(0, int(overview.deliverable))
-        settled += max(0, int(overview.settled))
+    shanghai = ZoneInfo("Asia/Shanghai")
+    today = datetime.now(shanghai).date()
+    day_start = datetime.combine(today, datetime_time.min, tzinfo=shanghai).astimezone(timezone.utc)
+    day_end = datetime.combine(today + timedelta(days=1), datetime_time.min, tzinfo=shanghai).astimezone(timezone.utc)
+    overview = job_store.workspace_overview(
+        user.id, day_start=day_start, day_end=day_end,
+    )
+    jobs = job_store.list_recent(user.id, 8)
     return {
-        "total": total,
-        "processed_today": processed_today,
-        "deliverable": deliverable,
-        "settled": settled,
-        "items": [serialize_job(job) for job in all_jobs[:8]],
+        "total": overview.total,
+        "processed_today": overview.processed_today,
+        "deliverable": overview.deliverable,
+        "settled": overview.settled,
+        "items": [serialize_job(job) for job in jobs],
         "recent_results": result_object_store.recent_results(user.id, 8),
     }
 
@@ -1599,10 +1597,8 @@ def mark_job_reviewed(
     user: Annotated[User | None, Depends(optional_user)],
     guest_token: Annotated[str | None, Header(alias="X-Job-Token")] = None,
 ) -> None:
-    job = require_job_access(require_job(job_id), user, guest_token)
-    for result in job.results:
-        result.pop("retry_updated", None)
-    job_store.persist(job)
+    job = require_job_access(require_job(job_id, include_results=False), user, guest_token)
+    job_store.clear_job_review_updates(job.id)
 
 
 @router.post("/jobs/{job_id}/stop", response_model=JobResponse)
@@ -1741,22 +1737,24 @@ def get_list(list_id: str, user: Annotated[User, Depends(require_user)], offset:
 
 @router.patch("/lists/{list_id}")
 def update_list(list_id: str, payload: ListUpdateRequest, user: Annotated[User, Depends(require_user)]) -> dict[str, object]:
-    with result_object_store._connect() as connection:
-        current = result_object_store.get_list(user.id, list_id, connection=connection)
-        if not current: raise HTTPException(status_code=404, detail="list not found")
-        name = (payload.name if payload.name is not None else current["name"]).strip()
-        if not name or len(name) > 120:
-            raise HTTPException(status_code=422, detail="list name is required")
-        description = payload.description if payload.description is not None else current["description"]
-        connection.execute("UPDATE lists SET name=?, description=?, updated_at=? WHERE id=? AND owner_id=?", (name, description, now_iso(), list_id, user.id))
-        return result_object_store.get_list(user.id, list_id, connection=connection)
+    try:
+        return result_object_store.update_list(
+            user.id,
+            list_id,
+            name=payload.name,
+            description=payload.description,
+        )
+    except ValueError as exc:
+        status_code = 404 if str(exc) == "list not found" else 422
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
 
 
 @router.delete("/lists/{list_id}", status_code=204)
 def archive_list(list_id: str, user: Annotated[User, Depends(require_user)]) -> None:
-    with result_object_store._connect() as connection:
-        if not result_object_store.get_list(user.id, list_id, connection=connection): raise HTTPException(status_code=404, detail="list not found")
-        connection.execute("UPDATE lists SET archived_at=?, updated_at=? WHERE id=? AND owner_id=?", (utc_now().isoformat(), utc_now().isoformat(), list_id, user.id))
+    try:
+        result_object_store.archive_list(user.id, list_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.post("/lists/{list_id}/results")
@@ -1789,11 +1787,10 @@ def get_saved_result(result_id: str, user: Annotated[User, Depends(require_user)
 
 @router.get("/results/{result_id}/history")
 def get_saved_result_history(result_id: str, user: Annotated[User, Depends(require_user)]) -> dict[str, object]:
-    result = result_object_store.get_result(user.id, result_id)
-    if not result: raise HTTPException(status_code=404, detail="result not found")
-    with result_object_store._connect() as connection:
-        rows = connection.execute("SELECT * FROM result_objects WHERE owner_id=? AND lower(email)=lower(?) ORDER BY created_at DESC", (user.id, result["email"])).fetchall()
-        return {"email": result["email"], "items": [result_object_store._row(row, result_object_store._list_ids(connection, row["id"])) for row in rows]}
+    try:
+        return result_object_store.result_history(user.id, result_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 @router.post("/results/{result_id}/reverify", response_model=JobResponse, status_code=202)
 def reverify_saved_result(result_id: str, user: Annotated[User, Depends(require_user)]) -> JobResponse:

@@ -1222,6 +1222,8 @@ with TestClient(app) as api_client:
     api_client.cookies.clear()
     assert api_client.get("/api/jobs", headers=key_headers).status_code == 200
     assert api_client.get("/api/auth/api-keys", headers=key_headers).status_code == 403
+    assert api_client.delete("/api/auth/account", headers=key_headers).status_code == 403
+    assert api_client.get("/api/auth/me", headers=key_headers).json()["id"] == api_user.id
     assert api_client.post(
         "/api/auth/login",
         json={"account": "api-user@example.com", "password": "correct-horse-2026"},

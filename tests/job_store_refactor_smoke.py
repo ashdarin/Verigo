@@ -4,8 +4,10 @@ import os
 import sqlite3
 import sys
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from pathlib import Path
+from threading import Barrier
 
 
 temp_dir = Path(tempfile.mkdtemp(prefix="verigo-store-refactor-"))
@@ -78,6 +80,44 @@ available, results = store.result_page(page_job.id, offset=1, limit=1, search="e
 assert available == 3 and [result["email"] for result in results] == ["invalid@example.com"]
 overview = store.result_overview(page_job.id)
 assert (overview.total, overview.settled, overview.deliverable, overview.undeliverable, overview.unknown) == (3, 3, 1, 1, 1)
+assert store.clear_job_review_updates(page_job.id) == 1
+assert store.get(page_job.id).results[2].get("retry_updated") is None
+
+# Workspace statistics are one aggregate query, including partial progress for
+# running tasks instead of relying on an unhydrated Job.results list.
+workspace_owner = "workspace-owner"
+workspace_now = utc_now()
+workspace_completed = Job(
+    id="workspace-completed", emails=["one@workspace.test", "two@workspace.test"],
+    worker_count=1, owner_id=workspace_owner, status="completed", created_at=workspace_now,
+    results=[
+        {"email": "one@workspace.test", "deliverable": True, "progress_state": "completed"},
+        {"email": "two@workspace.test", "deliverable": False, "progress_state": "completed"},
+    ],
+)
+workspace_running = Job(
+    id="workspace-running", emails=["three@workspace.test", "four@workspace.test"],
+    worker_count=1, owner_id=workspace_owner, created_at=workspace_now,
+    execution_target="workspace-summary",
+)
+workspace_old = Job(
+    id="workspace-old", emails=["old@workspace.test"], worker_count=1,
+    owner_id=workspace_owner, status="completed", created_at=workspace_now - timedelta(days=2),
+    results=[{"email": "old@workspace.test", "deliverable": True, "progress_state": "completed"}],
+)
+store.add(workspace_completed)
+store.add(workspace_running)
+store.upsert_results(workspace_running.id, [{
+    "email": "three@workspace.test", "original_index": 0,
+    "deliverable": True, "progress_state": "completed",
+}])
+store.add(workspace_old)
+workspace = store.workspace_overview(
+    workspace_owner,
+    day_start=workspace_now - timedelta(days=1),
+    day_end=workspace_now + timedelta(days=1),
+)
+assert (workspace.total, workspace.processed_today, workspace.deliverable, workspace.settled) == (3, 3, 3, 4)
 assert overview.review_updated is True
 
 connection = store._connect()
@@ -116,12 +156,25 @@ second = store.claim_remote_lease("worker-b", "refactor-test", shard_size=2)
 assert second is not None and second.lease_id != first.lease_id
 assert not store.lease_valid(remote.id, "worker-a", first.lease_id)
 assert second.pending_indices == [0, 1]
+# The expired worker's callback must be rejected at the write transaction,
+# leaving the fresh lease's verifying rows untouched.
+assert not store.report_lease_results(remote.id, "worker-a", first.lease_id, [{
+    "email": "one@a.test", "original_index": 0,
+    "deliverable": False, "progress_state": "completed",
+}], execution_target="refactor-test")
+assert store.get(remote.id).results[0]["progress_state"] == "verifying"
+assert store.report_lease_results(remote.id, "worker-b", second.lease_id, [{
+    "email": "one@a.test", "original_index": 0,
+    "deliverable": True, "progress_state": "completed",
+}], execution_target="refactor-test")
+assert store.get(remote.id).results[0]["deliverable"] is True
 assert store.abandon_lease(remote.id, "worker-b", second.lease_id)
 
 third = store.claim_remote_lease("worker-c", "refactor-test", shard_size=1)
 assert third is not None and third.lease_id
 assert store.abandon_lease(remote.id, "worker-c", third.lease_id)
-assert store.get(remote.id).results[0]["progress_state"] == "pending"
+assert store.get(remote.id).results[0]["deliverable"] is True
+assert store.get(remote.id).results[1]["progress_state"] == "pending"
 
 fallback = Job(
     id="remote-fallback", emails=["one@fallback.test"], worker_count=1,
@@ -473,6 +526,32 @@ except RuntimeError:
     pass
 else:
     raise AssertionError("queue limit must reject a second visible task")
+
+# Independent processes have independent Python locks. SQLite's write
+# transaction must therefore make concurrent admission deterministic.
+object.__setattr__(settings, "database_path", temp_dir / "quota-race.db")
+race_first = JobStore()
+race_second = JobStore()
+race_first.initialize()
+race_second.initialize()
+barrier = Barrier(2)
+
+def race_submit(store: JobStore, job_id: str) -> str:
+    barrier.wait()
+    try:
+        store.add(Job(id=job_id, emails=[f"{job_id}@quota.test"], worker_count=1), max_active=1)
+    except RuntimeError:
+        return "rejected"
+    return "accepted"
+
+with ThreadPoolExecutor(max_workers=2) as executor:
+    outcomes = list(executor.map(
+        lambda args: race_submit(*args),
+        ((race_first, "quota-race-first"), (race_second, "quota-race-second")),
+    ))
+assert sorted(outcomes) == ["accepted", "rejected"]
+with race_first._connect() as connection:
+    assert connection.execute("SELECT COUNT(*) FROM jobs").fetchone()[0] == 1
 object.__setattr__(settings, "database_path", original_database_path)
 
 print("job store refactor smoke: ok")

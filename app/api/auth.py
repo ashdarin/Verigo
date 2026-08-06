@@ -310,7 +310,7 @@ def login(payload: LoginCredentials, request: Request, response: Response) -> Us
 
 @auth_router.post("/email-verification/request", status_code=204)
 def request_email_verification(
-    request: Request, user: Annotated[User, Depends(require_user)]
+    request: Request, user: Annotated[User, Depends(require_session_user)]
 ) -> None:
     if not user.email:
         raise HTTPException(status_code=409, detail="旧账号尚未绑定邮箱，请联系管理员")
@@ -329,7 +329,7 @@ def request_email_verification(
 def confirm_email_verification(
     payload: VerificationCode,
     request: Request,
-    user: Annotated[User, Depends(require_user)],
+    user: Annotated[User, Depends(require_session_user)],
 ) -> UserResponse:
     try:
         verified = auth_store.confirm_email_verification(
@@ -347,7 +347,7 @@ class ActivationCompleteRequest(BaseModel):
 @auth_router.post("/onboarding/activation/complete", response_model=UserResponse)
 def complete_onboarding_activation(
     payload: ActivationCompleteRequest,
-    user: Annotated[User, Depends(require_user)],
+    user: Annotated[User, Depends(require_session_user)],
 ) -> UserResponse:
     job = job_store.get(payload.job_id, include_results=False)
     if job is None or job.owner_id != user.id or job.status != "completed":
@@ -360,7 +360,7 @@ def complete_onboarding_activation(
 
 @auth_router.post("/email-binding/request", status_code=204)
 def request_email_binding(
-    payload: EmailBindingRequest, user: Annotated[User, Depends(require_user)]
+    payload: EmailBindingRequest, user: Annotated[User, Depends(require_session_user)]
 ) -> None:
     check_attempt_limit(f"binding:{user.id}", limit=5, window=900)
     try:
@@ -376,7 +376,7 @@ def request_email_binding(
 
 @auth_router.post("/email-binding/confirm", response_model=UserResponse)
 def confirm_email_binding(
-    payload: VerificationCode, user: Annotated[User, Depends(require_user)]
+    payload: VerificationCode, user: Annotated[User, Depends(require_session_user)]
 ) -> UserResponse:
     try:
         bound = auth_store.confirm_email_binding(user.id, payload.code)
@@ -411,7 +411,7 @@ def confirm_password_reset(payload: PasswordResetConfirm, request: Request) -> N
 def change_password(
     payload: PasswordChange,
     request: Request,
-    user: Annotated[User, Depends(require_user)],
+    user: Annotated[User, Depends(require_session_user)],
     session: Annotated[str | None, Cookie(alias=settings.session_cookie_name)] = None,
 ) -> None:
     check_attempt_limit(f"password-change:{user.id}", limit=5, window=900)
@@ -434,7 +434,7 @@ def logout(
 
 @auth_router.delete("/account", status_code=204)
 def delete_account(
-    response: Response, user: Annotated[User, Depends(require_user)]
+    response: Response, user: Annotated[User, Depends(require_session_user)]
 ) -> None:
     try:
         csv_paths = auth_store.delete_user(user.id)

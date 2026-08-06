@@ -23,7 +23,8 @@ contact = experiment.Contact(
 )
 candidates = experiment.candidates_for_contact(contact, limit=8)
 assert candidates[0].email == "jorg.muller@porsche.com"
-assert candidates[0].profile_source == "legacy_domain_catalogue"
+# The retired experimental catalogue is intentionally not shipped with the app.
+assert candidates[0].profile_source == "generic"
 assert len({candidate.email for candidate in candidates}) == len(candidates)
 
 labeled = experiment.Contact(

@@ -110,6 +110,46 @@ class ResultObjectStore:
             connection.execute("INSERT INTO lists(id,owner_id,name,description,created_at,updated_at) VALUES(?,?,?,?,?,?)", (list_id, owner_id, name, description.strip()[:500], timestamp, timestamp))
             return self.get_list(owner_id, list_id, connection=connection)
 
+    def update_list(
+        self,
+        owner_id: str,
+        list_id: str,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+    ) -> dict[str, Any]:
+        """Update an active list without exposing a database connection to callers."""
+        self.initialize()
+        with closing(self._connect()) as connection:
+            current = self.get_list(owner_id, list_id, connection=connection)
+            if current is None:
+                raise ValueError("list not found")
+            next_name = (name if name is not None else current["name"]).strip()
+            if not next_name or len(next_name) > 120:
+                raise ValueError("list name is required")
+            next_description = str(
+                description if description is not None else current["description"]
+            ).strip()
+            if len(next_description) > 500:
+                raise ValueError("list description is too long")
+            connection.execute(
+                "UPDATE lists SET name=?, description=?, updated_at=? WHERE id=? AND owner_id=?",
+                (next_name, next_description, now_iso(), list_id, owner_id),
+            )
+            return self.get_list(owner_id, list_id, connection=connection) or current
+
+    def archive_list(self, owner_id: str, list_id: str) -> None:
+        """Archive an owned active list and make it unavailable to normal queries."""
+        self.initialize()
+        with closing(self._connect()) as connection:
+            if self.get_list(owner_id, list_id, connection=connection) is None:
+                raise ValueError("list not found")
+            timestamp = now_iso()
+            connection.execute(
+                "UPDATE lists SET archived_at=?, updated_at=? WHERE id=? AND owner_id=?",
+                (timestamp, timestamp, list_id, owner_id),
+            )
+
     def get_list(self, owner_id: str, list_id: str, *, connection: sqlite3.Connection | None = None) -> dict[str, Any] | None:
         own = connection is None
         connection = connection or self._connect()
@@ -164,6 +204,29 @@ class ResultObjectStore:
         with closing(self._connect()) as connection:
             row = connection.execute("SELECT * FROM result_objects WHERE id=? AND owner_id=?", (result_id, owner_id)).fetchone()
             return self._row(row, self._list_ids(connection, result_id)) if row else None
+
+    def result_history(self, owner_id: str, result_id: str) -> dict[str, Any]:
+        """Return an account-scoped result's verification history for one email."""
+        self.initialize()
+        with closing(self._connect()) as connection:
+            result = connection.execute(
+                "SELECT * FROM result_objects WHERE id=? AND owner_id=?",
+                (result_id, owner_id),
+            ).fetchone()
+            if result is None:
+                raise ValueError("result not found")
+            rows = connection.execute(
+                "SELECT * FROM result_objects WHERE owner_id=? AND lower(email)=lower(?) "
+                "ORDER BY created_at DESC",
+                (owner_id, result["email"]),
+            ).fetchall()
+            return {
+                "email": result["email"],
+                "items": [
+                    self._row(row, self._list_ids(connection, row["id"]))
+                    for row in rows
+                ],
+            }
 
     def recent_results(self, owner_id: str, limit: int = 8) -> list[dict[str, Any]]:
         self.initialize()

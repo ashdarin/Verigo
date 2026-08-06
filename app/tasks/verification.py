@@ -148,7 +148,9 @@ def normalize_result(result: dict[str, Any]) -> dict[str, Any]:
 def verification_filename(job: Job) -> str:
     verified_at = job.finished_at or job.started_at or job.created_at
     local_time = verified_at.astimezone(ZoneInfo("Asia/Shanghai"))
-    return f"Verigo-邮箱验证-{local_time:%Y年%m月%d日-%H时%M分%S秒}.csv"
+    # Completion timestamps have one-second precision, so they cannot safely
+    # identify a user-owned export under concurrent worker completion.
+    return f"Verigo-邮箱验证-{local_time:%Y年%m月%d日-%H时%M分%S秒}-{job.id}.csv"
 
 
 def clean_emails(values: list[str]) -> list[str]:
