@@ -4,13 +4,13 @@ from __future__ import annotations
 import concurrent.futures
 import json
 import html as html_lib
-import ipaddress
 import re
 import socket
 import ssl
 import time
 from urllib.parse import quote, urljoin, urlparse
-from urllib.request import Request, urlopen
+
+from app.core.safe_http import safe_fetch
 
 SUFFIXES = (".com", ".de", ".nl", ".fr", ".it", ".es", ".be", ".ch", ".at", ".co.uk", ".sg", ".ae", ".com.au", ".co.za", ".in", ".cn", ".jp", ".kr", ".hk", ".tw")
 VERIFIED_DOMAIN_VARIANTS = {
@@ -119,6 +119,9 @@ def _text_legal_name(source: str) -> str | None:
 def get_ssl_organization(domain: str) -> str | None:
     """Read the certificate organization when an OV/EV certificate exposes one."""
     try:
+        from app.core.safe_http import has_only_public_addresses
+        if not has_only_public_addresses(domain):
+            return None
         context = ssl.create_default_context()
         with socket.create_connection((domain, 443), timeout=2.5) as sock:
             with context.wrap_socket(sock, server_hostname=domain) as secure_socket:
@@ -141,9 +144,12 @@ def resolve_official_entity(domain: str) -> dict[str, str] | None:
     for host in hosts:
         try:
             homepage_url = f"https://{host}"
-            with urlopen(Request(homepage_url, headers={"User-Agent": "VerigoDomainPreview/1.0"}), timeout=2.5) as response:
-                source = response.read(220_000).decode("utf-8", "ignore")
-                homepage_url = response.geturl() or homepage_url
+            response = safe_fetch(homepage_url, timeout=2.5, max_bytes=220_000,
+                                  allowed_hosts={domain, f"www.{domain}"})
+            if response is None:
+                continue
+            source = response.body.decode("utf-8", "ignore")
+            homepage_url = response.url or homepage_url
             active_host = urlparse(homepage_url).netloc or host
             for href, label in re.findall(r"<a[^>]+href=[\"']([^\"']+)[\"'][^>]*>([\s\S]{0,180}?)</a>", source, re.I):
                 marker = f"{href} {re.sub(r'<[^>]+>', ' ', label)}".lower()
@@ -176,8 +182,11 @@ def resolve_official_entity(domain: str) -> dict[str, str] | None:
                 return None
             path = urlparse(url).path.rstrip("/")
             timeout = max(0.8, min(2.5, deadline - time.monotonic()))
-            with urlopen(Request(url, headers={"User-Agent": "VerigoDomainPreview/1.0"}), timeout=timeout) as response:
-                source = response.read(220_000).decode("utf-8", "ignore")
+            response = safe_fetch(url, timeout=timeout, max_bytes=220_000,
+                                  allowed_hosts={domain, f"www.{domain}"})
+            if response is None:
+                return None
+            source = response.body.decode("utf-8", "ignore")
             name = _jsonld_legal_name(source) or _text_legal_name(source)
             if name:
                 confidence = "high" if any(marker in path.lower() for marker in ("corporate", "legal", "imprint", "impressum")) else "medium"
@@ -204,8 +213,12 @@ def resolve_official_entity(domain: str) -> dict[str, str] | None:
     query = f"SELECT ?officialName WHERE {{ VALUES ?site {{ {sites} }} ?item wdt:P856 ?site . ?item wdt:P1448 ?officialName . }} LIMIT 1"
     try:
         endpoint = "https://query.wikidata.org/sparql?format=json&query=" + quote(query)
-        with urlopen(Request(endpoint, headers={"Accept": "application/sparql-results+json", "User-Agent": "VerigoDomainPreview/1.0"}), timeout=4) as response:
-            payload = json.loads(response.read(80_000).decode("utf-8", "ignore"))
+        response = safe_fetch(endpoint, timeout=4, max_bytes=80_000,
+                              allowed_hosts={"query.wikidata.org"},
+                              headers={"Accept": "application/sparql-results+json"})
+        if response is None:
+            raise OSError("Wikidata request was blocked")
+        payload = json.loads(response.body.decode("utf-8", "ignore"))
         bindings = payload.get("results", {}).get("bindings", [])
         if bindings:
             name = bindings[0].get("officialName", {}).get("value")
@@ -237,14 +250,10 @@ def discover_related(domain: str, title: str | None = None) -> tuple[list[dict[s
     catalogued = sld in VERIFIED_DOMAIN_VARIANTS
     def probe(candidate: str):
         try:
-            addresses = {ipaddress.ip_address(item[4][0]) for item in socket.getaddrinfo(candidate, 443, type=socket.SOCK_STREAM)}
-            if not addresses or any(not address.is_global for address in addresses): return None
-            with urlopen(Request(f"https://{candidate}", headers={"User-Agent": "VerigoDomainPreview/1.0"}), timeout=2) as response:
-                if response.status not in {200, 301, 302, 303, 307, 308}: return None
-                final_host = (urlparse(response.geturl()).hostname or "").lower().rstrip(".")
-                allowed_hosts = {candidate.lower().rstrip("."), f"www.{candidate}".lower().rstrip(".")}
-                if final_host not in allowed_hosts:
-                    return None
+            response = safe_fetch(f"https://{candidate}", timeout=2, max_bytes=8_000,
+                                  allowed_hosts={candidate, f"www.{candidate}"})
+            if response is None or response.status not in {200, 301, 302, 303, 307, 308}:
+                return None
             suffix = candidate.rsplit(".", 1)[-1].lower()
             if candidate.endswith(".co.uk"):
                 suffix = "uk"
@@ -283,8 +292,11 @@ def discover_related(domain: str, title: str | None = None) -> tuple[list[dict[s
     if not main_entity:
         for path in LOCATION_PATHS:
             try:
-                with urlopen(Request(f"https://{domain}{path}", headers={"User-Agent": "VerigoDomainPreview/1.0"}), timeout=2) as response:
-                    html = response.read(120_000).decode("utf-8", "ignore")
+                response = safe_fetch(f"https://{domain}{path}", timeout=2, max_bytes=120_000,
+                                      allowed_hosts={domain, f"www.{domain}"})
+                if response is None:
+                    continue
+                html = response.body.decode("utf-8", "ignore")
                 text = re.sub(r"<[^>]+>", " ", html)
                 text = re.sub(r"\s+", " ", text)
                 for item in re.findall(r"(?:[A-Z][A-Za-z().&-]+\s+){1,7}(?:SE|SARL|S\.L\.|S\.R\.L\.|B\.V\.|Ltd|LTD\.?|Limited|GmbH|Pte\.?\s+Ltd|FZE)", text):

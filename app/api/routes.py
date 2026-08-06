@@ -7,10 +7,7 @@ import hmac
 import json
 import time
 import uuid
-import ipaddress
 import re
-import socket
-from urllib.request import Request as UrlRequest, urlopen
 from datetime import datetime, time as datetime_time, timedelta, timezone
 from zoneinfo import ZoneInfo
 from io import StringIO
@@ -54,6 +51,7 @@ from app.core.company_imports import extract_companies
 from app.core.imports import extract_emails
 from app.core.discovery import candidate_emails
 from app.core.domain_relations import discover_related
+from app.core.safe_http import has_only_public_addresses, safe_fetch
 from app.core.prospecting import (
     generate_candidates,
     infer_email_pattern,
@@ -118,14 +116,7 @@ def _domain_suggestions(query: str) -> list[dict[str, object]]:
 
 def _has_only_public_addresses(domain: str) -> bool:
     """Require every resolved address to be publicly routable before fetching it."""
-    try:
-        addresses = {
-            ipaddress.ip_address(item[4][0])
-            for item in socket.getaddrinfo(domain, 443, type=socket.SOCK_STREAM)
-        }
-    except (OSError, ValueError):
-        return False
-    return bool(addresses) and all(address.is_global for address in addresses)
+    return has_only_public_addresses(domain)
 DOMESTIC_EMAIL_DOMAINS = frozenset({
     "qq.com", "vip.qq.com", "foxmail.com", "163.com", "126.com", "yeah.net",
     "sina.com", "sina.cn", "sohu.com", "aliyun.com", "aliyun.cn", "139.com",
@@ -941,10 +932,11 @@ def domain_preview(
     title = None
     reachable = False
     try:
-        request = UrlRequest(f"https://{domain}", headers={"User-Agent": "VerigoDomainPreview/1.0"})
-        with urlopen(request, timeout=3) as response:
+        response = safe_fetch(f"https://{domain}", timeout=3, max_bytes=200_000,
+                              allowed_hosts={domain, f"www.{domain}"})
+        if response is not None:
             reachable = 200 <= response.status < 500
-            sample = response.read(200_000).decode("utf-8", "ignore")
+            sample = response.body.decode("utf-8", "ignore")
             match = re.search(r"<title[^>]*>(.*?)</title>", sample, re.I | re.S)
             if match:
                 title = re.sub(r"\s+", " ", match.group(1)).strip()[:160] or None
