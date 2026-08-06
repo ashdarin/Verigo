@@ -37,6 +37,21 @@ class FakeVerifier:
         return results
 
 
+class StopDuringVerifier(FakeVerifier):
+    def verify_batch_distributed(self, emails, num_processes, result_callback, should_stop):
+        result = {
+            "email": emails[0],
+            "original_index": 0,
+            "valid": True,
+            "deliverable": True,
+            "checks": {"smtp": True},
+            "progress_state": "completed",
+        }
+        result_callback(result)
+        job_store.stop("stop-during-run")
+        return [result]
+
+
 original_create_verifier = verification.create_verifier
 verification.create_verifier = lambda _workers: FakeVerifier()
 try:
@@ -74,6 +89,20 @@ try:
     assert job_store.claim_remote_lease("local-c", "local", shard_size=1) is None
     ordered = job_store.claim_next("local-c", stop_on_deliverable_only=True)
     assert ordered is not None and ordered.id == discovery.id
+
+    # A worker finishing from an old in-memory snapshot must not resurrect a
+    # job that the user stopped while verification was still in progress.
+    stopped = Job(id="stop-during-run", emails=["stop@unit.test"], worker_count=1)
+    job_store.add(stopped)
+    claimed = job_store.claim_next("stale-worker")
+    assert claimed is not None and claimed.id == stopped.id
+    stop_verifier_factory = verification.create_verifier
+    verification.create_verifier = lambda _workers: StopDuringVerifier()
+    verification.run_job(claimed)
+    verification.create_verifier = stop_verifier_factory
+    after_stop = job_store.get(stopped.id)
+    assert after_stop is not None and after_stop.status == "stopped"
+    assert after_stop.worker_id is None
 finally:
     verification.create_verifier = original_create_verifier
 

@@ -797,10 +797,14 @@ def apply_prospecting_receiver_protection(
 
 def run_job(job: Job) -> None:
     """Execute a claimed job and make incremental progress visible through SQLite."""
+    worker_id = job.worker_id
     job.status = "running"
     job.started_at = job.started_at or utc_now()
     job.heartbeat_at = utc_now()
-    job_store.persist(job)
+    if worker_id:
+        job_store.persist_worker_progress(job, worker_id)
+    else:
+        job_store.persist(job)
     try:
         if job_store.is_stopped(job.id):
             return
@@ -845,7 +849,10 @@ def run_job(job: Job) -> None:
             by_index[index] = normalize_result(cached)
 
         job.results = [by_index[index] for index in sorted(by_index)]
-        job_store.persist(job)
+        if worker_id:
+            job_store.persist_worker_progress(job, worker_id)
+        else:
+            job_store.persist(job)
         job_store.heartbeat(job)
 
         if missing_emails:
@@ -875,7 +882,10 @@ def run_job(job: Job) -> None:
                 now = time.monotonic()
                 if len(by_index) % 5 == 0 or now - last_persist >= 1.0:
                     job.results = [by_index[index] for index in sorted(by_index)]
-                    job_store.persist(job)
+                    if worker_id:
+                        job_store.persist_worker_progress(job, worker_id)
+                    else:
+                        job_store.persist(job)
                     job_store.heartbeat(job)
                     last_persist = now
 
@@ -897,7 +907,8 @@ def run_job(job: Job) -> None:
         reconcile_catch_all_conflicts(job.results)
         control_probes = _verify_prospecting_control_sample(job, job.results)
         if job.lease_id:
-            job_store.persist(job)
+            if worker_id:
+                job_store.persist_worker_progress(job, worker_id)
             if not job_store.complete_lease(
                 job.id, job.worker_id or "", job.lease_id
             ):
@@ -952,8 +963,8 @@ def run_job(job: Job) -> None:
             finish_background_retry_failure(job, str(exc))
     finally:
         job.verifier = None
-        job.heartbeat_at = utc_now()
-        job_store.persist(job)
+        if worker_id:
+            job_store.clear_worker_runtime(job.id, worker_id)
         sync_parent_job(job)
 
 

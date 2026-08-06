@@ -759,6 +759,53 @@ class JobStore:
                 self._ensure_result_rows(connection, job)
             connection.commit()
 
+    def persist_worker_progress(self, job: Job, worker_id: str) -> bool:
+        """Persist result progress only while this worker still owns a running job.
+
+        Worker objects are intentionally stale snapshots.  A conditional update
+        prevents a stopped job or a newly reclaimed job from being overwritten
+        by an older worker callback.
+        """
+        self.initialize()
+        now = utc_now()
+        with self._lock, closing(self._connect()) as connection:
+            begin_immediate(connection)
+            changed = connection.execute(
+                """
+                UPDATE jobs SET started_at=COALESCE(started_at, ?), heartbeat_at=?
+                WHERE id=? AND status='running' AND worker_id=?
+                """,
+                (
+                    job.started_at.isoformat() if job.started_at else now.isoformat(),
+                    now.isoformat(),
+                    job.id,
+                    worker_id,
+                ),
+            ).rowcount
+            if not changed:
+                connection.rollback()
+                return False
+            if job.results:
+                self._upsert_results(connection, job.id, job.results)
+            connection.commit()
+        job.heartbeat_at = now
+        return True
+
+    def clear_worker_runtime(self, job_id: str, worker_id: str) -> bool:
+        """Release runtime ownership without changing the job's business state."""
+        self.initialize()
+        now = utc_now().isoformat()
+        with self._lock, closing(self._connect()) as connection:
+            changed = connection.execute(
+                """
+                UPDATE jobs SET worker_id=NULL,
+                    heartbeat_at=CASE WHEN status='running' THEN ? ELSE NULL END
+                WHERE id=? AND status='running' AND worker_id=?
+                """,
+                (now, job_id, worker_id),
+            ).rowcount
+        return bool(changed)
+
     def ensure_result_rows(self, job: Job) -> None:
         """Support legacy callers that created a job before visible waiting rows."""
         with self._lock, closing(self._connect()) as connection:
