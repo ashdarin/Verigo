@@ -1032,78 +1032,80 @@ class JobStore:
             self._upsert_results(connection, job_id, results)
             connection.commit()
 
-    def reconcile_catch_all_conflicts(self, job_id: str) -> int:
-        """Keep a domain from exposing Catch-all beside contradictory SMTP verdicts."""
+    def _reconcile_catch_all_conflicts_in_connection(
+        self, connection: sqlite3.Connection, job_id: str,
+    ) -> int:
+        """Reconcile one job while the caller owns the surrounding transaction."""
         from app.core.catch_all import catch_all_domains, reconcile_catch_all_conflicts
 
-        self.initialize()
-        with self._lock, closing(self._connect()) as connection:
-            begin_immediate(connection)
-            rows = connection.execute(
-                "SELECT original_index, result_json FROM job_results WHERE job_id=?",
-                (job_id,),
+        rows = connection.execute(
+            "SELECT original_index, result_json FROM job_results WHERE job_id=?",
+            (job_id,),
+        ).fetchall()
+        results: list[dict[str, Any]] = []
+        for index, raw in rows:
+            try:
+                result = json.loads(raw)
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if not isinstance(result, dict):
+                continue
+            result["original_index"] = int(index)
+            results.append(result)
+        conflicts = reconcile_catch_all_conflicts(results)
+        domains = catch_all_domains(results)
+        if domains:
+            placeholders = ", ".join("?" for _ in domains)
+            evidence_rows = connection.execute(
+                f"""SELECT result_json FROM job_results
+                WHERE deliverability=0
+                AND lower(substr(email, instr(email, '@') + 1)) IN ({placeholders})""",
+                tuple(sorted(domains)),
             ).fetchall()
-            results: list[dict[str, Any]] = []
-            for index, raw in rows:
+            evidence: list[dict[str, Any]] = []
+            for (raw,) in evidence_rows:
                 try:
                     result = json.loads(raw)
                 except (TypeError, json.JSONDecodeError):
                     continue
-                if not isinstance(result, dict):
-                    continue
-                result["original_index"] = int(index)
-                results.append(result)
-            conflicts = reconcile_catch_all_conflicts(results)
-            # A job can be a small shard of one domain. Include earlier,
-            # explicit SMTP rejections for its Catch-all domains so a stale
-            # probe verdict cannot survive merely because it landed on a
-            # different worker or user task.
-            domains = catch_all_domains(results)
-            if domains:
-                placeholders = ", ".join("?" for _ in domains)
-                evidence_rows = connection.execute(
-                    f"""SELECT result_json FROM job_results
-                    WHERE deliverability=0
-                    AND lower(substr(email, instr(email, '@') + 1)) IN ({placeholders})""",
-                    tuple(sorted(domains)),
-                ).fetchall()
-                evidence: list[dict[str, Any]] = []
-                for (raw,) in evidence_rows:
-                    try:
-                        result = json.loads(raw)
-                    except (TypeError, json.JSONDecodeError):
-                        continue
-                    if isinstance(result, dict):
-                        evidence.append(result)
-                conflicts |= reconcile_catch_all_conflicts([*results, *evidence])
-            if not conflicts:
-                connection.commit()
-                return 0
-            now = utc_now().isoformat()
-            updated_rows = [
-                self._result_row(job_id, int(result["original_index"]), result, now)
-                for result in results
-                if str(result.get("email") or "").rsplit("@", 1)[-1].lower() in conflicts
-            ]
-            connection.executemany(
-                """UPDATE job_results SET result_json=?, updated_at=?, deliverability=?, is_valid=?,
-                is_skipped=?, is_catch_all=?, retry_at=?, retry_updated=?, query_fields_ready=?
-                WHERE job_id=? AND original_index=?""",
-                [
-                    (
-                        row[4], row[5], row[6], row[7], row[8], row[9], row[10], row[11], row[12],
-                        row[0], row[1],
-                    )
-                    for row in updated_rows
-                ],
-            )
-            placeholders = ", ".join("?" for _ in conflicts)
-            connection.execute(
-                f"DELETE FROM catch_all_emails WHERE job_id=? AND lower(domain) IN ({placeholders})",
-                (job_id, *sorted(conflicts)),
-            )
-            connection.commit()
+                if isinstance(result, dict):
+                    evidence.append(result)
+            conflicts |= reconcile_catch_all_conflicts([*results, *evidence])
+        if not conflicts:
+            return 0
+        now = utc_now().isoformat()
+        updated_rows = [
+            self._result_row(job_id, int(result["original_index"]), result, now)
+            for result in results
+            if str(result.get("email") or "").rsplit("@", 1)[-1].lower() in conflicts
+        ]
+        connection.executemany(
+            """UPDATE job_results SET result_json=?, updated_at=?, deliverability=?, is_valid=?,
+            is_skipped=?, is_catch_all=?, retry_at=?, retry_updated=?, query_fields_ready=?
+            WHERE job_id=? AND original_index=?""",
+            [
+                (
+                    row[4], row[5], row[6], row[7], row[8], row[9], row[10], row[11], row[12],
+                    row[0], row[1],
+                )
+                for row in updated_rows
+            ],
+        )
+        placeholders = ", ".join("?" for _ in conflicts)
+        connection.execute(
+            f"DELETE FROM catch_all_emails WHERE job_id=? AND lower(domain) IN ({placeholders})",
+            (job_id, *sorted(conflicts)),
+        )
         return len(updated_rows)
+
+    def reconcile_catch_all_conflicts(self, job_id: str) -> int:
+        """Keep a domain from exposing Catch-all beside contradictory SMTP verdicts."""
+        self.initialize()
+        with self._lock, closing(self._connect()) as connection:
+            begin_immediate(connection)
+            changed = self._reconcile_catch_all_conflicts_in_connection(connection, job_id)
+            connection.commit()
+        return changed
 
     def _hydrate_results(self, job: Job) -> Job:
         job.results = self.results_for_job(job.id)
@@ -1867,6 +1869,53 @@ class JobStore:
                 indices = [int(index) for index in json.loads(row[0])]
             except (TypeError, ValueError, json.JSONDecodeError):
                 indices = []
+            changed = connection.execute("""
+                UPDATE job_leases SET completed_at=? WHERE id=? AND job_id=? AND worker_id=?
+                    AND completed_at IS NULL
+            """, (now.isoformat(), lease_id, job_id, worker_id)).rowcount
+            connection.execute("DELETE FROM mx_scheduler_leases WHERE lease_id=?", (lease_id,))
+            if changed:
+                self._record_scheduler_outcomes(connection, job_id, indices, now)
+            connection.commit()
+        return bool(changed)
+
+    def complete_lease_with_results(
+        self,
+        job_id: str,
+        worker_id: str,
+        lease_id: str,
+        results: list[dict[str, Any]],
+        *,
+        execution_target: str | None = None,
+    ) -> bool:
+        """Atomically persist a final shard, reconcile conflicts, and close its lease."""
+        self.initialize()
+        now = utc_now()
+        stale = (now - timedelta(seconds=settings.worker_lease_seconds)).isoformat()
+        target_clause = " AND execution_target=?" if execution_target else ""
+        parameters: tuple[Any, ...] = (lease_id, job_id, worker_id, stale)
+        if execution_target:
+            parameters += (execution_target,)
+        with self._lock, closing(self._connect()) as connection:
+            begin_immediate(connection)
+            row = connection.execute(f"""
+                SELECT indices_json FROM job_leases WHERE id=? AND job_id=? AND worker_id=?
+                    AND completed_at IS NULL AND heartbeat_at >= ?{target_clause}
+            """, parameters).fetchone()
+            if row is None:
+                connection.rollback()
+                return False
+            try:
+                indices = [int(index) for index in json.loads(row[0])]
+                reported = {int(result["original_index"]) for result in results}
+            except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+                connection.rollback()
+                return False
+            if not reported.issubset(set(indices)):
+                connection.rollback()
+                return False
+            self._upsert_results(connection, job_id, results)
+            self._reconcile_catch_all_conflicts_in_connection(connection, job_id)
             changed = connection.execute("""
                 UPDATE job_leases SET completed_at=? WHERE id=? AND job_id=? AND worker_id=?
                     AND completed_at IS NULL

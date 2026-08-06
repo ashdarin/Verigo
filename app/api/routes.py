@@ -719,12 +719,9 @@ def complete_tencent_qq_job(
     worker_name = (worker_id or "").strip()
     job = require_remote_job(job_id, worker_name, execution_target, payload.lease_id)
     normalized = merge_worker_results(job, payload.results)
-    if not payload.lease_id or not job_store.report_lease_results(
+    if not payload.lease_id or not job_store.complete_lease_with_results(
         job.id, worker_name, payload.lease_id, normalized, execution_target=execution_target,
     ):
-        raise HTTPException(status_code=409, detail="Remote worker lease is no longer active")
-    job_store.reconcile_catch_all_conflicts(job.id)
-    if not payload.lease_id or not job_store.complete_lease(job.id, worker_name, payload.lease_id):
         raise HTTPException(status_code=409, detail="Remote worker lease is no longer active")
     refreshed = job_store.get(job.id)
     if refreshed is None:

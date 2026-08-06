@@ -176,6 +176,26 @@ assert store.abandon_lease(remote.id, "worker-c", third.lease_id)
 assert store.get(remote.id).results[0]["deliverable"] is True
 assert store.get(remote.id).results[1]["progress_state"] == "pending"
 
+# Final callbacks persist their result rows, reconcile catch-all conflicts,
+# and close the lease as one transaction.
+atomic = Job(
+    id="atomic-complete", emails=["one@atomic.test", "two@atomic.test"], worker_count=1,
+    execution_target="atomic-test",
+)
+store.add(atomic)
+atomic_lease = store.claim_remote_lease("atomic-worker", "atomic-test", shard_size=2)
+assert atomic_lease is not None and atomic_lease.lease_id
+assert store.complete_lease_with_results(
+    atomic.id, "atomic-worker", atomic_lease.lease_id, [
+        {"email": "one@atomic.test", "original_index": 0, "deliverability": True,
+         "progress_state": "completed"},
+        {"email": "two@atomic.test", "original_index": 1, "deliverability": False,
+         "progress_state": "completed"},
+    ], execution_target="atomic-test",
+)
+assert store.get(atomic.id).results[0]["deliverability"] is True
+assert store.get(atomic.id).status == "running"
+
 fallback = Job(
     id="remote-fallback", emails=["one@fallback.test"], worker_count=1,
     execution_target="gmail",
