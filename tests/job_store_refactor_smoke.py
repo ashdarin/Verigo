@@ -176,6 +176,29 @@ assert store.abandon_lease(remote.id, "worker-c", third.lease_id)
 assert store.get(remote.id).results[0]["deliverable"] is True
 assert store.get(remote.id).results[1]["progress_state"] == "pending"
 
+# A stale job may have verifying rows left behind after its lease disappeared.
+# Requeueing the job must release those rows so the next worker can claim them.
+stale_job = Job(
+    id="stale-orphan", emails=["orphan@stale.test"], worker_count=1,
+    execution_target="stale-test", status="running",
+)
+store.add(stale_job)
+connection = store._connect()
+connection.execute(
+    "UPDATE job_results SET progress_state='verifying' WHERE job_id=?",
+    (stale_job.id,),
+)
+connection.execute(
+    "UPDATE jobs SET heartbeat_at=? WHERE id=?",
+    ((utc_now() - timedelta(days=1)).isoformat(), stale_job.id),
+)
+connection.close()
+assert store.requeue_stale_jobs() == 1
+assert store.get(stale_job.id).results[0]["progress_state"] == "pending"
+reclaimed = store.claim_remote_lease("stale-worker", "stale-test", shard_size=1)
+assert reclaimed is not None and reclaimed.pending_indices == [0]
+assert store.abandon_lease(stale_job.id, "stale-worker", reclaimed.lease_id or "")
+
 # Final callbacks persist their result rows, reconcile catch-all conflicts,
 # and close the lease as one transaction.
 atomic = Job(

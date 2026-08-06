@@ -1293,13 +1293,15 @@ class JobStore:
         stale_before = now - timedelta(seconds=settings.worker_lease_seconds)
         with self._lock, closing(self._connect()) as connection:
             begin_immediate(connection)
+            stale_before_iso = stale_before.isoformat()
+            self._release_orphaned_results(connection, stale_before_iso)
             connection.execute(
                 """
                 UPDATE jobs SET status = 'queued', worker_id = NULL, heartbeat_at = NULL,
                     error = '工作节点已重新领取任务'
                 WHERE status = 'running' AND heartbeat_at IS NOT NULL AND heartbeat_at < ?
                 """,
-                (stale_before.isoformat(),),
+                (stale_before_iso,),
             )
             row = connection.execute(
                 f"""SELECT {self._select_columns()} FROM jobs
@@ -1354,6 +1356,7 @@ class JobStore:
         stale = now - timedelta(seconds=settings.worker_lease_seconds)
         with self._lock, closing(self._connect()) as connection:
             begin_immediate(connection)
+            self._release_orphaned_results(connection, stale.isoformat())
             expired = connection.execute("""
                 SELECT id, job_id, indices_json FROM job_leases
                 WHERE completed_at IS NULL AND heartbeat_at < ?
@@ -1962,15 +1965,23 @@ class JobStore:
         self.initialize()
         stale = (utc_now() - timedelta(seconds=settings.worker_lease_seconds)).isoformat()
         with self._lock, closing(self._connect()) as connection:
-            return connection.execute("""
-                UPDATE job_results SET progress_state='pending'
-                WHERE progress_state='verifying'
-                  AND NOT EXISTS (
-                      SELECT 1 FROM job_leases lease
-                      WHERE lease.job_id=job_results.job_id
-                        AND lease.completed_at IS NULL AND lease.heartbeat_at >= ?
-                  )
-            """, (stale,)).rowcount
+            begin_immediate(connection)
+            released = self._release_orphaned_results(connection, stale)
+            connection.commit()
+            return released
+
+    @staticmethod
+    def _release_orphaned_results(connection: sqlite3.Connection, stale_before: str) -> int:
+        """Return verifying rows to the queue when no fresh lease owns them."""
+        return connection.execute("""
+            UPDATE job_results SET progress_state='pending'
+            WHERE progress_state='verifying'
+              AND NOT EXISTS (
+                  SELECT 1 FROM job_leases lease
+                  WHERE lease.job_id=job_results.job_id
+                    AND lease.completed_at IS NULL AND lease.heartbeat_at >= ?
+              )
+        """, (stale_before,)).rowcount
 
     def pending_count(self, job_id: str) -> int:
         with closing(self._connect()) as connection:
@@ -1991,14 +2002,19 @@ class JobStore:
         self.initialize()
         stale_before = utc_now() - timedelta(seconds=settings.worker_lease_seconds)
         with closing(self._connect()) as connection:
-            return connection.execute(
+            begin_immediate(connection)
+            stale_before_iso = stale_before.isoformat()
+            self._release_orphaned_results(connection, stale_before_iso)
+            requeued = connection.execute(
                 """
                 UPDATE jobs SET status='queued', worker_id=NULL, heartbeat_at=NULL,
                     error='工作节点已重新领取任务'
                 WHERE status='running' AND heartbeat_at IS NOT NULL AND heartbeat_at < ?
                 """,
-                (stale_before.isoformat(),),
+                (stale_before_iso,),
             ).rowcount
+            connection.commit()
+            return requeued
 
     def active_target_count(self, target: str) -> int:
         self.initialize()
