@@ -202,6 +202,7 @@ class VerificationTasks:
         job_id: str | None = None,
         execution_target: str = "local",
         immediate_results: list[dict[str, Any]] | None = None,
+        list_name: str | None = None,
     ) -> Job:
         guest_token = None if owner_id else secrets.token_urlsafe(32)
         job = Job(
@@ -213,6 +214,7 @@ class VerificationTasks:
             guest_token_hash=token_hash(guest_token) if guest_token else None,
             stop_on_deliverable=stop_on_deliverable,
             execution_target=execution_target,
+            list_name=list_name,
         )
         job.results = [waiting_result(email, index) for index, email in enumerate(job.emails)]
         if immediate_results is not None:
@@ -243,6 +245,7 @@ class VerificationTasks:
         owner_id: str | None = None,
         job_id: str | None = None,
         immediate_results_by_target: dict[str, list[dict[str, Any]]] | None = None,
+        list_name: str | None = None,
     ) -> Job:
         """Create one visible task and target-specific internal child jobs."""
         all_emails = clean_emails(emails)
@@ -270,6 +273,7 @@ class VerificationTasks:
             guest_token=None if owner_id else secrets.token_urlsafe(32),
             stop_on_deliverable=False,
             execution_target="aggregate",
+            list_name=list_name,
         )
         parent.guest_token_hash = (
             token_hash(parent.guest_token) if parent.guest_token else None
@@ -290,6 +294,7 @@ class VerificationTasks:
                 stop_on_deliverable=False,
                 execution_target=target,
                 parent_id=parent.id,
+                list_name=list_name,
             )
             child.results = [
                 waiting_result(email, index) for index, email in enumerate(child.emails)

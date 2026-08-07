@@ -1,35 +1,13 @@
 <!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="light">
-  <title>Verigo | 邮箱验证、名单清洗与企业邮箱查找</title>
-  <meta name="description" content="Verigo 帮助销售、招聘与出海团队验证邮箱、清洗名单，并查找目标企业的可联系邮箱。">
-  <link rel="canonical" href="https://verigo.site/">
-  <meta property="og:type" content="website">
-  <meta property="og:locale" content="zh_CN">
-  <meta property="og:site_name" content="Verigo">
-  <meta property="og:title" content="Verigo | 邮箱验证、名单清洗与企业邮箱查找">
-  <meta property="og:description" content="验证邮箱、清洗名单，并查找目标企业的可联系邮箱。">
-  <meta property="og:url" content="https://verigo.site/">
-  <meta name="twitter:card" content="summary">
-  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"Organization","name":"Verigo","url":"https://verigo.site/","logo":"https://verigo.site/static/favicon.svg"},{"@type":"WebApplication","name":"Verigo","url":"https://verigo.site/","applicationCategory":"BusinessApplication","operatingSystem":"Web","description":"面向销售、招聘与出海团队的邮箱验证、名单清洗和企业邮箱查找工具。","offers":{"@type":"Offer","price":"0.50","priceCurrency":"CNY","description":"100 次批量验证"}},{"@type":"FAQPage","mainEntity":[{"@type":"Question","name":"Catch-all 邮箱是什么意思？","acceptedAnswer":{"@type":"Answer","text":"Catch-all 是企业邮箱域名的一种设置：发往该域名的任意前缀都可能被服务器接收或转发，因此无法仅凭服务器响应确认某个具体收件人真实存在。"}},{"@type":"Question","name":"企业邮箱查找和普通验证有什么区别？","acceptedAnswer":{"@type":"Answer","text":"普通验证用于确认已有邮箱是否可用；企业邮箱查找用于获取目标企业的业务联络邮箱，适合销售开发、招聘和商务合作。"}}]}]}</script>
-  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" referrerpolicy="no-referrer">
-  <link rel="stylesheet" href="/static/css/app.css?v=cloudshell-crm-v1">
-</head>
-<body>
-  <header class="topbar">
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Verigo App</title><link rel="stylesheet" href="/static/css/app.css?v=surface"></head><body class="app-surface">  <header class="topbar">
     <a class="brand" href="/" aria-label="Verigo 首页">
       <span class="brand-mark">V</span>
       <span>Verigo</span>
     </a>
     <nav class="product-nav" aria-label="产品导航">
       <button class="nav-item active" type="button" data-view="single">邮箱验证</button>
-      <button class="nav-item" type="button" data-view="batch">批量清洗</button>
       <button class="nav-item" type="button" data-view="discovery">邮箱查找</button>
-      <button id="workspace-nav" class="nav-item hidden" type="button" data-view="workspace">工作台</button>
+      <button class="nav-item" type="button" data-view="history">历史记录</button>
       <a class="nav-item nav-link" href="/pricing">价格</a>
       <button id="api-nav" class="nav-item" type="button">API</button>
       <button id="dashboard-nav" class="nav-item hidden" type="button" data-view="dashboard">运营监控</button>
@@ -53,47 +31,12 @@
       </div>
     </div>
   </header>
-
-  <section class="commercial-hero public-marketing" aria-labelledby="commercial-hero-title">
-    <div>
-      <p class="eyebrow">EMAIL VERIFICATION</p>
-      <h1 id="commercial-hero-title">验证邮箱是否可投递</h1>
-      <p>在发送邮件或导入名单前，先确认这个地址是否值得继续使用。</p>
-      <div class="hero-actions"><a class="hero-primary" href="#verify-workspace">免费验证一个邮箱</a><a class="hero-secondary" href="/pricing">查看价格与额度</a></div>
-      <ul class="hero-points"><li>单个验证免费</li><li>约 2 分钟内返回结果</li><li>支持 CSV / Excel 批量清洗</li></ul>
-    </div>
-    <aside class="hero-proof hero-capabilities" aria-label="Verigo 核心能力">
-      <article><strong>多层检查</strong><span>语法、域名、MX 与 SMTP</span></article>
-      <article><strong>结果可解释</strong><span>状态、方式、服务器响应</span></article>
-      <article><strong>按量使用</strong><span>单个免费，批量按额度计费</span></article>
-    </aside>
-  </section>
-
-  <main id="workspace-home" class="workspace-home hidden">
-    <section class="workspace-welcome">
-      <div><p class="eyebrow">VERIGO WORKSPACE</p><h2>今天先把名单质量做好</h2><p>从最近任务继续，或选择一个动作开始。</p></div>
-      <a class="hero-secondary" href="/api-docs">查看 API 文档</a>
-    </section>
-    <section class="workspace-metrics" aria-label="账户摘要">
-      <article><span>可用额度</span><strong id="workspace-credits">—</strong><small>批量验证</small></article>
-      <article><span>今日已处理</span><strong id="workspace-processed">—</strong><small>邮箱地址</small></article>
-      <article><span>可投递率</span><strong id="workspace-deliverable-rate">—</strong><small>最近任务</small></article>
-      <article><span>最近任务</span><strong id="workspace-job-count">—</strong><small>可继续查看</small></article>
-    </section>
-    <section class="workspace-grid">
-      <article class="workspace-card workspace-quick-start"><div class="workspace-card-heading"><div><p class="eyebrow">QUICK START</p><h2>选择下一步</h2></div></div><div class="quick-start-grid"><button type="button" data-view="single"><span class="quick-icon" aria-hidden="true"><i class="fa-regular fa-circle-check"></i></span><strong>验证一个邮箱</strong><span>快速判断地址是否可投递</span></button><button type="button" data-view="batch"><span class="quick-icon" aria-hidden="true"><i class="fa-solid fa-list-check"></i></span><strong>清洗一份名单</strong><span>导入 CSV 或 Excel 批量处理</span></button><button type="button" data-view="discovery"><span class="quick-icon" aria-hidden="true"><i class="fa-solid fa-magnifying-glass"></i></span><strong>查找企业邮箱</strong><span>从姓名和域名开始寻找候选地址</span></button></div></article>
-      <article class="workspace-card workspace-recent-jobs-card"><div class="workspace-card-heading"><div><p class="eyebrow">RECENT JOBS</p><h2>最近任务</h2></div><button id="workspace-history-link" class="text-action" type="button">查看全部任务</button></div><div id="workspace-recent-jobs" class="workspace-recent-jobs"><p class="workspace-empty">正在加载任务…</p></div></article>
-      <article class="workspace-card workspace-recent-results-card"><div class="workspace-card-heading"><div><p class="eyebrow">RECENT RESULTS</p><h2>最近验证结果</h2></div></div><div id="workspace-recent-results" class="workspace-recent-jobs"><p class="workspace-empty">正在加载结果…</p></div></article>
-    </section>
-    <section class="workspace-help"><div><strong>需要接入自动化流程？</strong><span>使用 API Key 将验证能力接入 CRM、表单或内部工具。</span></div><button id="workspace-api-button" class="download-action" type="button">管理 API Key</button></section>
-  </main>
-
   <main id="verify-workspace" class="workspace">
     <aside class="control-panel">
       <div class="panel-heading">
         <div>
           <p id="verify-eyebrow" class="eyebrow">免费单个验证</p>
-          <h2 id="verify-heading">验证单个收件地址</h2>
+          <h1 id="verify-heading">验证单个收件地址</h1>
         </div>
         <span id="email-count" class="count">0</span>
       </div>
@@ -190,9 +133,9 @@
 
       <div class="table-wrap">
         <table>
-          <thead><tr><th>邮箱</th><th>状态</th><th>验证方式</th><th>服务器响应</th><th>操作</th></tr></thead>
+          <thead><tr><th>邮箱</th><th>状态</th><th>操作</th></tr></thead>
           <tbody id="results-body">
-            <tr class="empty-row"><td colspan="5">尚无验证结果</td></tr>
+            <tr class="empty-row"><td colspan="3">尚无验证结果</td></tr>
           </tbody>
         </table>
       </div>
@@ -204,52 +147,25 @@
           <button id="next-page" class="page-button" type="button" disabled>下一页</button>
         </div>
       </div>
-      <div class="table-actions"><button id="discovery-export-button" class="download-action" type="button" disabled>导出候选 CSV</button></div>
     </section>
   </main>
 
-  <section class="commercial-section compact-marketing public-marketing" aria-labelledby="solutions-title">
-    <div class="commercial-heading"><p class="eyebrow">一条可行动的工作流</p><h2 id="solutions-title">从名单质量到目标企业邮箱</h2><p>选择你当前最需要完成的动作，几分钟内得到可用于下一步决策的结果。</p></div>
-    <div class="solution-grid"><article><span>01</span><h3>企业邮箱查找</h3><p>输入目标公司域名，找到适合销售开发、招聘和商务合作的工作邮箱。</p><a href="#verify-workspace" data-commercial-view="discovery">查找企业邮箱</a></article><article><span>02</span><h3>验证单个邮箱</h3><p>在回复、邀请或导入 CRM 前，快速判断一个邮箱是否值得继续使用。</p><a href="#verify-workspace">立即验证</a></article><article><span>03</span><h3>批量清洗名单</h3><p>导入 CSV 或 Excel，识别明显不可用的地址，让营销和销售名单更干净。</p><a href="#verify-workspace" data-commercial-view="batch">批量清洗</a></article></div>
-  </section>
 
-  <section class="commercial-section trust-section compact-marketing public-marketing" aria-labelledby="trust-title">
-    <div class="commercial-heading"><p class="eyebrow">为业务动作而设计</p><h2 id="trust-title">让下一封邮件、更值得发出去</h2></div>
-    <div class="trust-grid"><article><h3>多层检查</h3><p>语法、域名、MX 与 SMTP</p></article><article><h3>结果可解释</h3><p>状态、方式、服务器响应</p></article><article><h3>按量使用</h3><p>单个免费，批量按额度计费</p></article></div>
-  </section>
-
-  <section class="commercial-section faq-section compact-marketing public-marketing" aria-labelledby="faq-title">
-    <div class="commercial-heading"><p class="eyebrow">常见问题</p><h2 id="faq-title">购买或开始验证前，你需要知道这些</h2></div>
-    <details><summary>批量验证怎么收费？</summary><p>批量验证按额度计费，当前公开价格为 ¥0.50 / 100 次。单个邮箱验证和企业邮箱查找可免费开始使用。</p></details>
-    <details><summary>Catch-all 邮箱是什么意思？</summary><p>Catch-all 是企业邮箱域名的一种设置：例如对方公司启用它后，发往任意前缀的邮件都可能被服务器接收或转发。因此服务器的“接受”响应不能证明某个具体员工邮箱真实存在，建议单独处理。</p></details>
-    <details><summary>企业邮箱查找和普通验证有什么区别？</summary><p>普通验证用于确认你已有的邮箱是否可用；企业邮箱查找用于获取目标企业的业务联络邮箱，适合销售开发、招聘和商务合作。</p></details>
-    <details><summary>可以通过 API 集成吗？</summary><p>可以。已登录账户可在产品中创建 API Key，并通过 API 文档将验证能力接入 CRM、表单或内部流程。</p></details>
-  </section>
-
-  <main id="discovery-workspace" class="discovery-workspace hidden">
+<main id="discovery-workspace" class="discovery-workspace hidden">
     <section class="discovery-form-area">
       <p class="eyebrow">企业邮箱查找</p>
-      <h2>找到目标企业的工作邮箱</h2>
+      <h1>找到目标企业的工作邮箱</h1>
       <div class="discovery-fields">
         <label>名字<input id="discovery-first-name" autocomplete="given-name" placeholder="ming"></label>
         <label>姓氏<input id="discovery-last-name" autocomplete="family-name" placeholder="wang"></label>
       </div>
-      <label for="discovery-domain">公司域名<input id="discovery-domain" inputmode="url" placeholder="company.com" autocomplete="url"></label>
-      <div id="domain-preview" class="domain-preview hidden" aria-live="polite">
-        <div id="domain-preview-list" class="domain-preview-list"></div>
-        <p id="domain-preview-status" class="domain-preview-status"></p>
-      </div>
+      <label for="discovery-domain">公司域名<input id="discovery-domain" inputmode="url" placeholder="company.com"></label>
       <div class="discovery-actions">
         <button id="discovery-start" class="primary-action" type="button">查找邮箱</button>
         <button id="discovery-verify" class="secondary-action" type="button" disabled>免费验证候选邮箱</button>
       </div>
       <p id="discovery-error" class="form-error" role="alert"></p>
       <div id="discovery-candidates" class="candidate-list hidden"></div>
-      <section class="discovery-guide" aria-label="邮箱查找说明">
-        <h2>三步找到有效的工作邮箱</h2>
-        <p>输入真实姓名和公司域名后，Verigo 会生成候选地址。提交验证后，再根据状态决定是否继续联系。</p>
-        <div class="discovery-guide-grid"><div class="discovery-guide-card"><strong>1. 输入信息</strong><span>姓名和公司域名越准确，候选结果越相关。</span></div><div class="discovery-guide-card"><strong>2. 验证候选</strong><span>对候选地址执行语法、域名和邮箱服务器检查。</span></div><div class="discovery-guide-card"><strong>3. 导出结果</strong><span>下载 CSV，保留状态、验证方式和服务器响应。</span></div></div>
-      </section>
     </section>
     <section class="discovery-results-area">
       <div class="results-header">
@@ -261,7 +177,6 @@
         <div class="progress-track"><div id="discovery-progress-bar" class="progress-bar"></div></div>
       </section>
       <p id="discovery-verdict" class="discovery-verdict">请输入姓名和公司域名</p>
-      <div class="discovery-empty-panel" aria-label="查找结果说明"><div class="discovery-empty-card"><strong>候选地址</strong><span>根据姓名与域名生成可能的工作邮箱。</span></div><div class="discovery-empty-card"><strong>验证状态</strong><span>查看可投递、不可投递或待确认结果。</span></div><div class="discovery-empty-card"><strong>结果解释</strong><span>每条结果附带验证方式和服务器响应。</span></div></div>
       <div class="table-wrap">
         <table>
           <thead><tr><th>候选邮箱</th><th>结果</th><th>验证方式</th><th>服务器响应</th></tr></thead>
@@ -271,165 +186,51 @@
     </section>
   </main>
 
-  <main id="dashboard-workspace" class="dashboard-workspace hidden">
-    <section class="report-heading">
-      <div>
-        <p class="eyebrow">报告快照</p>
-        <h2>网站运营概览</h2>
-        <p id="dashboard-updated" class="report-updated">正在加载数据</p>
+
+  <main id="discovery-workspace" class="discovery-workspace hidden">
+    <section class="discovery-form-area">
+      <p class="eyebrow">企业邮箱查找</p>
+      <h1>找到目标企业的工作邮箱</h1>
+      <div class="discovery-fields">
+        <label>名字<input id="discovery-first-name" autocomplete="given-name" placeholder="ming"></label>
+        <label>姓氏<input id="discovery-last-name" autocomplete="family-name" placeholder="wang"></label>
       </div>
-      <div class="report-actions"><span class="report-period">最近 14 天</span><button id="dashboard-refresh" class="download-action" type="button">刷新</button></div>
-    </section>
-
-    <section class="report-scorecards" aria-label="今日关键指标">
-      <article class="report-scorecard"><span>独立访客</span><strong id="metric-report-users">0</strong><small>今日</small></article>
-      <article class="report-scorecard"><span>互动会话</span><strong id="metric-report-engaged">0</strong><small id="metric-report-engagement-rate">互动率 0%</small></article>
-      <article class="report-scorecard"><span>验证提交</span><strong id="metric-report-submissions">0</strong><small id="metric-report-submission-rate">会话转化 0%</small></article>
-      <article class="report-scorecard"><span>平均互动时长</span><strong id="metric-report-engagement-time">0 秒</strong><small>已互动会话</small></article>
-    </section>
-
-    <section id="cloudshell-crm" class="cloudshell-crm" aria-labelledby="cloudshell-crm-title">
-      <div class="cloudshell-crm-heading">
-        <div>
-          <p class="eyebrow">基础设施 · CloudShell</p>
-          <h2 id="cloudshell-crm-title">验证账号池</h2>
-          <p id="cloudshell-crm-updated" class="report-updated">正在加载账号状态</p>
-        </div>
-        <div class="cloudshell-crm-strategy">按日用量最低优先 · 队列自动扩展活跃池</div>
+      <label for="discovery-domain">公司域名<input id="discovery-domain" inputmode="url" placeholder="company.com"></label>
+      <div class="discovery-actions">
+        <button id="discovery-start" class="primary-action" type="button">查找邮箱</button>
+        <button id="discovery-verify" class="secondary-action" type="button" disabled>免费验证候选邮箱</button>
       </div>
-      <div id="cloudshell-crm-summary" class="cloudshell-crm-summary" aria-label="CloudShell 汇总">
-        <div><span>账号总数</span><strong id="cloudshell-total-accounts">—</strong></div>
-        <div><span>当前活跃</span><strong id="cloudshell-active-accounts">—</strong></div>
-        <div><span>冷却中</span><strong id="cloudshell-cooldown-accounts">—</strong></div>
-        <div><span>今日处理量</span><strong id="cloudshell-today-units">—</strong></div>
-        <div><span>待处理队列</span><strong id="cloudshell-queue-depth">—</strong></div>
+      <p id="discovery-error" class="form-error" role="alert"></p>
+      <div id="discovery-candidates" class="candidate-list hidden"></div>
+    </section>
+    <section class="discovery-results-area">
+      <div class="results-header">
+        <div><p class="eyebrow">查找结果</p><h2 id="discovery-title">等待查找</h2></div>
+        <div class="job-state"><span id="discovery-status" class="status status-idle">未开始</span><button id="discovery-stop-button" class="stop-action hidden" type="button">停止验证</button></div>
       </div>
-      <div id="cloudshell-account-cards" class="cloudshell-account-cards" aria-live="polite">
-        <div class="cloudshell-crm-state">正在加载 CloudShell 账号…</div>
+      <section class="progress-section" aria-live="polite">
+        <div class="progress-meta"><span id="discovery-progress-copy">0 / 0 已处理</span><strong id="discovery-progress-percent">0%</strong></div>
+        <div class="progress-track"><div id="discovery-progress-bar" class="progress-bar"></div></div>
+      </section>
+      <p id="discovery-verdict" class="discovery-verdict">请输入姓名和公司域名</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>候选邮箱</th><th>结果</th><th>验证方式</th><th>服务器响应</th></tr></thead>
+          <tbody id="discovery-results-body"><tr class="empty-row"><td colspan="4">尚无查找结果</td></tr></tbody>
+        </table>
       </div>
-    </section>
-
-    <section class="report-primary-grid">
-      <section class="report-card report-traffic-card">
-        <div class="report-card-heading"><div><h2>流量趋势</h2><p>独立访客与互动会话</p></div><span>最近 14 天</span></div>
-        <div class="report-legend" aria-hidden="true"><span class="report-legend-users">独立访客</span><span class="report-legend-engaged">互动会话</span></div>
-        <svg id="dashboard-traffic-chart" class="report-chart" role="img" aria-label="最近十四天独立访客和互动会话趋势"></svg>
-      </section>
-      <section class="report-card report-quality-card">
-        <div class="report-card-heading"><div><h2>流量质量</h2><p>已识别的访问会话</p></div></div>
-        <div class="quality-summary"><div id="quality-ring" class="quality-ring"><strong id="metric-quality-human-rate">0%</strong><span>非 Bot</span></div><div><strong id="metric-today-bounce">0%</strong><span>互动跳出率</span></div></div>
-        <dl class="quality-list">
-          <div><dt><i class="quality-dot quality-dot-human"></i>已互动</dt><dd id="metric-today-engaged">0</dd></div>
-          <div><dt><i class="quality-dot quality-dot-bot"></i>疑似 Bot</dt><dd id="metric-today-bots">0</dd></div>
-          <div><dt>Bot 占比</dt><dd id="metric-today-bot-rate">0%</dd></div>
-        </dl>
-      </section>
-    </section>
-
-    <section class="report-secondary-grid">
-      <section class="report-card report-conversion-card">
-        <div class="report-card-heading"><div><h2>转化与注册</h2><p>今日从访问到产品动作</p></div><span>真实会话</span></div>
-        <div class="funnel-list">
-          <div><div><span>独立访客</span><strong id="metric-today-visitors">0</strong></div><i class="funnel-track"><i id="funnel-users" class="funnel-fill funnel-fill-users"></i></i></div>
-          <div><div><span>互动会话</span><strong id="metric-funnel-engaged">0</strong></div><i class="funnel-track"><i id="funnel-engaged" class="funnel-fill funnel-fill-engaged"></i></i></div>
-          <div><div><span>免费验证提交</span><strong id="metric-today-free-submissions">0</strong></div><i class="funnel-track"><i id="funnel-free" class="funnel-fill funnel-fill-free"></i></i></div>
-          <div><div><span>批量验证提交</span><strong id="metric-today-batch-submissions">0</strong></div><i class="funnel-track"><i id="funnel-batch" class="funnel-fill funnel-fill-batch"></i></i></div>
-        </div>
-        <div class="conversion-footer"><span>新增注册 <strong id="metric-today-users">0</strong></span><span>完成邮箱验证 <strong id="metric-today-verified">0</strong></span></div>
-      </section>
-      <section class="report-card report-operations-card">
-        <div class="report-card-heading"><div><h2>验证服务表现</h2><p>今日创建任务</p></div><span class="service-ready">运行正常</span></div>
-        <dl class="operations-list">
-          <div><dt>任务完成率</dt><dd id="metric-job-completion">0%</dd></div>
-          <div><dt>平均处理时长</dt><dd id="metric-job-duration">0 秒</dd></div>
-          <div><dt>可投递率</dt><dd id="metric-deliverable-rate">0%</dd></div>
-          <div><dt>已处理邮箱</dt><dd id="metric-results-processed">0</dd></div>
-        </dl>
-        <div class="operations-footer"><span>排队 <strong id="metric-jobs-queued">0</strong></span><span>处理中 <strong id="metric-jobs-running">0</strong></span><span>失败 <strong id="metric-jobs-failed">0</strong></span></div>
-      </section>
-    </section>
-
-    <section class="report-tertiary-grid">
-      <section class="report-card report-audience-card">
-        <div class="report-card-heading"><div><h2>用户与活跃度</h2><p>用户规模与今日真实访问</p></div><span>账户活跃</span></div>
-        <dl class="audience-list">
-          <div><dt>注册用户</dt><dd id="metric-total-users">0</dd><small>累计</small></div>
-          <div><dt>已验证用户</dt><dd id="metric-total-verified-users">0</dd><small>可使用验证服务</small></div>
-          <div><dt>今日独立访客</dt><dd id="metric-audience-visitors">0</dd><small>去重访问</small></div>
-          <div><dt>今日互动会话</dt><dd id="metric-audience-engaged">0</dd><small id="metric-audience-engagement-rate">互动率 0%</small></div>
-          <div><dt>今日新增注册</dt><dd id="metric-audience-signups">0</dd><small>新账户</small></div>
-          <div><dt>今日完成验证</dt><dd id="metric-audience-verified">0</dd><small>邮箱确认</small></div>
-        </dl>
-      </section>
-      <section class="report-card report-revenue-card">
-        <div class="report-card-heading"><div><h2>收入</h2><p>仅统计已支付订单</p></div><span>人民币</span></div>
-        <div class="revenue-primary"><span>今日实际收入</span><strong id="metric-today-revenue">¥0.00</strong><small id="metric-today-orders">0 笔已支付订单</small></div>
-        <dl class="revenue-list">
-          <div><dt>累计实际收入</dt><dd id="metric-total-revenue">¥0.00</dd></div>
-          <div><dt>累计已支付订单</dt><dd id="metric-total-paid-orders">0</dd></div>
-          <div><dt>平均客单价</dt><dd id="metric-average-order-value">¥0.00</dd></div>
-        </dl>
-      </section>
     </section>
   </main>
-
-  <main id="admin-credits-workspace" class="admin-credits-workspace hidden">
-    <section class="report-heading admin-report-heading"><div><p class="eyebrow">账户运营</p><h2>验证次数管理</h2><p class="report-updated">账户、使用情况与调整记录</p></div><div class="report-actions"><span class="report-period">100 次 ¥0.50</span></div></section>
-    <section class="report-scorecards admin-scorecards"><article class="report-scorecard"><span>账户总数</span><strong id="admin-metric-users">0</strong><small>已注册账户</small></article><article class="report-scorecard"><span>付费验证次数</span><strong id="admin-metric-paid">0</strong><small>全部账户</small></article><article class="report-scorecard"><span>体验验证次数</span><strong id="admin-metric-trial">0</strong><small>有效体验次数</small></article><article class="report-scorecard"><span>累计已验证</span><strong id="admin-metric-used">0</strong><small>全部账户</small></article></section>
-    <section class="admin-credits-panel" aria-labelledby="admin-credits-heading">
-      <div class="admin-credits-heading">
-        <div><p class="eyebrow">调整操作</p><h2 id="admin-credits-heading">授予或扣减验证次数</h2></div>
-      </div>
-      <form id="admin-credit-grant-form" class="admin-credit-grant-form">
-        <label for="admin-credit-action">操作</label>
-        <select id="admin-credit-action"><option value="grant">授予额度</option><option value="deduct">扣减额度</option></select>
-        <label for="admin-credit-email">用户注册邮箱</label>
-        <input id="admin-credit-email" type="email" autocomplete="email" maxlength="254" required>
-        <button id="admin-account-lookup" class="download-action" type="button">查询账户</button>
-        <label for="admin-credit-amount">充值或退款金额（元）</label>
-        <input id="admin-credit-amount" type="number" inputmode="decimal" min="0.01" max="5000" step="0.01" required>
-        <label for="admin-credit-note">备注</label>
-        <input id="admin-credit-note" type="text" maxlength="200" autocomplete="off">
-        <p id="admin-credit-result" class="admin-credit-result" role="status"></p>
-        <button id="admin-credit-submit" class="primary-action" type="submit">确认授予</button>
-      </form>
-      <section id="admin-account-summary" class="admin-account-summary"><div class="report-card-heading"><div><h2>功能使用趋势</h2><p>单个验证、批量验证与工作邮箱查找</p></div></div><div id="admin-feature-chart" class="admin-feature-chart"></div><div id="admin-feature-legend" class="report-legend"></div></section>
-      <section class="admin-accounts-section"><div class="report-card-heading"><div><h2>全部账户</h2><p id="admin-accounts-meta">按注册时间排序</p></div><button id="admin-accounts-refresh" class="download-action" type="button">刷新</button></div><div id="admin-accounts-list" class="admin-accounts-list"></div><div class="pagination"><span id="admin-accounts-page"></span><div><button id="admin-accounts-prev" class="page-button" type="button">上一页</button><span id="admin-accounts-pages" class="page-numbers"></span><button id="admin-accounts-next" class="page-button" type="button">下一页</button></div></div></section>
-    </section>
-  </main>
-
   <main id="wallet-workspace" class="wallet-workspace hidden">
-    <section class="report-heading"><div><p class="eyebrow">账户中心</p><h2>资金与使用</h2><p id="wallet-updated" class="report-updated"></p></div><div class="report-actions"><span id="wallet-price" class="report-period"></span><button id="wallet-refresh" class="download-action" type="button">刷新</button></div></section>
+    <section class="report-heading"><div><p class="eyebrow">账户中心</p><h1>资金与使用</h1><p id="wallet-updated" class="report-updated"></p></div><div class="report-actions"><span id="wallet-price" class="report-period"></span><button id="wallet-refresh" class="download-action" type="button">刷新</button></div></section>
     <section class="report-scorecards"><article class="report-scorecard"><span>累计充值</span><strong id="wallet-recharged">¥0.00</strong><small>实收金额</small></article><article class="report-scorecard"><span>付费余额价值</span><strong id="wallet-value">¥0.00</strong><small id="wallet-paid">0 次</small></article><article class="report-scorecard"><span>已用于验证</span><strong id="wallet-spent">¥0.00</strong><small id="wallet-used">0 次</small></article><article class="report-scorecard"><span>可用验证次数</span><strong id="wallet-available">0</strong><small id="wallet-trial-note">含体验次数</small></article></section>
     <section class="wallet-purchase"><div><p class="eyebrow">购买验证额度</p><h2>按需充值，立即用于批量验证</h2><p>100 次 ¥0.50。购买完成后额度自动进入账户。</p></div><div class="purchase-actions"><label for="purchase-packages">购买份数（每份 100 次）</label><div><input id="purchase-packages" type="number" min="1" max="1000" value="1"><button id="purchase-button" class="primary-action" type="button">购买 100 次 · ¥0.50</button></div><p id="purchase-status" class="purchase-status" role="status"></p></div></section>
     <section class="report-secondary-grid"><section class="report-card"><div class="report-card-heading"><div><h2>验证使用趋势</h2><p>最近 14 天</p></div></div><div id="wallet-usage-chart" class="wallet-usage-chart"></div></section><section class="report-card"><div class="report-card-heading"><div><h2>资金流水</h2><p>实收、退款和管理员调整</p></div></div><div id="wallet-transactions" class="wallet-transactions"></div></section></section>
   </main>
-
   <main id="history-workspace" class="history-workspace hidden">
     <section class="report-heading"><div><p class="eyebrow">账户</p><h1>历史记录</h1><p class="report-updated">按名单名称查看过去的验证任务</p></div><button id="history-refresh" class="download-action" type="button">刷新</button></section>
     <section class="report-card history-card"><div class="table-toolbar"><div class="history-search-controls"><input id="history-search" type="search" placeholder="搜索文件名或名单名称"><select id="history-filter" aria-label="筛选任务"><option value="all">全部</option><option value="completed">已完成</option><option value="running">验证中</option><option value="failed">失败</option><option value="stopped">已停止</option></select></div></div><div id="history-list" class="history-list"></div><div class="pagination"><span id="history-page-info"></span><div><button id="history-prev" class="page-button" type="button">上一页</button><span id="history-pages" class="page-numbers"></span><button id="history-next" class="page-button" type="button">下一页</button></div></div></section>
   </main>
-  <footer class="site-footer">
-    <span>Verigo · 邮箱验证、名单清洗与企业邮箱查找</span>
-    <nav aria-label="网站政策">
-      <a href="/email-verification">邮箱验证指南</a>
-      <a href="/bulk-email-verification">批量验证</a>
-      <a href="/email-list-cleaning">名单清洗</a>
-      <a href="/pricing">价格</a>
-      <a href="/api-docs">API 文档</a>
-      <a href="/privacy">隐私与数据说明</a>
-      <a href="/acceptable-use">使用边界</a>
-    </nav>
-  </footer>
-
-  <aside id="result-detail-drawer" class="result-detail-drawer" aria-hidden="true" aria-labelledby="result-detail-title">
-    <div class="drawer-heading"><div><p class="eyebrow">结果详情</p><h2 id="result-detail-title">邮箱详情</h2></div><button id="close-result-detail" class="dialog-close" type="button" aria-label="关闭">×</button></div>
-    <div id="result-detail-content" class="result-detail-content"></div>
-    <div class="result-detail-actions">
-      <button id="result-reverify-button" class="secondary-action" type="button">再次验证</button>
-    </div>
-  </aside>
-
   <dialog id="auth-dialog" class="auth-dialog">
     <form id="auth-form" method="dialog">
       <div class="dialog-heading">
@@ -573,6 +374,6 @@
   </dialog>
 
   <script src="/static/js/i18n.js?v=locale-v1" defer></script>
-  <script src="/static/js/app.js?v=cloudshell-crm-v1" defer></script>
-</body>
-</html>
+  <script src="/static/js/app.js?v=commercial-v2" defer></script>
+
+<script src="/static/js/i18n.js"></script><script src="/static/js/app.js"></script></body></html>

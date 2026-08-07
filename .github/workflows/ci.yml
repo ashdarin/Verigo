@@ -29,16 +29,51 @@ jobs:
           find app/ -name "*.py" -exec python -m py_compile {} +
 
       - name: Run smoke tests
+        env:
+          PYTHONPATH: .
+        run: python tests/backend_smoke.py
+
+      - name: Run API contract smoke
+        env:
+          PYTHONPATH: .
+          VERIGO_DATABASE_PATH: /tmp/verigo-ci.db
+          VERIGO_RESULTS_DIR: /tmp/verigo-ci-results
+        run: |
+          python - <<'PY'
+          from fastapi.testclient import TestClient
+          from app.main import app
+          with TestClient(app) as client:
+              assert client.get('/').status_code == 200
+              assert client.get('/app/verify').status_code == 200
+              assert client.get('/admin').status_code == 200
+              assert client.get('/history').status_code == 200
+          PY
+
+      - name: Run auxiliary smoke diagnostics
         continue-on-error: true
         env:
           PYTHONPATH: .
         run: |
           for test in tests/*_smoke.py; do
+            [ "$test" = "tests/backend_smoke.py" ] && continue
             [ -f "$test" ] || continue
             echo "::group::$test"
-            python "$test" 2>&1 || echo "::warning::$test failed"
+            python "$test" 2>&1 || echo "::warning::$test failed in its optional environment"
             echo "::endgroup::"
           done
+
+      - name: Run UI smoke test
+        env:
+          VERIGO_UI_SMOKE: "1"
+          VERIGO_DATABASE_PATH: /tmp/verigo-ui.db
+          VERIGO_RESULTS_DIR: /tmp/verigo-ui-results
+          VERIGO_SECURE_COOKIES: "false"
+        run: |
+          npm install --no-save playwright@1.61.0
+          npx playwright install --with-deps chromium
+          PYTHONPATH=. nohup python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 >/tmp/verigo-ui.log 2>&1 &
+          for attempt in {1..30}; do curl -fsS http://127.0.0.1:8000/ >/dev/null && break; sleep 1; done
+          node tests/ui-smoke.js
 
   deploy:
     needs: test
