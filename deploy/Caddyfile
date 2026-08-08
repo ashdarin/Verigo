@@ -1,4 +1,14 @@
-verigo.site, www.verigo.site {
+# Keep every public URL on one host. Serving both hosts with the same HTML
+# creates duplicate documents and leaves the canonical decision to crawlers.
+http://www.verigo.site {
+    redir https://verigo.site{uri} permanent
+}
+
+https://www.verigo.site {
+    redir https://verigo.site{uri} permanent
+}
+
+verigo.site {
     encode zstd gzip
 
     request_body {

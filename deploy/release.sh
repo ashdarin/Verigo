@@ -230,6 +230,10 @@ install -m 644 "$release_path/deploy/verigo-retention.timer" /etc/systemd/system
 install -m 644 "$release_path/deploy/verigo.service" /etc/systemd/system/verigo.service
 install -m 644 "$release_path/deploy/verigo-supervisor.service" /etc/systemd/system/verigo-supervisor.service
 install -m 644 "$release_path/deploy/verigo-worker@.service" /etc/systemd/system/verigo-worker@.service
+if command -v caddy >/dev/null; then
+    caddy validate --config "$release_path/deploy/Caddyfile" --adapter caddyfile
+    install -m 644 "$release_path/deploy/Caddyfile" /etc/caddy/Caddyfile
+fi
 install -d -m 700 /etc/verigo
 if [[ ! -f /etc/verigo/verigo.env ]]; then
     install -m 600 "$release_path/deploy/verigo.env.example" /etc/verigo/verigo.env
@@ -312,6 +316,9 @@ if ! cmp -s "$previous_release/requirements.txt" "$release_path/requirements.txt
 fi
 
 systemctl daemon-reload
+if command -v caddy >/dev/null; then
+    systemctl reload caddy
+fi
 systemctl enable --now verigo-backup.timer verigo-monitor.timer verigo-retention.timer
 # Keep release backup independent from a remote provider's latency.
 systemctl start --no-block verigo-backup.service
