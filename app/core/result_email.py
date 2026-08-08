@@ -113,31 +113,3 @@ class EmailSender:
             return False, f"邮件发送失败: {str(e)}"
         except Exception as e:
             return False, f"发送过程出错: {str(e)}"
-
-    def send_text_email(self, sender_email, sender_password, recipient_email,
-                        subject, body):
-        """🆕 发送一封纯文本邮件(无附件), 用于异步提醒(如迟到退信告警)。"""
-        try:
-            provider = self.detect_email_provider(sender_email)
-            if not provider:
-                return False, "不支持的发件邮箱类型"
-            config = self.smtp_configs[provider]
-
-            msg = MIMEMultipart()
-            msg['From'] = sender_email
-            msg['To'] = recipient_email
-            msg['Subject'] = subject
-            msg.attach(MIMEText(body, 'plain', 'utf-8'))
-
-            if config.get('use_ssl', False):
-                server = smtplib.SMTP_SSL(config['server'], config['port'], timeout=30)
-            else:
-                server = smtplib.SMTP(config['server'], config['port'], timeout=30)
-                if config.get('use_tls', False):
-                    server.starttls()
-            server.login(sender_email, sender_password)
-            server.send_message(msg)
-            server.quit()
-            return True, f"提醒邮件已发送到 {recipient_email}"
-        except Exception as e:
-            return False, f"提醒邮件发送失败: {str(e)}"

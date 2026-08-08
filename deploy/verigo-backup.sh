@@ -59,9 +59,6 @@ tar -C "$app_dir" --exclude='__pycache__' -czf "$backup_dir/application.tar.gz" 
 if [[ -d "$data_dir/results" ]]; then
     tar -C "$data_dir" -czf "$backup_dir/results.tar.gz" results
 fi
-if [[ -f "$data_dir/domain_type_cache.json" ]]; then
-    cp "$data_dir/domain_type_cache.json" "$backup_dir/"
-fi
 
 cp /etc/verigo/verigo.env "$backup_dir/verigo.env"
 cp /etc/caddy/Caddyfile "$backup_dir/Caddyfile"

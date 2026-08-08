@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import math
 import time
-from concurrent.futures import ThreadPoolExecutor
-from multiprocessing import Manager, Process, Queue
+from multiprocessing import Process, Queue
 from queue import Empty
 from typing import Any, Callable
 
@@ -23,7 +22,7 @@ class VerificationBatchRunner:
         *,
         process_factory: Callable[..., Any] = Process,
         queue_factory: Callable[[], Any] = Queue,
-        manager_factory: Callable[[], Any] = Manager,
+        manager_factory: Callable[[], Any] | None = None,
         worker_target: Callable[..., Any] = run_verification_worker,
         verifier_factory: Callable[[], Any] = EmailVerifier,
         cache_saver: Callable[[], Any] = save_persistent_cache,
@@ -33,6 +32,7 @@ class VerificationBatchRunner:
         self.controller = controller
         self.process_factory = process_factory
         self.queue_factory = queue_factory
+        # Kept for compatibility with older callers; no probe cache is shared.
         self.manager_factory = manager_factory
         self.worker_target = worker_target
         self.verifier_factory = verifier_factory
@@ -85,7 +85,11 @@ class VerificationBatchRunner:
             if domain not in verifier_temp.consumer_domains and domain not in verifier_temp.consumer_fix_strategies:
                 domains_to_check.append(domain)
 
-        if domains_to_check:
+        # Catch-all probing was removed. MX and recipient verification below
+        # provide the only SMTP evidence used for a result.
+        domains_to_check = []
+        print("   Catch-all random probes disabled; using recipient SMTP verification only")
+        if False:  # Retained below only as a compatibility reference block.
             print(f"   需要检测catch-all的域名: {len(domains_to_check)}个")
 
             # 🔧 优化：使用线程池并发检测catch-all（每个域名只需一次SMTP连接）
@@ -155,13 +159,10 @@ class VerificationBatchRunner:
         progress_queue = self.queue_factory()
 
         # 🔧 创建共享的域名类型缓存（使用Manager实现跨进程共享）
-        manager = self.manager_factory()
-        shared_domain_cache = manager.dict()
-        shared_domain_lock = manager.RLock()
+        shared_domain_cache = None
+        shared_domain_lock = None
 
         # 将预检测的结果复制到共享缓存
-        for domain, cache_data in verifier_temp.domain_type_cache.items():
-            shared_domain_cache[domain] = cache_data
 
         # 将邮箱加入队列
         for i, email in enumerate(emails):
@@ -253,13 +254,6 @@ class VerificationBatchRunner:
                 if p.is_alive():
                     p.terminate()
 
-            shutdown = getattr(manager, "shutdown", None)
-            if shutdown:
-                try:
-                    shutdown()
-                except Exception:
-                    # Cleanup must not hide a verification result or worker error.
-                    pass
 
         # 收集剩余结果
         while True:

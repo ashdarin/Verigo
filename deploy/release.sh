@@ -253,7 +253,6 @@ for setting in \
     'VERIGO_RESULTS_DIR=/opt/verigo/data/results' \
     'VERIGO_NAME_CATALOG_PATH=/opt/verigo/data/name_catalog.db' \
     'VERIGO_SMTP_LIMITER_PATH=/opt/verigo/data/smtp_limiter.db' \
-    'VERIGO_DOMAIN_CACHE_PATH=/opt/verigo/data/domain_type_cache.json' \
     'VERIGO_MAX_EMAILS=0' \
     'VERIGO_MAX_WORKERS=8' \
     'VERIGO_REMOTE_WORKER_MAX_EMAILS=5000' \
@@ -296,9 +295,6 @@ if ! grep -q '^VERIGO_METRICS_SALT=' /etc/verigo/verigo.env; then
 fi
 if ! grep -q '^VERIGO_MONITOR_TOKEN=[^[:space:]]' /etc/verigo/verigo.env; then
     printf 'VERIGO_MONITOR_TOKEN=%s\n' "$(openssl rand -hex 32)" >> /etc/verigo/verigo.env
-fi
-if [[ ! -f "$state_dir/data/domain_type_cache.json" && -f "$state_dir/domain_type_cache.json" ]]; then
-    install -m 600 -o verigo -g verigo "$state_dir/domain_type_cache.json" "$state_dir/data/domain_type_cache.json"
 fi
 chmod 600 /etc/verigo/verigo.env
 

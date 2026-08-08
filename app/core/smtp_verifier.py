@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-import json
 import math
 import os
 import re
-import secrets
 import smtplib
 import socket
 import ssl
@@ -56,13 +54,6 @@ from app.core.outlook_verifier import (
     OUTLOOK_HTTP_DOMAINS,
     is_outlook_domain,
     verify_outlook_via_microsoft,
-)
-from app.core.domain_type_cache import (
-    get_shared_domain_type,
-    has_catch_all_evidence,
-    load_persistent_cache,
-    save_persistent_cache,
-    set_shared_domain_type,
 )
 def check_email_characters(raw_email):
     """检测邮箱字符串中的空格和非法字符。
@@ -495,6 +486,9 @@ class EmailVerifier:
         return None, f"{config['provider']} DATA验证已禁用"
 
     def detect_catch_all_domain(self, domain):
+        # Retained as a compatibility shim for older integrations. Random
+        # recipient probes are intentionally disabled.
+        return 'consumer' if domain in self.consumer_domains else 'normal'
         """🆕 检测域名是否为catch-all策略 - 优化版：使用共享缓存避免重复检测"""
         # 🔧 优先检查本地缓存
         if domain in self.domain_type_cache:
@@ -828,12 +822,9 @@ class EmailVerifier:
             result['mx_records'] = mx_records
 
             # 🆕 第四步：域名类型检测 (catch-all检测)
-            if fix_strategy and fix_strategy.get('strategy_type') in ('qq_aggressive', 'qq_optimized'):
-                # QQ does not need a random catch-all probe. Avoid generating
-                # additional recipient traffic against its protected MX hosts.
-                domain_type = 'consumer'
-            else:
-                domain_type = self.detect_catch_all_domain(domain)
+            # Domain classification follows the selected provider strategy.
+            # Random-address catch-all probing is intentionally disabled.
+            domain_type = 'consumer' if fix_strategy else 'normal'
             result['domain_type'] = domain_type
 
             # 如果是catch-all域名，直接标记并跳过详细验证

@@ -115,7 +115,7 @@ assert [result["email"] for result in results] == [
 ]
 assert callbacks == ["third@example.com", "first@example.com", "second@example.com"]
 assert controller.results == results
-assert events == ["manager.shutdown", "cache.save"]
+assert events == ["cache.save"]
 assert controller.process_stats[1]["status"] == "completed"
 
 stop_events: list[str] = []
@@ -131,6 +131,6 @@ stop_runner = VerificationBatchRunner(
     sleeper=lambda _delay: None,
 )
 assert stop_runner.run(["stop@example.com"], num_processes=1, should_stop=lambda: True) == []
-assert stop_events == ["manager.shutdown", "cache.save"]
+assert stop_events == ["cache.save"]
 
 print("verification batch smoke: ok")
