@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Verigo | 邮箱验证、名单清洗与企业邮箱查找</title>
+  <meta name="description" content="Verigo 帮助销售、招聘与出海团队在发送前识别无效、高风险和无法投递的邮箱，并支持批量名单清洗与 API 接入。">
+  <link rel="canonical" href="https://verigo.site/">
+  <meta property="og:type" content="website">
+  <meta property="og:locale" content="zh_CN">
+  <meta property="og:site_name" content="Verigo">
+  <meta property="og:title" content="Verigo | 专业邮箱验证服务">
+  <meta property="og:description" content="在发送前识别无效、高风险和无法投递的邮箱。">
+  <meta property="og:url" content="https://verigo.site/">
+  <meta name="twitter:card" content="summary">
+  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"Organization","name":"Verigo","url":"https://verigo.site/","logo":"https://verigo.site/static/favicon.svg"},{"@type":"WebApplication","name":"Verigo","url":"https://verigo.site/","applicationCategory":"BusinessApplication","operatingSystem":"Web","description":"面向销售、招聘与出海团队的邮箱验证、名单清洗和企业邮箱查找工具。"},{"@type":"FAQPage","mainEntity":[{"@type":"Question","name":"什么是邮箱验证？","acceptedAnswer":{"@type":"Answer","text":"邮箱验证通过语法、域名、MX 记录和邮件服务器响应等信号，判断邮箱当前是否可能正常接收邮件。"}},{"@type":"Question","name":"Verigo 会发送真实邮件吗？","acceptedAnswer":{"@type":"Answer","text":"验证过程不会向目标收件箱发送营销或测试邮件。系统通过 DNS 与邮件服务器交互获得判断信号。"}},{"@type":"Question","name":"可以批量验证邮箱吗？","acceptedAnswer":{"@type":"Answer","text":"可以上传 CSV 或 Excel，也可以粘贴邮箱列表进行批量验证。"}}]}]}</script>
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+  <link rel="preload" href="/static/css/landing.css?v=landing-v1" as="style">
+  <link rel="stylesheet" href="/static/css/landing.css?v=landing-v1">
+</head>
+<body>
+  <header class="site-header">
+    <div class="nav-wrap">
+      <a class="brand" href="/" aria-label="Verigo 首页"><img src="/static/favicon.svg" alt="" width="32" height="32"><span>Verigo</span></a>
+      <button id="menu-toggle" class="menu-toggle" type="button" aria-label="打开导航" aria-expanded="false"><span></span><span></span><span></span></button>
+      <nav id="main-nav" class="main-nav" aria-label="主导航">
+        <div class="nav-links"><a href="#verify">验证</a><a href="#finder">查找</a><a href="#api">API</a><a href="#pricing">价格</a></div>
+        <div class="nav-actions"><a class="login-link" href="/verify?auth=login">登录</a><a class="button button-small" href="/verify?auth=register">免费开始</a></div>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <section id="verify" class="hero section-shell">
+      <div class="hero-copy">
+        <p class="eyebrow">专业邮箱验证</p>
+        <h1>每一封邮件发送前，<br>先确认它能否送达。</h1>
+        <p class="hero-lead">提前识别无效、高风险和无法投递的邮箱，保护发信信誉，让每一次触达更有效。</p>
+        <form id="hero-verify-form" class="verify-form" novalidate>
+          <label class="sr-only" for="hero-email">要验证的邮箱地址</label>
+          <input id="hero-email" name="email" type="email" autocomplete="email" spellcheck="false" placeholder="name@company.com" required>
+          <button id="hero-verify-button" class="button" type="submit">免费验证邮箱</button>
+        </form>
+        <p id="hero-form-message" class="form-message" role="status" aria-live="polite"></p>
+        <ul class="check-list" aria-label="验证项目"><li>语法检查</li><li>MX 检查</li><li>SMTP 检查</li></ul>
+      </div>
+
+      <div id="hero-result" class="hero-result" aria-live="polite">
+        <div class="result-topline"><span class="demo-label">验证预览</span><span id="hero-result-status" class="status-pill status-ready">等待验证</span></div>
+        <div class="email-line"><span class="mail-icon" aria-hidden="true">@</span><div><small>邮箱</small><strong id="hero-result-email">name@company.com</strong></div></div>
+        <div class="signal-list">
+          <div><span>语法格式</span><strong id="signal-syntax">待检查</strong></div>
+          <div><span>邮箱域名</span><strong id="signal-domain">待检查</strong></div>
+          <div><span>MX 记录</span><strong id="signal-mx">待检查</strong></div>
+          <div><span>SMTP / 邮箱</span><strong id="signal-smtp">待检查</strong></div>
+        </div>
+        <a id="full-result-link" class="result-link hidden" href="/verify">查看完整验证结果 <span aria-hidden="true">→</span></a>
+      </div>
+    </section>
+
+    <section class="proof-strip" aria-label="产品特点"><div><span>实时验证结果</span><span>无需发送真实邮件</span><span>单个验证免费</span></div></section>
+
+    <section class="content-section section-shell" aria-labelledby="result-demo-title">
+      <div class="section-heading"><p class="eyebrow">可解释的结果</p><h2 id="result-demo-title">不只告诉你“有效”或“无效”。</h2><p>看清邮箱通过或失败的具体原因，知道下一步该保留、移除还是谨慎处理。</p></div>
+      <div class="detail-demo">
+        <div class="detail-summary"><div><small>验证邮箱</small><strong>hello@company.com</strong></div><span class="status-pill status-good">可投递</span></div>
+        <div class="detail-grid">
+          <div><span>语法</span><strong><i class="dot good"></i>通过</strong></div>
+          <div><span>域名</span><strong><i class="dot good"></i>有效</strong></div>
+          <div><span>MX 记录</span><strong><i class="dot good"></i>已找到</strong></div>
+          <div><span>SMTP</span><strong><i class="dot good"></i>已连接</strong></div>
+          <div><span>邮箱状态</span><strong><i class="dot good"></i>可接收</strong></div>
+          <div class="smtp-response"><span>SMTP 响应</span><code>250 2.1.5 Recipient OK</code></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="content-section section-tint" aria-labelledby="bulk-title">
+      <div class="section-shell split-layout">
+        <div class="section-heading align-left"><p class="eyebrow">批量验证</p><h2 id="bulk-title">清洗整份邮箱名单。</h2><p>上传 CSV 或 Excel，快速识别无效、高风险和无法投递的地址。</p><a class="text-link" href="/verify?auth=register">开始批量验证 <span aria-hidden="true">→</span></a></div>
+        <div class="bulk-demo">
+          <div class="upload-zone"><span class="upload-icon" aria-hidden="true">↑</span><div><strong>上传邮箱名单</strong><small>CSV、XLSX，或直接粘贴</small></div><span class="browse">选择文件</span></div>
+          <div class="demo-table" role="table" aria-label="批量验证结果示例">
+            <div class="table-row table-head" role="row"><span>邮箱</span><span>结果</span></div>
+            <div class="table-row" role="row"><span>ava@north.co</span><strong class="good-text">可投递</strong></div>
+            <div class="table-row" role="row"><span>li@sample.io</span><strong class="warn-text">高风险</strong></div>
+            <div class="table-row" role="row"><span>old@domain.co</span><strong class="bad-text">无法投递</strong></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="finder" class="content-section section-shell split-layout finder-layout" aria-labelledby="finder-title">
+      <div class="finder-demo">
+        <div class="field-grid"><label>名字<input type="text" value="Jing" readonly></label><label>姓氏<input type="text" value="Chen" readonly></label></div>
+        <label>公司域名<input type="text" value="company.com" readonly></label>
+        <div class="finder-output"><div><small>工作邮箱</small><strong>jing.chen@company.com</strong></div><span class="status-pill status-good">已验证</span></div>
+      </div>
+      <div class="section-heading align-left"><p class="eyebrow">邮箱查找</p><h2 id="finder-title">没有邮箱？找到它。</h2><p>根据联系人姓名和公司域名，查找可能的工作邮箱，并验证其投递状态。</p><a class="text-link" href="/app/finder">查找工作邮箱 <span aria-hidden="true">→</span></a></div>
+    </section>
+
+    <section id="api" class="content-section api-section" aria-labelledby="api-title">
+      <div class="section-shell split-layout">
+        <div class="section-heading align-left light-heading"><p class="eyebrow">开发者 API</p><h2 id="api-title">为开发者而构建。</h2><p>用清晰的接口把邮箱验证接入注册表单、CRM 或内部工作流。</p><ul class="api-points"><li>接口简单</li><li>响应快速</li><li>按量付费</li></ul><a class="text-link light-link" href="/api-docs">查看 API 文档 <span aria-hidden="true">→</span></a></div>
+        <div class="code-window"><div class="code-top"><span></span><span></span><span></span><small>请求示例</small></div><pre><code><span class="code-muted">curl</span> -X POST https://verigo.site/api/jobs \
+  -H <span class="code-string">"Authorization: Bearer YOUR_API_KEY"</span> \
+  -H <span class="code-string">"Content-Type: application/json"</span> \
+  -d <span class="code-string">'{
+    "emails": ["name@company.com"]
+  }'</span></code></pre></div>
+      </div>
+    </section>
+
+    <section id="pricing" class="content-section section-shell" aria-labelledby="pricing-title">
+      <div class="section-heading"><p class="eyebrow">简单定价</p><h2 id="pricing-title">按需使用，按量付费。</h2><p>从一个邮箱开始，需要处理更多名单时再购买验证额度。</p></div>
+      <div class="pricing-grid">
+        <article class="price-card"><p class="plan-name">免费</p><h3>¥0</h3><p>适合偶尔验证单个地址</p><ul><li>单个邮箱验证</li><li>完整结果详情</li><li>无需信用卡</li></ul><a class="outline-button" href="#verify">免费验证</a></article>
+        <article class="price-card featured"><div class="recommended">常用选择</div><p class="plan-name">入门</p><h3>¥0.50 <small>/ 100 次</small></h3><p>适合清洗日常业务名单</p><ul><li>CSV / Excel 批量导入</li><li>结果下载</li><li>按量购买额度</li></ul><a class="button full-button" href="/verify?auth=register">免费开始</a></article>
+        <article class="price-card"><p class="plan-name">专业</p><h3>按量</h3><p>适合产品和自动化流程</p><ul><li>开发者 API</li><li>批量验证</li><li>统一账户额度</li></ul><a class="outline-button" href="/api-docs">查看 API</a></article>
+      </div>
+    </section>
+
+    <section class="content-section security-section" aria-labelledby="security-title">
+      <div class="section-shell security-layout"><div class="section-heading align-left"><p class="eyebrow">安全与隐私</p><h2 id="security-title">你的数据，只属于你。</h2><p>从传输到清理，Verigo 只在提供验证服务所需的范围内处理你的数据。</p></div><div class="security-list"><article><span class="security-icon" aria-hidden="true">01</span><div><h3>传输过程加密</h3><p>网站与 API 通过 HTTPS 传输数据。</p></div></article><article><span class="security-icon" aria-hidden="true">02</span><div><h3>名单保持私有</h3><p>任务名单与结果不会作为公开内容展示。</p></div></article><article><span class="security-icon" aria-hidden="true">03</span><div><h3>定期自动清理</h3><p>可下载结果 30 天后清理，任务记录 90 天后清理。</p></div></article></div></div>
+    </section>
+
+    <section class="content-section section-shell faq-layout" aria-labelledby="faq-title">
+      <div class="section-heading align-left faq-heading"><p class="eyebrow">常见问题</p><h2 id="faq-title">关于邮箱验证</h2><p>开始使用前，你可能想了解这些。</p></div>
+      <div class="faq-list">
+        <details open><summary>什么是邮箱验证？</summary><p>邮箱验证会结合语法、域名、MX 记录和邮件服务器响应等信号，判断一个地址当前是否可能正常接收邮件。</p></details>
+        <details><summary>Verigo 的结果有多准确？</summary><p>Verigo 提供基于验证时点技术信号的判断。邮件服务器策略、临时故障和账户状态会变化，因此任何服务都无法保证后续邮件一定送达。</p></details>
+        <details><summary>什么是 Catch-all？</summary><p>Catch-all 域名可能接收发往任意前缀的邮件，因此仅凭服务器响应无法确认某个具体邮箱是否真实存在，这类结果应谨慎处理。</p></details>
+        <details><summary>Verigo 会向目标邮箱发送邮件吗？</summary><p>不会发送营销或测试邮件。验证过程会与目标域名的公开 DNS 和邮件服务器交互。</p></details>
+        <details><summary>可以批量验证邮箱吗？</summary><p>可以。你可以上传 CSV 或 Excel，也可以直接粘贴名单进行批量验证，并下载处理结果。</p></details>
+        <details><summary>Verigo 提供 API 吗？</summary><p>提供。你可以创建 API Key，将邮箱验证接入表单、CRM 或内部工具。</p></details>
+        <details><summary>上传的邮箱会被保存吗？</summary><p>系统会为任务执行与结果展示保存必要数据。可下载结果在 30 天后清理，任务记录在 90 天后清理，详情请查看隐私说明。</p></details>
+      </div>
+    </section>
+
+    <section class="final-cta"><div class="section-shell"><h2>准备好清洗你的邮箱名单了吗？</h2><p>先免费验证一个邮箱，看看 Verigo 能发现什么。</p><a class="button button-light" href="#verify">免费验证邮箱</a></div></section>
+  </main>
+
+  <footer class="site-footer"><div class="section-shell footer-wrap"><a class="brand footer-brand" href="/"><img src="/static/favicon.svg" alt="" width="28" height="28"><span>Verigo</span></a><nav aria-label="页脚导航"><a href="#verify">验证</a><a href="#finder">查找</a><a href="/api-docs">API</a><a href="#pricing">价格</a><a href="/privacy">隐私</a><a href="/acceptable-use">服务条款</a><a href="mailto:verify@verigo.site">联系我们</a></nav><p>© 2026 Verigo</p></div></footer>
+  <script src="/static/js/landing.js?v=landing-v1" defer></script>
+</body>
+</html>

@@ -89,7 +89,14 @@ async def collect_page_views(request, call_next):
 
 @app.get("/", include_in_schema=False)
 def index() -> FileResponse:
-    return FileResponse(STATIC_DIR / "index.html")
+    return FileResponse(STATIC_DIR / "landing.html")
+
+
+@app.get("/verify", include_in_schema=False)
+def verify_workspace() -> FileResponse:
+    return FileResponse(
+        STATIC_DIR / "index.html", headers={"X-Robots-Tag": "noindex, nofollow"}
+    )
 
 
 @app.get("/pricing", include_in_schema=False)

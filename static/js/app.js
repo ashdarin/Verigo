@@ -2096,6 +2096,11 @@ document.querySelectorAll("#workspace-home [data-view]").forEach((button) => but
   updateCount();
   await loadAccount();
   await loadPublicConfig();
+  const requestedAuthMode = new URLSearchParams(window.location.search).get("auth");
+  if (!state.user && (requestedAuthMode === "login" || requestedAuthMode === "register")) {
+    setAuthMode(requestedAuthMode);
+    el("auth-dialog").showModal();
+  }
   if (["/workspace", "/history", "/lists", "/dashboard", "/admin/credits", "/wallet", "/app/finder", "/app/history", "/app/billing"].includes(window.location.pathname) || window.location.pathname.startsWith("/lists/")) {
     if (window.location.pathname === "/workspace" && state.user) {
       switchView("workspace");
