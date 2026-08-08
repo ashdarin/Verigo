@@ -327,7 +327,9 @@ PYTHONPATH="$release_path" runuser -u verigo --preserve-environment -- \
 
 activate_release "$release_path"
 systemctl restart verigo
-for _ in {1..20}; do
+# Uvicorn may need over 20 seconds to initialize two workers after a cold
+# restart while SQLite migrations and imports are still warming up.
+for _ in {1..60}; do
     if curl -fsS http://127.0.0.1:8000/api/health >/dev/null; then
         systemctl restart verigo-supervisor.service
         # Jobs were drained before activation, so workers can safely reload
