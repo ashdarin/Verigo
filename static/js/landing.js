@@ -44,16 +44,30 @@ function setResultState(label, className) {
   resultStatus.className = `status-pill ${className}`;
 }
 
+function setSignal(id, label, state = "pending") {
+  const element = document.getElementById(id);
+  element.textContent = label;
+  element.classList.remove("good-text", "bad-text", "pending-text", "checking-text");
+  element.classList.add(`${state}-text`);
+}
+
+function renderProgressResult(item) {
+  if (!item) return;
+  const checks = item.checks || {};
+  const label = (value, waiting) => value === true ? "已通过" : value === false ? "未通过" : waiting;
+  setSignal("signal-syntax", label(checks.format, "检查中"), checks.format === true ? "good" : checks.format === false ? "bad" : "checking");
+  setSignal("signal-domain", label(checks.domain, "检查中"), checks.domain === true ? "good" : checks.domain === false ? "bad" : "checking");
+  setSignal("signal-mx", label(checks.mx, "等待 MX 检查"), checks.mx === true ? "good" : checks.mx === false ? "bad" : "pending");
+  setSignal("signal-smtp", label(checks.smtp, "等待 SMTP 响应"), checks.smtp === true ? "good" : checks.smtp === false ? "bad" : "pending");
+}
+
 function renderCompletedResult(item) {
-  const deliverability = String(item?.deliverability || "").toLowerCase();
-  const isDeliverable = deliverability === "deliverable" || item?.deliverability === true;
-  const isUndeliverable = deliverability === "undeliverable" || item?.deliverability === false;
+  renderProgressResult(item);
+  const deliverable = item?.deliverable;
+  const isDeliverable = deliverable === true || String(deliverable).toLowerCase() === "deliverable";
+  const isUndeliverable = deliverable === false || String(deliverable).toLowerCase() === "undeliverable";
   setResultState(isDeliverable ? "可投递" : isUndeliverable ? "无法投递" : "高风险 / 待确认", isDeliverable ? "status-good" : isUndeliverable ? "status-bad" : "status-warn");
-  document.getElementById("signal-syntax").textContent = item?.syntax_valid === false ? "未通过" : "已通过";
-  document.getElementById("signal-domain").textContent = item?.domain_exists === false ? "无效" : "已检查";
-  document.getElementById("signal-mx").textContent = item?.mx_found === false ? "未找到" : "已检查";
-  document.getElementById("signal-smtp").textContent = isDeliverable ? "可接收" : isUndeliverable ? "不可接收" : "无法确认";
-  signalIds.forEach((id) => document.getElementById(id).classList.toggle("good-text", isDeliverable));
+  if (isDeliverable || isUndeliverable) setSignal("signal-smtp", isDeliverable ? "可接收" : "不可接收", isDeliverable ? "good" : "bad");
   fullResultLink.classList.remove("hidden");
   message.textContent = "验证完成。你可以在完整结果中查看服务器响应和判断依据。";
 }
@@ -63,15 +77,16 @@ async function pollJob(jobId, token) {
     const response = await fetch(`/api/jobs/${encodeURIComponent(jobId)}`, { headers: { "X-Job-Token": token } });
     const job = await readJson(response);
     if (!response.ok) throw new Error(apiError(job, response.status));
-    if (job.status === "completed") {
-      const resultsResponse = await fetch(`/api/jobs/${encodeURIComponent(jobId)}/results?limit=1`, { headers: { "X-Job-Token": token } });
-      const results = await readJson(resultsResponse);
-      if (!resultsResponse.ok) throw new Error(apiError(results, resultsResponse.status));
-      renderCompletedResult(results?.items?.[0] || results?.results?.[0] || null);
-      return;
-    }
+    const resultsResponse = await fetch(`/api/jobs/${encodeURIComponent(jobId)}/results?limit=1`, { headers: { "X-Job-Token": token } });
+    const results = await readJson(resultsResponse);
+    if (!resultsResponse.ok) throw new Error(apiError(results, resultsResponse.status));
+    const item = results?.items?.[0] || results?.results?.[0] || null;
+    renderProgressResult(item);
+    if (job.status === "completed") { renderCompletedResult(item); return; }
     if (job.status === "failed" || job.status === "stopped") throw new Error("本次验证未能完成，请稍后重试。");
-    message.textContent = `正在验证，已完成 ${job.completed || 0} / ${job.total || 1} 项检查…`;
+    message.textContent = job.status === "queued"
+      ? "任务已提交，验证节点即将开始。"
+      : `正在验证，已完成 ${job.completed || 0} / ${job.total || 1} 项检查…`;
     await new Promise((resolve) => window.setTimeout(resolve, 900));
   }
 }
@@ -91,7 +106,11 @@ form.addEventListener("submit", async (event) => {
   submit.textContent = "正在提交…";
   resultEmail.textContent = email;
   setResultState("验证中", "status-ready");
-  setSignals("检查中");
+  const hasDomain = email.includes("@") && email.split("@").pop().includes(".");
+  setSignal("signal-syntax", "已通过", "good");
+  setSignal("signal-domain", hasDomain ? "已通过" : "待检查", hasDomain ? "good" : "checking");
+  setSignal("signal-mx", "等待 MX 检查", "pending");
+  setSignal("signal-smtp", "等待 SMTP 响应", "pending");
   fullResultLink.classList.add("hidden");
   message.textContent = "正在检查语法、域名、MX 和 SMTP 信号…";
 

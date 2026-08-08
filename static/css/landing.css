@@ -71,6 +71,11 @@ img { display: block; }
 .signal-list div:last-child { border: 0; }
 .signal-list strong { color: var(--ink); font-size: 13px; }
 .signal-list strong.good-text::before { content: "✓"; margin-right: 6px; color: var(--green); }
+.signal-list strong.checking-text::before { content: "…"; margin-right: 6px; color: var(--amber); animation: signal-pulse 1.2s ease-in-out infinite; }
+.signal-list strong.bad-text { color: var(--red); }
+.signal-list strong.pending-text { color: var(--muted); }
+@keyframes signal-pulse { 50% { opacity: .38; } }
+@media (prefers-reduced-motion: reduce) { .signal-list strong.checking-text::before { animation: none; } }
 .result-link, .text-link { margin-top: 18px; display: inline-flex; align-items: center; gap: 7px; color: var(--green-dark); font-size: 14px; font-weight: 750; }
 .result-link:hover, .text-link:hover { text-decoration: underline; text-underline-offset: 4px; }
 

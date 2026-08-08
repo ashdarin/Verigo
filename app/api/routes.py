@@ -241,11 +241,22 @@ def domestic_worker_allowed(owner_email: str | None) -> bool:
     )
 
 
-def email_execution_target(email: str, owner_email: str | None) -> str:
+def email_execution_target(email: str, owner_email: str | None, *, fast_local: bool = False) -> str:
     """Return the configured worker target for one address."""
     if is_qq_email(email):
         return "tencent_qq"
     domain = email.rsplit("@", 1)[-1].lower() if "@" in email else ""
+    # Gmail and Microsoft consumer mailboxes have native local verification
+    # paths. Keep single checks off the remote-node wake-up queue so a cold
+    # CloudShell session cannot add avoidable latency.
+    if fast_local and (
+        domain in {"gmail.com", "googlemail.com"}
+        or domain.startswith("outlook.")
+        or domain.startswith("hotmail.")
+        or domain.startswith("live.")
+        or domain.startswith("msn.")
+    ):
+        return "local"
     if is_domestic_email_domain(domain) and domestic_worker_allowed(owner_email):
         return DOMESTIC_CLOUDSTUDIO_TARGET
     if is_domestic_email_domain(domain) and qq_worker_allowed(owner_email):
@@ -294,7 +305,7 @@ def submit_routed_job(
         target = (
             "unsupported"
             if is_yahoo_email(email)
-            else email_execution_target(email, owner_email)
+            else email_execution_target(email, owner_email, fast_local=len(emails) == 1)
         )
         # QQ verification stays on Cloud Studio and is intentionally serial.
         # Cloud Studio otherwise retains its existing cap; Cloud Shell can use
