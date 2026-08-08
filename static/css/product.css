@@ -120,6 +120,48 @@ body.product-surface { min-width: 320px; margin: 0; color: var(--product-ink); b
 .product-surface .report-scorecard { min-height: 98px; }
 .product-surface .quick-start-grid button { border-color: var(--product-line); border-radius: 6px; background: #fff; }
 .product-surface .quick-start-grid button:hover { border-color: #9bc5ae; background: var(--product-green-pale); }
+.product-surface .report-heading { margin-bottom: 24px; }
+.product-surface .report-heading h1,
+.product-surface .report-heading h2 { font-size: 25px; }
+.product-surface .report-updated { color: var(--product-muted); }
+.product-surface .report-period { border-color: var(--product-line); border-radius: 5px; color: var(--product-muted); }
+.product-surface .report-actions .download-action { border-color: #b8d4c1; color: var(--product-green-dark); }
+.product-surface .history-card { padding: 0; overflow: hidden; }
+.product-surface .history-card .table-toolbar { margin: 0; padding: 18px 20px; border-bottom: 1px solid var(--product-line); background: #fbfcfb; }
+.product-surface .history-list { border-top: 0; }
+.product-surface .history-item { min-height: 72px; padding: 15px 20px; border-color: var(--product-line); }
+.product-surface .history-item:hover { color: var(--product-green-dark); background: #f7fbf8; }
+.product-surface .history-item-copy { min-width: 0; display: grid; gap: 4px; }
+.product-surface .history-item-copy strong { font-size: 13px; }
+.product-surface .history-item-copy small { color: var(--product-muted); font-size: 11px; }
+.product-surface .history-item-status { flex: 0 0 auto; padding: 5px 9px; border-radius: 999px; font-size: 11px; font-weight: 750; }
+.product-surface .history-status-completed { color: var(--product-green-dark); background: var(--product-green-pale); }
+.product-surface .history-status-running,
+.product-surface .history-status-queued { color: #8c6618; background: #fff6dc; }
+.product-surface .history-status-failed { color: #a83e38; background: #fbeeed; }
+.product-surface .history-status-stopped { color: #67736e; background: #edf1ef; }
+.product-surface .wallet-purchase { margin-top: 20px; padding: 24px; border-color: #b8d4c1; background: #f3faf5; }
+.product-surface .wallet-purchase h2 { font-size: 19px; }
+.product-surface .purchase-actions input { border-color: #cbd8d0; border-radius: 5px; }
+.product-surface .wallet-usage-chart { min-height: 190px; padding-top: 28px; }
+.product-surface .wallet-bar { background: var(--product-green); }
+.product-surface .wallet-bar span { color: var(--product-muted); }
+.product-surface .wallet-transaction { border-color: var(--product-line); }
+.product-surface .admin-credits-panel { gap: 20px; }
+.product-surface .admin-credit-grant-form,
+.product-surface .admin-credits-heading,
+.product-surface .admin-account-summary,
+.product-surface .admin-accounts-section { border-color: var(--product-line); }
+.product-surface .admin-accounts-section { padding: 20px; }
+.product-surface .admin-account-row { border-color: var(--product-line); color: var(--product-ink); }
+.product-surface .admin-account-row:hover { background: #f7fbf8; }
+.product-surface .admin-account-row span { color: var(--product-muted); }
+.product-surface .admin-feature-line-single { stroke: var(--product-green); }
+.product-surface .admin-feature-line-batch { stroke: #74a88a; }
+.product-surface .admin-feature-line-discovery { stroke: #b28a3c; }
+.product-surface .api-keys-list { border-color: var(--product-line); }
+.product-surface .api-key-row { border-color: var(--product-line); }
+.product-surface .api-key-created { border-color: #a9d5ba; background: var(--product-green-pale); color: var(--product-green-dark); }
 
 .product-surface .auth-dialog { border-radius: 8px; box-shadow: 0 24px 70px rgba(18,43,31,.2); }
 .product-surface .auth-dialog::backdrop { background: rgba(15,32,24,.42); }

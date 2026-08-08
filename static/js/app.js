@@ -1423,9 +1423,12 @@ async function loadHistoryPage() {
     const list = el("history-list"); list.replaceChildren();
     (data.items || []).forEach((job) => {
       const button = document.createElement("button"); button.type = "button"; button.className = "history-item";
+      const copy = document.createElement("span"); copy.className = "history-item-copy";
       const name = document.createElement("strong"); name.textContent = job.list_name || job.download_name || job.file_name || formatJobName(job.created_at);
-      const meta = document.createElement("span"); meta.textContent = `${statusLabels[job.status] || job.status} · ${job.total || 0} 个邮箱`;
-      button.append(name, meta); button.addEventListener("click", () => { switchView("single"); showJob(job); state.results = []; state.page = 0; loadResults(); }); list.append(button);
+      const meta = document.createElement("small"); meta.textContent = `${job.total || 0} 个邮箱 · ${new Date(job.created_at).toLocaleString("zh-CN")}`;
+      copy.append(name, meta);
+      const status = document.createElement("span"); status.className = `history-item-status history-status-${job.status}`; status.textContent = statusLabels[job.status] || job.status;
+      button.append(copy, status); button.addEventListener("click", () => { switchView("single"); showJob(job); state.results = []; state.page = 0; loadResults(); }); list.append(button);
     });
     if (!(data.items || []).length) { const empty = document.createElement("p"); empty.className = "history-empty"; empty.textContent = "暂无历史任务"; list.append(empty); }
     const page = Math.floor(state.history.offset / state.history.limit); const pages = Math.max(1, Math.ceil(state.history.total / state.history.limit));
