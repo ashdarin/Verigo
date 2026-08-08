@@ -1662,17 +1662,6 @@ class DistributedEmailVerifier:
         self.sender_email = os.getenv("VERIGO_SENDER_EMAIL", "")
         self.sender_password = os.getenv("VERIGO_SENDER_PASSWORD", "")
 
-        # 🆕 Catch-all 探针专用发件账号(与结果通知发件人分开)
-        self.probe_sender_email = os.getenv("VERIGO_PROBE_EMAIL", "")
-        self.probe_sender_password = os.getenv("VERIGO_PROBE_PASSWORD", "")
-        # 🆕 退信等待节奏:
-        #   verdict_wait : 探针发出后等多久就出"初步裁定"(不阻塞导出), 默认60秒
-        #   monitor_total: 后台继续监听收件箱的总时长(含上面60秒), 默认10分钟
-        #   监听期内若之前判"可投递"的域名迟到退信 -> 发邮件提醒
-        self.catch_all_verdict_wait = 60       # 初步裁定等待(秒)
-        self.catch_all_monitor_total = 600     # 后台监听总时长(秒) = 10分钟
-        # 后台探针线程的运行态(由 _start_catch_all_probes 填充)
-        self._probe_state = None
 
     def set_max_processes(self, max_processes):
         """设置最大进程数"""
@@ -1848,7 +1837,6 @@ class DistributedEmailVerifier:
 
             # 🔧 优化：使用线程池并发检测catch-all（每个域名只需一次SMTP连接）
             catch_all_count = 0
-            detected_catch_all = []  # 🆕 收集检测出的 catch-all 域名, 供探针使用
             max_workers = min(8, len(domains_to_check))  # 最多8个并发线程
 
             def check_single_domain(domain):
@@ -1864,7 +1852,6 @@ class DistributedEmailVerifier:
                         completed += 1
                         if domain_type == 'catch-all':
                             catch_all_count += 1
-                            detected_catch_all.append(domain)  # 🆕
                             print(f"   🎯 [{completed}/{len(domains_to_check)}] {domain}: catch-all")
                     except Exception as e:
                         completed += 1
@@ -1873,9 +1860,6 @@ class DistributedEmailVerifier:
 
             print(f"   ✅ catch-all检测完成: {catch_all_count}个catch-all域名")
 
-            # 🆕 catch-all 检测一完成就立即发探针并开始后台计时,
-            # 让退信等待与下面的"非 catch-all 邮箱验证"并行进行。
-            self._start_catch_all_probes(detected_catch_all)
         else:
             print(f"   所有域名都是消费者域名或有专门策略，跳过catch-all检测")
 
@@ -2055,10 +2039,6 @@ class DistributedEmailVerifier:
             print(f"🚀 DNS查询优化: 节省了 {total_dns_cache_hits} 次重复查询")
 
         print("="*80)
-
-        # 🆕 Catch-all 域名最终裁定: 探针在 catch-all 检测完成后就已后台发出并计时,
-        # 这里只做收尾——等满剩余时间(若验证已耗时则几乎不再等)并写回结果。
-        self._finalize_catch_all_probes(results)
 
         # 🔧 验证完成后自动保存缓存
         print("💾 自动保存域名缓存...")
@@ -2818,19 +2798,6 @@ def main():
             verifier.configure_email_notification()
 
         elif choice == '7':
-            # 🆕 若后台退信监听仍在运行, 提醒用户(退出会终止监听, 迟到退信将收不到)
-            st = verifier._probe_state
-            if st and st.get('thread') and st['thread'].is_alive() and time.time() < st.get('monitor_deadline', 0):
-                remain_min = max(0, (st['monitor_deadline'] - time.time())) / 60
-                print(f"\n⚠️ 后台退信监听还在运行(约剩 {remain_min:.1f} 分钟)。")
-                print("   现在退出会终止监听，期间到达的迟到退信将不会再发提醒。")
-                ans = input("   是否等待监听结束再退出? (y=等待 / n=直接退出): ").strip().lower()
-                if ans == 'y':
-                    print(f"⏳ 等待后台监听结束(最多 {remain_min:.1f} 分钟)，按 Ctrl+C 可强制退出...")
-                    try:
-                        st['thread'].join(timeout=max(0, st['monitor_deadline'] - time.time()) + 5)
-                    except KeyboardInterrupt:
-                        print("\n🛑 已强制结束等待")
             # 🔧 退出前再次保存持久化缓存（确保所有数据都已保存）
             print("💾 保存域名缓存...")
             save_persistent_cache()
