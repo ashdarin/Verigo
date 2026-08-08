@@ -23,25 +23,18 @@ from app.core.domain_type_cache import (
     set_shared_domain_type,
 )
 
-import csv
 import sys
 import time
-import json
 import os
 import math
 import signal
-from datetime import datetime, timedelta
-from pathlib import Path
-from multiprocessing import Process, Queue, Manager, cpu_count
+from multiprocessing import Process, Queue, Manager
 from concurrent.futures import ThreadPoolExecutor
 from queue import Empty
 
-from app.core.smtp_verifier import (
-    EmailVerifier,
-    check_email_characters,
-    smtp_gate_capacity,
-)
+from app.core.smtp_verifier import EmailVerifier
 from app.core.verification_worker import run_verification_worker
+from app.core.verification_input import VerificationInput
 
 
 def worker_process(
@@ -93,119 +86,10 @@ class DistributedEmailVerifier:
             return False
 
     def load_emails_from_file(self, filepath):
-        """从文件加载邮箱列表 - 完全保持原版本逻辑"""
-        filepath = Path(filepath)
-        emails = []
-
-        try:
-            if filepath.suffix.lower() == '.csv':
-                try:
-                    with open(filepath, 'r', encoding='utf-8') as f:
-                        reader = csv.reader(f)
-                        for row in reader:
-                            if row:
-                                for cell in row:
-                                    if cell and '@' in cell and '.' in cell:
-                                        emails.append(cell.strip())
-                                        break
-                except UnicodeDecodeError:
-                    with open(filepath, 'r', encoding='gbk') as f:
-                        reader = csv.reader(f)
-                        for row in reader:
-                            if row:
-                                for cell in row:
-                                    if cell and '@' in cell and '.' in cell:
-                                        emails.append(cell.strip())
-                                        break
-
-            elif filepath.suffix.lower() == '.txt':
-                try:
-                    with open(filepath, 'r', encoding='utf-8') as f:
-                        for line in f:
-                            line = line.strip()
-                            if line and '@' in line and '.' in line:
-                                emails.append(line)
-                except UnicodeDecodeError:
-                    with open(filepath, 'r', encoding='gbk') as f:
-                        for line in f:
-                            line = line.strip()
-                            if line and '@' in line and '.' in line:
-                                emails.append(line)
-
-            elif filepath.suffix.lower() == '.json':
-                try:
-                    with open(filepath, 'r', encoding='utf-8') as f:
-                        data = json.load(f)
-                        if isinstance(data, list):
-                            emails = [str(item).strip() for item in data if '@' in str(item)]
-                        elif isinstance(data, dict) and 'emails' in data:
-                            emails = [str(item).strip() for item in data['emails'] if '@' in str(item)]
-                except UnicodeDecodeError:
-                    with open(filepath, 'r', encoding='gbk') as f:
-                        data = json.load(f)
-                        if isinstance(data, list):
-                            emails = [str(item).strip() for item in data if '@' in str(item)]
-                        elif isinstance(data, dict) and 'emails' in data:
-                            emails = [str(item).strip() for item in data['emails'] if '@' in str(item)]
-
-            else:
-                print(f"❌ 不支持的文件格式: {filepath.suffix}")
-                return []
-
-        except Exception as e:
-            print(f"❌ 加载文件失败: {e}")
-            return []
-
-        # 🆕 不再静默删除重复邮箱: 保留全部邮箱, 重复项在导出表格中单独备注
-        # (去重检测与标注逻辑见 export_to_csv)
-        return emails
+        return VerificationInput.load_emails_from_file(filepath)
 
     def _clean_email_list(self, emails):
-        """🆕 验证前清洗邮箱列表 —— 直接删除(不备注):
-          1) 含空格/非法字符(strip 后仍有内部空格、非ASCII、非法符号)的邮箱
-          2) 重复邮箱(以 strip 后小写为准, 保留首次出现的原始写法)
-        返回清洗后的邮箱列表, 并打印删除统计。"""
-        cleaned = []
-        seen = set()
-        removed_bad = []   # (原始邮箱, 问题说明)
-        removed_dup = []   # 被去掉的重复邮箱
-
-        for raw in emails:
-            email = str(raw).strip()
-            if not email:
-                continue
-
-            # 1) 空格 / 非法字符检测 —— 有问题直接剔除
-            is_clean, issue = check_email_characters(email)
-            if not is_clean:
-                removed_bad.append((email, issue))
-                continue
-
-            # 2) 去重(大小写不敏感, 保留首次出现)
-            key = email.lower()
-            if key in seen:
-                removed_dup.append(email)
-                continue
-            seen.add(key)
-            cleaned.append(email)
-
-        if removed_dup or removed_bad:
-            print("🧹 验证前清洗:")
-            print(f"   原始: {len(emails)} 个 → 保留: {len(cleaned)} 个")
-            if removed_dup:
-                print(f"   🔁 删除重复: {len(removed_dup)} 个")
-                for e in removed_dup[:10]:
-                    print(f"      - {e}")
-                if len(removed_dup) > 10:
-                    print(f"      ... 其余 {len(removed_dup) - 10} 个略")
-            if removed_bad:
-                print(f"   ⚠️ 删除含空格/非法字符: {len(removed_bad)} 个")
-                for e, issue in removed_bad[:10]:
-                    print(f"      - {repr(e)} ({issue})")
-                if len(removed_bad) > 10:
-                    print(f"      ... 其余 {len(removed_bad) - 10} 个略")
-
-        return cleaned
+        return VerificationInput.clean_email_list(emails)
 
     def verify_batch_distributed(self, emails, num_processes=None, result_callback=None, should_stop=None):
         """分布式批量验证 - 优化版：预先检测域名类型，避免重复检测"""
