@@ -232,24 +232,38 @@ class MetricsStore:
             verified_users = connection.execute(
                 "SELECT COUNT(*) FROM users WHERE email_verified=1"
             ).fetchone()[0]
-            jobs_total = connection.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
+            visible_job_filter = "parent_id IS NULL AND retry_parent_id IS NULL"
+            jobs_total = connection.execute(
+                f"SELECT COUNT(*) FROM jobs WHERE {visible_job_filter}"
+            ).fetchone()[0]
             jobs_today = connection.execute(
-                "SELECT COUNT(*) FROM jobs WHERE created_at >= ?", (today_start,)
+                f"SELECT COUNT(*) FROM jobs WHERE created_at >= ? AND {visible_job_filter}",
+                (today_start,),
             ).fetchone()[0]
             job_statuses = dict(connection.execute(
-                "SELECT status, COUNT(*) FROM jobs GROUP BY status"
+                f"SELECT status, COUNT(*) FROM jobs WHERE {visible_job_filter} GROUP BY status"
             ).fetchall())
             today_job_health = connection.execute(
-                """
+                f"""
                 SELECT COUNT(*),
                     COALESCE(SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END), 0),
                     COALESCE(SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END), 0),
                     COALESCE(AVG(CASE WHEN status='completed' AND started_at IS NOT NULL AND finished_at IS NOT NULL
                         THEN (julianday(finished_at)-julianday(started_at))*86400 END), 0)
-                FROM jobs WHERE created_at >= ?
+                    ,COALESCE(AVG(CASE WHEN status='completed' AND started_at IS NOT NULL
+                        THEN (julianday(started_at)-julianday(created_at))*86400 END), 0)
+                FROM jobs WHERE created_at >= ? AND {visible_job_filter}
                 """,
                 (today_start,),
             ).fetchone()
+            retry_wait_seconds = connection.execute(
+                """
+                SELECT COALESCE(AVG(CASE WHEN status='completed' AND started_at IS NOT NULL
+                    THEN (julianday(started_at)-julianday(created_at))*86400 END), 0)
+                FROM jobs WHERE created_at >= ? AND retry_parent_id IS NOT NULL
+                """,
+                (today_start,),
+            ).fetchone()[0]
             result_totals = connection.execute(
                 """SELECT COUNT(*), COALESCE(SUM(result.deliverability=1), 0)
                 FROM job_results AS result
@@ -340,6 +354,8 @@ class MetricsStore:
                 "verified_users": verified_today,
                 "job_completion_rate": round(completed_today * 100 / settled_today, 1) if settled_today else 0,
                 "average_job_seconds": round(float(today_job_health[3])),
+                "average_queue_seconds": round(max(0.0, float(today_job_health[4]))),
+                "average_retry_wait_seconds": round(max(0.0, float(retry_wait_seconds))),
                 "deliverable_rate": round(deliverable * 100 / results_total, 1) if results_total else 0,
                 "results_processed": results_total,
             },

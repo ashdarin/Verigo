@@ -371,6 +371,8 @@ async function loadDashboardMetrics() {
     });
     el("metric-job-completion").textContent = `${Number(today.job_completion_rate || 0).toFixed(1)}%`;
     el("metric-job-duration").textContent = formatDuration(today.average_job_seconds);
+    el("metric-job-queue-duration").textContent = formatDuration(today.average_queue_seconds);
+    el("metric-job-retry-duration").textContent = formatDuration(today.average_retry_wait_seconds);
     el("metric-deliverable-rate").textContent = `${Number(today.deliverable_rate || 0).toFixed(1)}%`;
     setMetric("metric-results-processed", today.results_processed);
     setMetric("metric-total-users", data.totals.users);
