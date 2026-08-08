@@ -7,6 +7,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from multiprocessing import Manager, Process, Queue
 from queue import Empty
+from typing import Any, Callable
 
 from app.core.domain_type_cache import save_persistent_cache
 from app.core.smtp_verifier import EmailVerifier
@@ -16,8 +17,28 @@ from app.core.verification_worker import run_verification_worker
 class VerificationBatchRunner:
     """Run the historical multiprocessing workflow against a facade controller."""
 
-    def __init__(self, controller):
+    def __init__(
+        self,
+        controller,
+        *,
+        process_factory: Callable[..., Any] = Process,
+        queue_factory: Callable[[], Any] = Queue,
+        manager_factory: Callable[[], Any] = Manager,
+        worker_target: Callable[..., Any] = run_verification_worker,
+        verifier_factory: Callable[[], Any] = EmailVerifier,
+        cache_saver: Callable[[], Any] = save_persistent_cache,
+        clock: Callable[[], float] = time.time,
+        sleeper: Callable[[float], Any] = time.sleep,
+    ):
         self.controller = controller
+        self.process_factory = process_factory
+        self.queue_factory = queue_factory
+        self.manager_factory = manager_factory
+        self.worker_target = worker_target
+        self.verifier_factory = verifier_factory
+        self.cache_saver = cache_saver
+        self.clock = clock
+        self.sleeper = sleeper
 
     def run(self, emails, num_processes=None, result_callback=None, should_stop=None):
         controller = self.controller
@@ -35,7 +56,7 @@ class VerificationBatchRunner:
         total_emails = len(emails)
 
         # 🆕 分析修复策略分布和提取唯一域名
-        verifier_temp = EmailVerifier()
+        verifier_temp = self.verifier_factory()
         consumer_fix_count = 0
         fix_breakdown = {}
         unique_domains = set()
@@ -129,12 +150,12 @@ class VerificationBatchRunner:
         print("="*80)
 
         # 创建队列 - 完全保持原版本
-        email_queue = Queue()
-        result_queue = Queue()
-        progress_queue = Queue()
+        email_queue = self.queue_factory()
+        result_queue = self.queue_factory()
+        progress_queue = self.queue_factory()
 
         # 🔧 创建共享的域名类型缓存（使用Manager实现跨进程共享）
-        manager = Manager()
+        manager = self.manager_factory()
         shared_domain_cache = manager.dict()
         shared_domain_lock = manager.RLock()
 
@@ -151,13 +172,13 @@ class VerificationBatchRunner:
             email_queue.put(None)
 
         # 记录真实开始时间
-        start_time = time.time()
+        start_time = self.clock()
 
         # 启动工作进程 - 传递共享缓存
         processes = []
         for i in range(num_processes):
-            p = Process(
-                target=run_verification_worker,
+            p = self.process_factory(
+                target=self.worker_target,
                 args=(
                     i + 1,
                     email_queue,
@@ -165,7 +186,7 @@ class VerificationBatchRunner:
                     progress_queue,
                     shared_domain_cache,
                     shared_domain_lock,
-                    EmailVerifier,
+                    self.verifier_factory,
                 ),
             )
             p.start()
@@ -178,7 +199,7 @@ class VerificationBatchRunner:
         # 监控进度 - 完全保持原版本逻辑
         results = []
         completed_processes = 0
-        last_display_time = time.time()
+        last_display_time = self.clock()
 
         try:
             while completed_processes < num_processes:
@@ -211,13 +232,13 @@ class VerificationBatchRunner:
                             result_callback(result)
 
                     # 定期显示进度 - 每15秒或每完成10个邮箱
-                    current_time = time.time()
+                    current_time = self.clock()
                     if (len(results) % 10 == 0 and len(results) > 0) or (current_time - last_display_time) > 15:
                         elapsed = current_time - start_time
                         self.display_progress(len(results), total_emails, elapsed)
                         last_display_time = current_time
 
-                    time.sleep(0.25)
+                    self.sleeper(0.25)
 
                 except KeyboardInterrupt:
                     print("\n🛑 收到中断信号，正在停止所有进程...")
@@ -231,6 +252,14 @@ class VerificationBatchRunner:
                 p.join(timeout=5)
                 if p.is_alive():
                     p.terminate()
+
+            shutdown = getattr(manager, "shutdown", None)
+            if shutdown:
+                try:
+                    shutdown()
+                except Exception:
+                    # Cleanup must not hide a verification result or worker error.
+                    pass
 
         # 收集剩余结果
         while True:
@@ -262,7 +291,7 @@ class VerificationBatchRunner:
             total_consumer_fix_processed += process_stats.get('consumer_fix_count', 0)
 
         # 计算真实总时间
-        total_time = time.time() - start_time
+        total_time = self.clock() - start_time
         rate = len(results) / total_time if total_time > 0 else 0
 
         print(f"\n🎉 分布式验证完成!")
@@ -284,7 +313,7 @@ class VerificationBatchRunner:
 
         # 🔧 验证完成后自动保存缓存
         print("💾 自动保存域名缓存...")
-        save_persistent_cache()
+        self.cache_saver()
 
         controller.results = results
         return results
@@ -359,5 +388,3 @@ class VerificationBatchRunner:
         print(f"💻 活跃进程: {active_processes}/{len(controller.process_stats)}")
         if total_fix_processed > 0:
             print(f"🔧 已处理修复策略邮箱: {total_fix_processed}个")
-
-
