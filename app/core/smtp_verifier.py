@@ -98,7 +98,6 @@ class EmailVerifier:
         }
 
         # 🆕 域名类型缓存 - 避免重复检测catch-all
-        self.domain_type_cache = {}  # 格式: {'domain': {'type': 'catch-all'/'normal'/'consumer', 'checked_at': datetime}}
 
         # 🆕 Google Cloud环境专用QQ和Outlook修复策略
         self.consumer_fix_strategies = {
@@ -484,119 +483,6 @@ class EmailVerifier:
         except Exception:
             pass
         return None, f"{config['provider']} DATA验证已禁用"
-
-    def detect_catch_all_domain(self, domain):
-        # Retained as a compatibility shim for older integrations. Random
-        # recipient probes are intentionally disabled.
-        return 'consumer' if domain in self.consumer_domains else 'normal'
-        """🆕 检测域名是否为catch-all策略 - 优化版：使用共享缓存避免重复检测"""
-        # 🔧 优先检查本地缓存
-        if domain in self.domain_type_cache:
-            cache_entry = self.domain_type_cache[domain]
-            if (
-                datetime.now() - cache_entry['checked_at'] < timedelta(hours=1)
-                and has_catch_all_evidence(cache_entry)
-            ):
-                return cache_entry['type']
-
-        # 🔧 检查全局共享缓存（跨进程）
-        shared_type = get_shared_domain_type(domain)
-        if shared_type:
-            # 同步到本地缓存
-            self.domain_type_cache[domain] = {
-                'type': shared_type,
-                'checked_at': datetime.now()
-            }
-            return shared_type
-
-        # 🔧 消费者域名直接跳过catch-all检测，使用专门策略
-        if domain in self.consumer_domains:
-            domain_type = 'consumer'
-            self.domain_type_cache[domain] = {
-                'type': domain_type,
-                'checked_at': datetime.now()
-            }
-            set_shared_domain_type(domain, domain_type)
-            return domain_type
-
-        # 🔧 有专门修复策略的域名也跳过catch-all检测
-        if domain in self.consumer_fix_strategies:
-            domain_type = 'consumer'
-            self.domain_type_cache[domain] = {
-                'type': domain_type,
-                'checked_at': datetime.now()
-            }
-            set_shared_domain_type(domain, domain_type)
-            return domain_type
-
-        try:
-            # 🔧 减少日志输出，只在调试时显示
-            # print(f"🔍 检测域名 {domain} 是否为catch-all策略...")
-
-            # 获取MX记录（使用缓存）
-            mx_records = self.get_mx_records(domain)
-            if not mx_records:
-                domain_type = 'no_mx'
-                self.domain_type_cache[domain] = {
-                    'type': domain_type,
-                    'checked_at': datetime.now()
-                }
-                set_shared_domain_type(domain, domain_type)
-                return domain_type
-
-            # Use the first MX consistently. A single accepted random address
-            # can be an anti-enumeration response, so catch-all requires three
-            # separate high-entropy probes to be accepted.
-            mx_host = mx_records[0]
-            probe_codes = []
-            for _ in range(3):
-                # The address has 128 bits of randomness and uses a fresh SMTP
-                # connection, so a real mailbox collision is not plausible.
-                test_email = f"probe-{secrets.token_hex(16)}@{domain}"
-                server = None
-                try:
-                    server = smtplib.SMTP(timeout=5)
-                    code, _ = server.connect(mx_host, 25)
-                    if code != 220:
-                        break
-                    code, _ = server.ehlo(SMTP_HELO_HOST)
-                    if code != 250:
-                        break
-                    code, _ = server.mail(SMTP_MAIL_FROM)
-                    if code != 250:
-                        break
-                    code, _ = server.rcpt(test_email)
-                    probe_codes.append(code)
-                    if code != 250:
-                        break
-                except Exception:
-                    break
-                finally:
-                    if server is not None:
-                        try:
-                            server.quit()
-                        except Exception:
-                            pass
-
-            domain_type = 'catch-all' if probe_codes == [250, 250, 250] else 'normal'
-            self.domain_type_cache[domain] = {
-                'type': domain_type,
-                'checked_at': datetime.now(),
-                'probe_count': len(probe_codes),
-                'probe_codes': probe_codes,
-            }
-            set_shared_domain_type(domain, domain_type, probe_codes=probe_codes)
-            return domain_type
-
-        except Exception as e:
-            # 检测失败时默认为正常域名
-            domain_type = 'normal'
-            self.domain_type_cache[domain] = {
-                'type': domain_type,
-                'checked_at': datetime.now()
-            }
-            set_shared_domain_type(domain, domain_type)
-            return domain_type
 
     def check_smtp_delivery(self, email, mx_host, strategy):
         """标准 SMTP 检查：同一 MX 串行访问，临时或断连错误重试后判不可投递。"""

@@ -12,5 +12,5 @@ from app.core.legacy import load_legacy_module
 
 module = load_legacy_module()
 verifier = module.EmailVerifier()
-assert verifier.detect_catch_all_domain("example.test") == "normal"
+assert not hasattr(verifier, "detect_catch_all_domain")
 print("catch-all probe disabled smoke: ok")

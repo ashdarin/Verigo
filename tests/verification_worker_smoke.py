@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 from pathlib import Path
 from queue import Queue
 import sys
@@ -15,17 +14,7 @@ from app.core.verification_worker import run_verification_worker
 
 class FakeVerifier:
     def __init__(self):
-        self.domain_type_cache = {}
         self.dns_cache = {}
-
-    def detect_catch_all_domain(self, domain):
-        self.domain_type_cache[domain] = {
-            "type": "normal",
-            "checked_at": datetime.now(),
-            "probe_count": 0,
-            "probe_codes": [],
-        }
-        return "normal"
 
     def is_consumer_fix_supported(self, domain):
         return False

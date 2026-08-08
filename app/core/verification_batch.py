@@ -59,8 +59,6 @@ class VerificationBatchRunner:
         verifier_temp = self.verifier_factory()
         consumer_fix_count = 0
         fix_breakdown = {}
-        unique_domains = set()
-
         for email in emails:
             # 🔧 修复：检查邮箱格式，跳过无效邮箱
             if '@' not in email:
@@ -69,7 +67,6 @@ class VerificationBatchRunner:
             if len(parts) < 2 or not parts[1]:
                 continue
             domain = parts[1].lower()
-            unique_domains.add(domain)
             if verifier_temp.is_consumer_fix_supported(domain):
                 consumer_fix_count += 1
                 fix_strategy = verifier_temp.get_consumer_fix_strategy(domain)
@@ -77,50 +74,8 @@ class VerificationBatchRunner:
                     provider = fix_strategy['provider']
                     fix_breakdown[provider] = fix_breakdown.get(provider, 0) + 1
 
-        # 🔧 预先检测所有唯一域名的类型（避免多进程重复检测）
-        print(f"🔍 预检测 {len(unique_domains)} 个唯一域名的类型...")
-        domains_to_check = []
-        for domain in unique_domains:
-            # 跳过消费者域名和有专门策略的域名
-            if domain not in verifier_temp.consumer_domains and domain not in verifier_temp.consumer_fix_strategies:
-                domains_to_check.append(domain)
-
-        # Catch-all probing was removed. MX and recipient verification below
-        # provide the only SMTP evidence used for a result.
-        domains_to_check = []
         print("   Catch-all random probes disabled; using recipient SMTP verification only")
-        if False:  # Retained below only as a compatibility reference block.
-            print(f"   需要检测catch-all的域名: {len(domains_to_check)}个")
 
-            # 🔧 优化：使用线程池并发检测catch-all（每个域名只需一次SMTP连接）
-            catch_all_count = 0
-            max_workers = min(8, len(domains_to_check))  # 最多8个并发线程
-
-            def check_single_domain(domain):
-                """检测单个域名的catch-all状态"""
-                return domain, verifier_temp.detect_catch_all_domain(domain)
-
-            with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                futures = {executor.submit(check_single_domain, domain): domain for domain in domains_to_check}
-                completed = 0
-                for future in futures:
-                    try:
-                        domain, domain_type = future.result(timeout=10)  # 10秒超时
-                        completed += 1
-                        if domain_type == 'catch-all':
-                            catch_all_count += 1
-                            print(f"   🎯 [{completed}/{len(domains_to_check)}] {domain}: catch-all")
-                    except Exception as e:
-                        completed += 1
-                        # 检测失败，默认为normal
-                        pass
-
-            print(f"   ✅ catch-all检测完成: {catch_all_count}个catch-all域名")
-
-        else:
-            print(f"   所有域名都是消费者域名或有专门策略，跳过catch-all检测")
-
-        # 确定进程数 - 完全保持原版本逻辑
         if num_processes is None:
             # 智能选择：每进程处理25-100个邮箱
             if total_emails <= 25:

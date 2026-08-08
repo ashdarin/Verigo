@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 from queue import Queue
 from threading import RLock
 from pathlib import Path
@@ -17,7 +16,6 @@ from app.core.verification_worker import run_verification_worker
 
 class FakeVerifier:
     def __init__(self) -> None:
-        self.domain_type_cache: dict[str, dict[str, object]] = {}
         self.dns_cache: dict[str, object] = {}
         self.consumer_domains = {"example.com"}
         self.consumer_fix_strategies: dict[str, object] = {}
@@ -27,15 +25,6 @@ class FakeVerifier:
 
     def get_consumer_fix_strategy(self, _domain: str):
         return None
-
-    def detect_catch_all_domain(self, domain: str) -> str:
-        self.domain_type_cache[domain] = {
-            "type": "normal",
-            "checked_at": datetime.now(),
-            "probe_count": 0,
-            "probe_codes": [],
-        }
-        return "normal"
 
     def verify_email_comprehensive(self, email: str, process_id: int) -> dict[str, object]:
         return {"email": email, "process_id": process_id, "strategy": "fast"}

@@ -16,11 +16,8 @@
 """
 
 from app.core.domain_type_cache import (
-    get_shared_domain_type,
-    has_catch_all_evidence,
     load_persistent_cache,
     save_persistent_cache,
-    set_shared_domain_type,
 )
 
 import os
