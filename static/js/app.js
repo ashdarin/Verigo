@@ -780,14 +780,31 @@ function openResultDetails(item) {
   state.activeResultItem = item;
   const drawer = el("result-detail-drawer");
   el("result-detail-title").textContent = item.email || "邮箱详情";
-  const fields = [
-    ["状态", resultMeta(item)[0]],
-    ["域名类型", item.domain_type || "-"],
-    ["验证方式", VerigoI18n.resultValue(item.verification_method || item.strategy || "-")],
-    ["服务器响应", VerigoI18n.resultValue(item.smtp_result || item.message || "-")],
-  ];
+  const [statusLabel, statusClass] = resultMeta(item);
+  const status = el("result-detail-status");
+  status.textContent = statusLabel;
+  status.className = `result-pill ${statusClass}`;
+  const checks = item.checks && typeof item.checks === "object" ? item.checks : {};
+  const checkLabel = (value) => value === true ? "通过" : value === false ? "未通过" : "待确认";
+  const checkClass = (value) => value === true ? "check-good" : value === false ? "check-bad" : "check-pending";
   const content = el("result-detail-content");
   content.replaceChildren();
+  const checkGrid = document.createElement("div");
+  checkGrid.className = "detail-check-grid";
+  [["语法格式", checks.format], ["邮箱域名", checks.domain], ["MX 记录", checks.mx], ["SMTP 连接", checks.smtp]].forEach(([label, value]) => {
+    const item = document.createElement("div"); item.className = "detail-check";
+    const key = document.createElement("span"); key.textContent = label;
+    const val = document.createElement("strong"); val.className = checkClass(value); val.textContent = checkLabel(value);
+    item.append(key, val); checkGrid.append(item);
+  });
+  content.append(checkGrid);
+  const fields = [
+    ["邮箱类型", item.domain_type || "-"],
+    ["验证方式", VerigoI18n.resultValue(item.verification_method || item.strategy || "-")],
+    ["邮箱状态", statusLabel],
+    ["服务器响应", VerigoI18n.resultValue(item.smtp_result || item.message || "-")],
+    ["判断说明", item.message || item.failure_reason || "-"],
+  ];
   fields.forEach(([label, value]) => {
     const row = document.createElement("div"); row.className = "detail-field";
     const key = document.createElement("span"); key.textContent = label;
