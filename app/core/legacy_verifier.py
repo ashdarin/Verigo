@@ -42,170 +42,27 @@ from app.core.smtp_verifier import (
     check_email_characters,
     smtp_gate_capacity,
 )
-def worker_process(process_id, email_queue, result_queue, progress_queue, shared_domain_cache=None, shared_domain_lock=None):
-    """工作进程函数 - 优化版：支持共享域名类型缓存"""
-    try:
-        # 创建验证器实例
-        verifier = EmailVerifier()
-        # 🔧 如果有共享缓存，预加载到本地缓存
-        if shared_domain_cache:
-            try:
-                # 复制共享缓存到本地
-                for domain, cache_data in dict(shared_domain_cache).items():
-                    verifier.domain_type_cache[domain] = cache_data
-            except Exception as e:
-                pass
+from app.core.verification_worker import run_verification_worker
 
-        # 🔧 重写detect_catch_all_domain方法，使其优先使用共享缓存
-        original_detect = verifier.detect_catch_all_domain
-        def detect_with_shared_cache(domain):
-            # 先检查本地缓存
-            if domain in verifier.domain_type_cache:
-                cache_entry = verifier.domain_type_cache[domain]
-                if (
-                    datetime.now() - cache_entry['checked_at'] < timedelta(hours=1)
-                    and has_catch_all_evidence(cache_entry)
-                ):
-                    return cache_entry['type']
 
-            # Only one process probes a newly seen domain. The other workers
-            # reuse its result rather than multiplying a three-probe check by
-            # the job's concurrency.
-            is_probe_owner = False
-            if shared_domain_cache and shared_domain_lock:
-                try:
-                    with shared_domain_lock:
-                        cache_entry = shared_domain_cache.get(domain)
-                        if cache_entry and cache_entry.get('type') != 'probing':
-                            if (
-                                datetime.now() - cache_entry['checked_at'] < timedelta(hours=1)
-                                and has_catch_all_evidence(cache_entry)
-                            ):
-                                verifier.domain_type_cache[domain] = cache_entry
-                                return cache_entry['type']
-                        if not cache_entry or cache_entry.get('type') != 'probing':
-                            shared_domain_cache[domain] = {
-                                'type': 'probing', 'checked_at': datetime.now()
-                            }
-                            is_probe_owner = True
-                except Exception:
-                    pass
-
-            if shared_domain_cache and not is_probe_owner:
-                # A concurrent worker is running the three probes. Waiting is
-                # bounded; a failed owner falls back to this worker's check.
-                for _ in range(20):
-                    time.sleep(0.25)
-                    try:
-                        cache_entry = shared_domain_cache.get(domain)
-                        if (
-                            cache_entry and cache_entry.get('type') != 'probing'
-                            and has_catch_all_evidence(cache_entry)
-                        ):
-                            verifier.domain_type_cache[domain] = cache_entry
-                            return cache_entry['type']
-                    except Exception:
-                        break
-
-            result = original_detect(domain)
-            if shared_domain_cache and domain in verifier.domain_type_cache:
-                try:
-                    shared_domain_cache[domain] = verifier.domain_type_cache[domain]
-                except Exception:
-                    pass
-            return result
-
-        verifier.detect_catch_all_domain = detect_with_shared_cache
-
-        processed_count = 0
-        dns_cache_hits = 0
-        consumer_fix_count = 0  # 🆕 修复策略应用计数
-
-        while True:
-            try:
-                # 从队列获取邮箱，5秒超时
-                email_data = email_queue.get(timeout=5)
-                if email_data is None:  # 结束信号
-                    break
-
-                email, index = email_data
-                domain = email.split('@')[1].lower()
-
-                # 🆕 检查是否为需要修复的消费者邮箱
-                is_consumer_fix = verifier.is_consumer_fix_supported(domain)
-                if is_consumer_fix:
-                    consumer_fix_count += 1
-
-                # 检查是否会从DNS缓存受益
-                cache_before = len(verifier.dns_cache)
-
-                # 更新进度 - 开始处理
-                progress_queue.put({
-                    'process_id': process_id,
-                    'processed': processed_count,
-                    'current_email': email,
-                    'status': 'processing',
-                    'is_consumer_fix': is_consumer_fix  # 🆕 添加修复策略标识
-                })
-
-                # 验证邮箱
-                result = verifier.verify_email_comprehensive(email, process_id)
-                result['original_index'] = index
-
-                # 检查DNS缓存是否被使用
-                cache_after = len(verifier.dns_cache)
-                if cache_after == cache_before and f"mx_{domain}" in verifier.dns_cache:
-                    dns_cache_hits += 1
-                    result['dns_cached'] = True
-                else:
-                    result['dns_cached'] = False
-
-                # 发送结果
-                result_queue.put(result)
-                processed_count += 1
-
-                # 🔧 优化：减少进程间延迟（不影响准确率，因为每个邮箱验证是独立的）
-                if is_consumer_fix:
-                    fix_strategy = verifier.get_consumer_fix_strategy(domain)
-                    if fix_strategy:
-                        time.sleep(fix_strategy['mx_delay'] * 0.3)  # 🔧 优化：大幅减少延迟
-                    else:
-                        time.sleep(0.2)
-                else:
-                    # 🔧 优化：减少延迟
-                    strategy = result.get('strategy', 'normal')
-                    strategy_delays = {
-                        'fast': 0.1, 'normal': 0.2, 'medium': 0.3,
-                        'strict': 0.5, 'super_aggressive': 0.3
-                    }
-                    time.sleep(strategy_delays.get(strategy, 0.2))
-
-            except Exception as e:
-                # 队列超时，检查是否还有任务
-                if email_queue.empty():
-                    break
-                progress_queue.put({
-                    'process_id': process_id,
-                    'error': str(e),
-                    'status': 'error'
-                })
-
-        # 进程结束时发送统计信息
-        progress_queue.put({
-            'process_id': process_id,
-            'processed': processed_count,
-            'consumer_fix_count': consumer_fix_count,  # 🆕 修复策略统计
-            'dns_cache_hits': dns_cache_hits,
-            'dns_cache_size': len(verifier.dns_cache),
-            'status': 'completed'
-        })
-
-    except Exception as e:
-        progress_queue.put({
-            'process_id': process_id,
-            'error': str(e),
-            'status': 'failed'
-        })
+def worker_process(
+    process_id,
+    email_queue,
+    result_queue,
+    progress_queue,
+    shared_domain_cache=None,
+    shared_domain_lock=None,
+):
+    """Keep the historical multiprocessing target while delegating worker logic."""
+    return run_verification_worker(
+        process_id,
+        email_queue,
+        result_queue,
+        progress_queue,
+        shared_domain_cache,
+        shared_domain_lock,
+        EmailVerifier,
+    )
 
 
 from app.core.result_email import EmailSender
