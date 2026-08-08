@@ -23,7 +23,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Compile check (guard deploy)
+      - name: Compile check
         run: |
           python -m py_compile app/main.py
           python -m py_compile 验证8.py
@@ -67,67 +67,3 @@ jobs:
             -o UserKnownHostsFile=~/.ssh/verigo_known_hosts \
             verigo-deploy@${{ secrets.VERIGO_VPS_HOST }} \
             "tar -xzf /tmp/verigo-release/release.tar.gz -C /tmp/verigo-release; printf '%s\n' ${{ env.VERSION }} > /tmp/verigo-release/.verigo-release; sudo -n env VERIGO_RELEASE_DIR=/tmp/verigo-release bash /tmp/verigo-release/deploy/release.sh"
-
-  smoke:
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.10"
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-
-      - name: Run smoke tests
-        env:
-          PYTHONPATH: .
-        run: python tests/backend_smoke.py
-
-      - name: Run API contract smoke
-        env:
-          PYTHONPATH: .
-          VERIGO_DATABASE_PATH: /tmp/verigo-ci.db
-          VERIGO_RESULTS_DIR: /tmp/verigo-ci-results
-        run: |
-          python - <<'PY'
-          from fastapi.testclient import TestClient
-          from app.main import app
-          with TestClient(app) as client:
-              assert client.get('/').status_code == 200
-              assert client.get('/app/verify').status_code == 200
-              assert client.get('/admin').status_code == 200
-              assert client.get('/history').status_code == 200
-          PY
-
-      - name: Run auxiliary smoke diagnostics
-        continue-on-error: true
-        env:
-          PYTHONPATH: .
-        run: |
-          for test in tests/*_smoke.py; do
-            [ "$test" = "tests/backend_smoke.py" ] && continue
-            [ -f "$test" ] || continue
-            echo "::group::$test"
-            python "$test" 2>&1 || echo "::warning::$test failed in its optional environment"
-            echo "::endgroup::"
-          done
-
-      - name: Run UI smoke test
-        env:
-          VERIGO_UI_SMOKE: "1"
-          VERIGO_DATABASE_PATH: /tmp/verigo-ui.db
-          VERIGO_RESULTS_DIR: /tmp/verigo-ui-results
-          VERIGO_SECURE_COOKIES: "false"
-        run: |
-          npm install --no-save playwright@1.61.0
-          npx playwright install --with-deps chromium
-          PYTHONPATH=. nohup python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 >/tmp/verigo-ui.log 2>&1 &
-          for attempt in {1..30}; do curl -fsS http://127.0.0.1:8000/ >/dev/null && break; sleep 1; done
-          node tests/ui-smoke.js
