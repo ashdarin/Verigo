@@ -184,7 +184,10 @@ function switchView(view) {
   document.querySelectorAll("[data-view]").forEach((button) => {
     button.classList.toggle("active", button.dataset.view === view);
   });
-  if (dashboard) {
+  if (discovery) {
+    document.title = "邮箱查找 | Verigo";
+    if (window.location.pathname !== "/app/finder") window.history.pushState({}, "", "/app/finder");
+  } else if (dashboard) {
     document.title = `${VerigoI18n.text("运营监控")} | Verigo`;
     if (window.location.pathname !== "/dashboard") window.history.pushState({}, "", "/dashboard");
     loadDashboardMetrics();
@@ -211,10 +214,10 @@ function switchView(view) {
     if (window.location.pathname !== "/history") window.history.pushState({}, "", "/history");
     loadHistoryPage();
   } else {
-    document.title = "Verigo";
+    document.title = `${VerigoI18n.text(view === "batch" ? "批量验证" : "邮箱验证")} | Verigo`;
     clearInterval(state.metricsTimer);
     state.metricsTimer = null;
-    if (["/dashboard", "/admin/credits", "/wallet", "/history", "/workspace", "/lists"].includes(window.location.pathname)) window.history.replaceState({}, "", "/");
+    if (window.location.pathname !== "/verify") window.history.replaceState({}, "", "/verify");
   }
   updateCount();
 }
@@ -399,6 +402,9 @@ async function loadDashboardMetrics() {
 
 document.querySelectorAll("[data-view]").forEach((button) => {
   button.addEventListener("click", () => switchView(button.dataset.view));
+});
+document.querySelectorAll("#account-menu [data-view]").forEach((button) => {
+  button.addEventListener("click", () => el("account-menu").classList.add("hidden"));
 });
 
 document.querySelectorAll(".verification-type-tabs [data-view]").forEach((button) => {
@@ -2092,6 +2098,7 @@ el("workspace-api-button")?.addEventListener("click", () => el("api-nav").click(
 document.querySelectorAll("#workspace-home [data-view]").forEach((button) => button.addEventListener("click", () => switchView(button.dataset.view)));
 
 (async function init() {
+  document.title = `${VerigoI18n.text(state.view === "batch" ? "批量验证" : "邮箱验证")} | Verigo`;
   setAuthMode(state.authMode);
   updateCount();
   await loadAccount();
