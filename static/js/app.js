@@ -1732,12 +1732,6 @@ function updateNotificationChrome() {
     `已加载 ${state.notifications.length} / ${state.notificationTotal}`,
     `${state.notifications.length} of ${state.notificationTotal} loaded`,
   );
-  const loadMore = el("notification-load-more");
-  loadMore.textContent = state.notificationLoading
-    ? notificationUiText("加载中", "Loading")
-    : notificationUiText("加载更多", "Load more");
-  loadMore.disabled = state.notificationLoading;
-  loadMore.classList.toggle("hidden", state.notifications.length >= state.notificationTotal);
   applyNotificationPreferences();
 }
 
@@ -1815,9 +1809,9 @@ function renderNotifications() {
       ? notificationUiText(`暂无${notificationFilterText(state.notificationFilter)}通知`, `No ${notificationFilterText(state.notificationFilter).toLowerCase()} notifications`)
       : notificationUiText("暂无通知", "No notifications");
     const copy = document.createElement("span"); copy.textContent = filtered
-      ? notificationUiText("可以切换其他分类，或加载更多历史通知。", "Switch categories or load more notification history.")
+      ? notificationUiText("可以切换其他分类查看通知。", "Switch categories to view other notifications.")
       : notificationUiText("重要的验证与账户更新会出现在这里。", "Verification and account updates will appear here.");
-    empty.append(title, copy); list.append(empty); return;
+    empty.append(title, copy); list.append(empty); scheduleNotificationAutoLoad(); return;
   }
   let previousGroup = null;
   visibleNotifications.forEach((notification) => {
@@ -1842,6 +1836,15 @@ function renderNotifications() {
     content.append(title, body, meta);
     const unread = document.createElement("span"); unread.className = "notification-unread-dot"; unread.setAttribute("aria-hidden", "true");
     item.append(icon, content, unread); list.append(item);
+  });
+  scheduleNotificationAutoLoad();
+}
+
+function scheduleNotificationAutoLoad() {
+  window.requestAnimationFrame(() => {
+    const menu = el("notification-menu"); const list = el("notification-list");
+    if (menu.classList.contains("hidden") || state.notificationLoading || state.notifications.length >= state.notificationTotal) return;
+    if (list.scrollHeight - list.clientHeight <= 48) loadNotifications({ append: true });
   });
 }
 
@@ -1891,7 +1894,11 @@ document.querySelectorAll("[data-notification-filter]").forEach((button) => butt
   localStorage.setItem("verigo_notification_filter", state.notificationFilter);
   renderNotifications();
 }));
-el("notification-load-more").addEventListener("click", () => loadNotifications({ append: true }));
+el("notification-list").addEventListener("scroll", (event) => {
+  const list = event.currentTarget;
+  const nearBottom = list.scrollHeight - list.scrollTop - list.clientHeight <= 48;
+  if (nearBottom) loadNotifications({ append: true });
+});
 el("notification-refresh").addEventListener("click", () => loadNotifications());
 el("notification-settings").addEventListener("click", () => {
   const preferences = el("notification-preferences"); preferences.classList.toggle("hidden"); updateNotificationChrome();

@@ -458,9 +458,8 @@ async function checkNotificationCenter(browser) {
   if (!(await page.locator("#notification-count").evaluate((node) => node.classList.contains("hidden")))) throw new Error("notifications: badge should clear after mark all");
   if (!(await page.locator(".notification-empty").isVisible())) throw new Error("notifications: filtered empty state is missing");
   await page.click('[data-notification-filter="all"]');
-  await page.click("#notification-load-more");
+  await page.locator("#notification-list").evaluate((node) => { node.scrollTop = node.scrollHeight; });
   await page.waitForFunction(() => document.querySelectorAll(".notification-item").length === 35);
-  if (!(await page.locator("#notification-load-more").evaluate((node) => node.classList.contains("hidden")))) throw new Error("notifications: load more should hide after the final page");
   await page.locator(".notification-review").click();
   await page.waitForFunction(() => document.querySelector("#result-detail-drawer")?.classList.contains("open"));
   if (!(await page.locator("#notification-menu").evaluate((node) => node.classList.contains("hidden")))) throw new Error("notifications: result navigation must close the panel");
