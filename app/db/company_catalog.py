@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 
@@ -17,6 +18,30 @@ class CompanyCatalogUnavailable(RuntimeError):
 _TINYBIRD_FIELDS = (
     "country", "industry", "region", "size", "query", "has_website", "offset", "limit",
 )
+_PUBLIC_FIELDS = (
+    "id", "name", "website", "linkedin_url", "logo_url", "country", "region",
+    "locality", "industry", "size", "founded",
+)
+
+
+def _hunter_logo_url(website: object) -> str:
+    value = str(website or "").strip()
+    if not value:
+        return ""
+    parsed = urlparse(value if "://" in value else f"https://{value}")
+    hostname = (parsed.hostname or "").lower().removeprefix("www.")
+    return f"https://logos.hunter.io/{hostname}" if hostname else ""
+
+
+def _linkedin_url(value: object) -> str:
+    url = str(value or "").strip()
+    if not url:
+        return ""
+    parsed = urlparse(url if "://" in url else f"https://{url}")
+    hostname = (parsed.hostname or "").lower()
+    if hostname not in {"linkedin.com", "www.linkedin.com"}:
+        return ""
+    return parsed.geturl()
 
 
 def _tinybird_enabled() -> bool:
@@ -47,7 +72,13 @@ def _service_search(**filters: object) -> tuple[int, list[dict[str, object]], bo
     except (httpx.HTTPError, ValueError) as exc:
         raise CompanyCatalogUnavailable("Company Finder is temporarily unavailable") from exc
 
-    items = [row for row in payload.get("items", []) if isinstance(row, dict)]
+    items = [
+        {field: row.get(field, "") for field in _PUBLIC_FIELDS}
+        for row in payload.get("items", [])
+        if isinstance(row, dict)
+    ]
+    for item in items:
+        item["linkedin_url"] = _linkedin_url(item["linkedin_url"])
     return int(payload.get("total", len(items))), items, bool(payload.get("has_more"))
 
 
@@ -72,9 +103,7 @@ def _tinybird_search(**filters: object) -> tuple[int, list[dict[str, object]], b
         raise CompanyCatalogUnavailable("Company Finder is temporarily unavailable") from exc
 
     items = [
-        {field: row.get(field, "") for field in (
-            "id", "name", "website", "country", "region", "locality", "industry", "size", "founded",
-        )}
+        {field: row.get(field, "") for field in _PUBLIC_FIELDS}
         for row in payload.get("data", [])
         if isinstance(row, dict)
     ]
@@ -141,14 +170,17 @@ def search(
     with _connection() as connection:
         total = int(connection.execute(f"SELECT COUNT(*) FROM companies{where}", values).fetchone()[0])
         rows = connection.execute(
-            f"""SELECT id, name, website, country, region, locality, industry, size, founded
+            f"""SELECT id, name, website, '' AS linkedin_url, country, region, locality, industry, size, founded
                 FROM companies{where}
                 ORDER BY name_search, id
                 LIMIT ? OFFSET ?""",
             [*values, limit, offset],
         ).fetchall()
-    fields = ("id", "name", "website", "country", "region", "locality", "industry", "size", "founded")
+    fields = ("id", "name", "website", "linkedin_url", "country", "region", "locality", "industry", "size", "founded")
     items = [dict(zip(fields, row, strict=True)) for row in rows]
+    for item in items:
+        item["logo_url"] = _hunter_logo_url(item["website"])
+        item["linkedin_url"] = _linkedin_url(item["linkedin_url"])
     return total, items, offset + len(items) < total
 
 

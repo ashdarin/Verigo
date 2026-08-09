@@ -6,6 +6,7 @@ import hmac
 import os
 from pathlib import Path
 from typing import Annotated
+from urllib.parse import urlparse
 
 import duckdb
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
@@ -13,6 +14,10 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query
 DATA_GLOB = os.getenv("COMPANY_FINDER_PARQUET_GLOB", "/opt/verigo-company-finder/data/parquet/*.parquet")
 DATABASE_PATH = os.getenv("COMPANY_FINDER_DATABASE_PATH", "/opt/verigo-company-finder/data/company_catalog.duckdb")
 SERVICE_TOKEN = os.getenv("COMPANY_FINDER_SERVICE_TOKEN", "")
+FIELDS = (
+    "id", "name", "website", "linkedin_url", "country", "region",
+    "locality", "industry", "size", "founded",
+)
 
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
@@ -22,6 +27,26 @@ def require_token(authorization: Annotated[str | None, Header()] = None) -> None
         raise HTTPException(status_code=401, detail="Unauthorized")
     if not hmac.compare_digest(authorization.removeprefix("Bearer "), SERVICE_TOKEN):
         raise HTTPException(status_code=401, detail="Unauthorized")
+
+
+def hunter_logo_url(website: object) -> str:
+    value = str(website or "").strip()
+    if not value:
+        return ""
+    parsed = urlparse(value if "://" in value else f"https://{value}")
+    hostname = (parsed.hostname or "").lower().removeprefix("www.")
+    return f"https://logos.hunter.io/{hostname}" if hostname else ""
+
+
+def linkedin_url(value: object) -> str:
+    url = str(value or "").strip()
+    if not url:
+        return ""
+    parsed = urlparse(url if "://" in url else f"https://{url}")
+    hostname = (parsed.hostname or "").lower()
+    if hostname not in {"linkedin.com", "www.linkedin.com"}:
+        return ""
+    return parsed.geturl()
 
 
 def search(
@@ -50,7 +75,6 @@ def search(
         clauses.append("website = ''")
 
     where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
-    fields = ("id", "name", "website", "country", "region", "locality", "industry", "size", "founded")
     database_exists = Path(DATABASE_PATH).is_file()
     source = "companies" if database_exists else "read_parquet(?)"
     source_values: list[object] = [] if database_exists else [DATA_GLOB]
@@ -59,7 +83,7 @@ def search(
         connection.execute("SET threads = 2")
         connection.execute("SET preserve_insertion_order = false")
         rows = connection.execute(
-            f"""SELECT {', '.join(fields)}
+            f"""SELECT {', '.join(FIELDS)}
                 FROM {source} {where}
                 ORDER BY name_search, id
                 LIMIT ? OFFSET ?""",
@@ -67,7 +91,10 @@ def search(
         ).fetchall()
 
     has_more = len(rows) > limit
-    items = [dict(zip(fields, row, strict=True)) for row in rows[:limit]]
+    items = [dict(zip(FIELDS, row, strict=True)) for row in rows[:limit]]
+    for item in items:
+        item["logo_url"] = hunter_logo_url(item["website"])
+        item["linkedin_url"] = linkedin_url(item["linkedin_url"])
     return {"total": offset + len(items) + (1 if has_more else 0), "items": items, "has_more": has_more}
 
 

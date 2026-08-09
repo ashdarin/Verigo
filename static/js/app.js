@@ -1661,11 +1661,18 @@ async function loadCompanyCatalog() {
     body.replaceChildren();
     (data.items || []).forEach((item) => {
       const row = document.createElement("tr");
-      const cells = [item.name, [item.country, item.region, item.locality].filter(Boolean).join(" / "), item.industry || "-", item.size || "-", item.website || "-"];
+      const companyCell = document.createElement("td");
+      const company = document.createElement("span"); company.className = "company-catalog-company";
+      if (item.logo_url) { const logo = document.createElement("img"); logo.src = item.logo_url; logo.alt = ""; logo.width = 28; logo.height = 28; logo.loading = "lazy"; logo.addEventListener("error", () => logo.remove()); company.append(logo); }
+      const name = document.createElement("span"); name.textContent = item.name || "-"; company.append(name); companyCell.append(company); row.append(companyCell);
+      const cells = [[item.country, item.region, item.locality].filter(Boolean).join(" / "), item.industry || "-", item.size || "-", item.website || "-"];
       cells.forEach((value) => { const cell = document.createElement("td"); cell.textContent = value; row.append(cell); });
+      const linkedinCell = document.createElement("td");
+      if (item.linkedin_url) { const link = document.createElement("a"); link.href = item.linkedin_url; link.target = "_blank"; link.rel = "noopener noreferrer"; link.className = "company-catalog-linkedin"; link.textContent = "Open"; linkedinCell.append(link); } else { linkedinCell.textContent = "-"; }
+      row.append(linkedinCell);
       body.append(row);
     });
-    if (!body.children.length) { const row = document.createElement("tr"); const cell = document.createElement("td"); cell.colSpan = 5; cell.textContent = "没有匹配的公司"; row.append(cell); body.append(row); }
+    if (!body.children.length) { const row = document.createElement("tr"); const cell = document.createElement("td"); cell.colSpan = 6; cell.textContent = "没有匹配的公司"; row.append(cell); body.append(row); }
     const page = Math.floor(companyCatalogState.offset / companyCatalogState.limit) + 1;
     const totalLabel = companyCatalogState.hasMore ? `至少 ${companyCatalogState.total.toLocaleString("zh-CN")}` : companyCatalogState.total.toLocaleString("zh-CN");
     el("company-catalog-page").textContent = `第 ${page} 页（${totalLabel} 家）`;
