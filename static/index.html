@@ -17,7 +17,7 @@
   <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"Organization","name":"Verigo","url":"https://verigo.site/","logo":"https://verigo.site/static/favicon.svg"},{"@type":"WebApplication","name":"Verigo","url":"https://verigo.site/","applicationCategory":"BusinessApplication","operatingSystem":"Web","description":"面向销售、招聘与出海团队的邮箱验证、名单清洗和企业邮箱查找工具。","offers":{"@type":"Offer","price":"0.50","priceCurrency":"CNY","description":"100 次批量验证"}},{"@type":"FAQPage","mainEntity":[{"@type":"Question","name":"Catch-all 邮箱是什么意思？","acceptedAnswer":{"@type":"Answer","text":"Catch-all 是企业邮箱域名的一种设置：发往该域名的任意前缀都可能被服务器接收或转发，因此无法仅凭服务器响应确认某个具体收件人真实存在。"}},{"@type":"Question","name":"企业邮箱查找和普通验证有什么区别？","acceptedAnswer":{"@type":"Answer","text":"普通验证用于确认已有邮箱是否可用；企业邮箱查找用于获取目标企业的业务联络邮箱，适合销售开发、招聘和商务合作。"}}]}]}</script>
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" referrerpolicy="no-referrer">
-  <link rel="stylesheet" href="/static/css/app.css?v=redemption-nav-v2">
+  <link rel="stylesheet" href="/static/css/app.css?v=company-catalog-v1">
   <link rel="stylesheet" href="/static/css/product.css?v=redemption-nav-v2">
 </head>
 <body class="product-surface">
@@ -428,6 +428,20 @@
         <form id="admin-redemption-form" class="admin-redemption-form"><label for="admin-redemption-amount">面额与邮箱额度</label><select id="admin-redemption-amount"><option value="5">¥5 · 1,000 个邮箱</option><option value="10">¥10 · 2,000 个邮箱</option><option value="20">¥20 · 4,000 个邮箱</option><option value="50">¥50 · 10,000 个邮箱</option><option value="100">¥100 · 20,000 个邮箱</option></select><label for="admin-redemption-quantity">生成数量</label><input id="admin-redemption-quantity" type="number" min="1" max="100" value="1"><button id="admin-redemption-submit" class="primary-action" type="submit">生成兑换码</button></form>
         <div id="admin-redemption-result" class="admin-redemption-result hidden" aria-live="polite"></div>
       </section>
+      <section class="admin-redemption-card company-catalog-card" aria-labelledby="company-catalog-heading">
+        <div><p class="eyebrow">Company Finder</p><h2 id="company-catalog-heading">公司目录筛选</h2><p>按公司名称、国家、行业、规模和官网筛选。结果包含官网、LinkedIn 链接与公司头像。</p></div>
+        <form id="company-catalog-form" class="admin-company-catalog-form">
+          <label>公司名称或关键词<input id="company-catalog-query" type="search" maxlength="120" placeholder="例如：software"></label>
+          <label>国家/地区<input id="company-catalog-country" type="text" maxlength="80" placeholder="例如：united states"></label>
+          <label>行业<input id="company-catalog-industry" type="text" maxlength="160" placeholder="例如：computer software"></label>
+          <label>公司规模<input id="company-catalog-size" type="text" maxlength="40" placeholder="例如：51-200"></label>
+          <label>官网<select id="company-catalog-website"><option value="">不限</option><option value="true">有官网</option><option value="false">无官网</option></select></label>
+          <button class="primary-action" type="submit">筛选公司</button>
+        </form>
+        <p id="company-catalog-status" class="admin-credit-result" role="status"></p>
+        <div class="admin-company-catalog-table-wrap"><table class="admin-company-catalog-table"><thead><tr><th>公司</th><th>国家/地区</th><th>行业</th><th>规模</th><th>官网</th><th>LinkedIn</th></tr></thead><tbody id="company-catalog-results"></tbody></table></div>
+        <div class="admin-company-catalog-pagination"><button id="company-catalog-prev" class="download-action" type="button" disabled>上一页</button><span id="company-catalog-page">-</span><button id="company-catalog-next" class="download-action" type="button" disabled>下一页</button></div>
+      </section>
       <section id="admin-account-summary" class="admin-account-summary"><div class="report-card-heading"><div><h2>功能使用趋势</h2><p>单个验证、批量验证与工作邮箱查找</p></div></div><div id="admin-feature-chart" class="admin-feature-chart"></div><div id="admin-feature-legend" class="report-legend"></div></section>
       <section class="admin-accounts-section"><div class="report-card-heading"><div><h2>全部账户</h2><p id="admin-accounts-meta">按注册时间排序</p></div><button id="admin-accounts-refresh" class="download-action" type="button">刷新</button></div><div id="admin-accounts-list" class="admin-accounts-list"></div><div class="pagination"><span id="admin-accounts-page"></span><div><button id="admin-accounts-prev" class="page-button" type="button">上一页</button><span id="admin-accounts-pages" class="page-numbers"></span><button id="admin-accounts-next" class="page-button" type="button">下一页</button></div></div></section>
     </section>
@@ -609,6 +623,6 @@
   </dialog>
 
   <script src="/static/js/i18n.js?v=locale-v1" defer></script>
-  <script src="/static/js/app.js?v=redemption-nav-v2" defer></script>
+  <script src="/static/js/app.js?v=company-catalog-v1" defer></script>
 </body>
 </html>
