@@ -176,7 +176,7 @@ async function checkEnglishLocale(browser) {
       needs_email_binding: false, is_admin: false,
     }),
   }));
-  await page.route("**/api/notifications", (route) => route.fulfill({
+  await page.route(/\/api\/notifications(?:\?.*)?$/, (route) => route.fulfill({
     contentType: "application/json",
     body: JSON.stringify({
       unread_count: 1,
@@ -227,7 +227,7 @@ async function checkEnglishDiscoveryAndDocs(browser) {
     }),
   }));
   await page.route("**/api/jobs?offset=0&limit=8", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ total: 0, offset: 0, limit: 8, items: [] }) }));
-  await page.route("**/api/notifications", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: [], unread_count: 0 }) }));
+  await page.route(/\/api\/notifications(?:\?.*)?$/, (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: [], unread_count: 0 }) }));
   await page.goto(BASE_URL, { waitUntil: "networkidle" });
   await page.evaluate(() => document.querySelector("#locale-toggle").click());
   await page.click('[data-view="batch"]');
@@ -276,7 +276,7 @@ async function checkEnglishDesktopHeadingAndApiKeys(browser) {
     }),
   }));
   await page.route("**/api/jobs?offset=0&limit=8", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ total: 0, offset: 0, limit: 8, items: [] }) }));
-  await page.route("**/api/notifications", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: [], unread_count: 0 }) }));
+  await page.route(/\/api\/notifications(?:\?.*)?$/, (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: [], unread_count: 0 }) }));
   await page.route("**/api/auth/api-keys", (route) => route.fulfill({
     contentType: "application/json",
     body: JSON.stringify([{ id: "desktop-key", name: "production", prefix: "vg_live_12345678", last_used_at: null }]),
@@ -409,10 +409,17 @@ async function checkNotificationCenter(browser) {
     { id: "credit-1", kind: "credit_grant", title: "额度已到账", body: "管理员已向你的账户增加 100 额度。", created_at: now, read_at: null, target_job_id: null, target_email: null, target_result_index: null },
     { id: "payment-1", kind: "payment", title: "充值到账", body: "已到账 100 次验证额度。", created_at: now, read_at: now, target_job_id: null, target_email: null, target_result_index: null },
   ];
+  for (let index = 0; index < 32; index += 1) notifications.push({
+    id: `history-${index}`, kind: "info", title: `历史通知 ${index + 1}`, body: "这是一条已读历史通知。",
+    created_at: new Date(Date.now() - ((index + 1) * 60000)).toISOString(), read_at: now,
+    target_job_id: null, target_email: null, target_result_index: null,
+  });
   await page.route("**/api/auth/me", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ id: "notify-user", email: "notify@example.com", email_verified: true, credits: 100, paid_credits: 100, trial_credits: 0, trial_credit_expires_at: null, needs_email_binding: false, is_admin: false }) }));
   await page.route("**/api/jobs?offset=0&limit=8", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ total: 0, offset: 0, limit: 8, items: [] }) }));
-  await page.route("**/api/notifications", async (route) => {
-    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: notifications, unread_count: notifications.filter((item) => !item.read_at).length, total: notifications.length, offset: 0, limit: 30 }) });
+  await page.route(/\/api\/notifications(?:\?.*)?$/, async (route) => {
+    const url = new URL(route.request().url());
+    const offset = Number(url.searchParams.get("offset") || 0); const limit = Number(url.searchParams.get("limit") || 30);
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: notifications.slice(offset, offset + limit), unread_count: notifications.filter((item) => !item.read_at).length, total: notifications.length, offset, limit }) });
   });
   await page.route("**/api/notifications/read", async (route) => {
     notifications.forEach((item) => { item.read_at = item.read_at || now; });
@@ -428,17 +435,27 @@ async function checkNotificationCenter(browser) {
   await page.route("**/api/wallet", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ available_verifications: 100, paid_verifications: 100, paid_verifications_used: 0, cumulative_recharge_fen: 50, remaining_paid_value_yuan: 0.5, paid_used_value_yuan: 0, price_fen_per_100: 50, trial_verifications: 0, usage_daily: [], transactions: [] }) }));
   await page.goto(BASE_URL, { waitUntil: "networkidle" });
   await page.click("#notification-button");
-  await page.waitForFunction(() => document.querySelectorAll(".notification-item").length === 3);
+  await page.waitForFunction(() => document.querySelectorAll(".notification-item").length === 30);
   if (process.env.VERIGO_NOTIFICATION_SCREENSHOT) await page.screenshot({ path: process.env.VERIGO_NOTIFICATION_SCREENSHOT });
   if ((await page.textContent("#notification-summary")) !== "2 条未读" || await page.locator(".notification-item.is-unread").count() !== 2) throw new Error("notifications: unread state is incorrect");
+  if ((await page.textContent("#notification-loaded-summary")) !== "已加载 30 / 35") throw new Error("notifications: pagination summary is incorrect");
+  await page.click('[data-notification-filter="unread"]');
+  if (await page.locator(".notification-item").count() !== 2) throw new Error("notifications: unread filter is incorrect");
   await page.click("#notification-mark-all");
   await page.waitForFunction(() => document.querySelectorAll(".notification-item.is-unread").length === 0);
   if (!(await page.locator("#notification-count").evaluate((node) => node.classList.contains("hidden")))) throw new Error("notifications: badge should clear after mark all");
+  if (!(await page.locator(".notification-empty").isVisible())) throw new Error("notifications: filtered empty state is missing");
+  await page.click('[data-notification-filter="all"]');
+  await page.click("#notification-load-more");
+  await page.waitForFunction(() => document.querySelectorAll(".notification-item").length === 35);
+  if (!(await page.locator("#notification-load-more").evaluate((node) => node.classList.contains("hidden")))) throw new Error("notifications: load more should hide after the final page");
   await page.locator(".notification-review").click();
   await page.waitForFunction(() => document.querySelector("#result-detail-drawer")?.classList.contains("open"));
   if (!(await page.locator("#notification-menu").evaluate((node) => node.classList.contains("hidden")))) throw new Error("notifications: result navigation must close the panel");
   await page.click("#close-result-detail");
   await page.click("#notification-button");
+  await page.click('[data-notification-filter="account"]');
+  if (await page.locator(".notification-item").count() !== 2) throw new Error("notifications: account filter is incorrect");
   await page.locator(".notification-credit").click();
   await page.waitForSelector("#wallet-workspace:not(.hidden)");
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth);

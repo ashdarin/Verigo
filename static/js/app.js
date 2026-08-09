@@ -27,6 +27,9 @@ const state = {
   notificationLoading: false,
   notificationUnread: 0,
   notificationTotal: 0,
+  notificationOffset: 0,
+  notificationLimit: 30,
+  notificationFilter: "all",
   recentJobs: { offset: 0, limit: 8, total: 0 },
   adminAccountOffset: 0,
   retryCountdownTimer: null,
@@ -1643,6 +1646,23 @@ function notificationPresentation(notification) {
   return { icon: "fa-regular fa-bell", tone: "info", action: "", destination: null };
 }
 
+function notificationMatchesFilter(notification, filter = state.notificationFilter) {
+  if (filter === "unread") return !notification.read_at;
+  if (filter === "verification") return notification.kind === "verification_review";
+  if (filter === "account") return ["payment", "credit_grant", "credit_deduction"].includes(notification.kind);
+  return true;
+}
+
+function notificationFilterText(filter) {
+  const labels = {
+    all: notificationUiText("全部", "All"),
+    unread: notificationUiText("未读", "Unread"),
+    verification: notificationUiText("验证", "Verification"),
+    account: notificationUiText("账户", "Account"),
+  };
+  return labels[filter] || labels.all;
+}
+
 function updateNotificationChrome() {
   const count = el("notification-count");
   count.textContent = state.notificationUnread > 99 ? "99+" : String(state.notificationUnread);
@@ -1656,6 +1676,25 @@ function updateNotificationChrome() {
   el("notification-menu").setAttribute("aria-label", notificationUiText("通知中心", "Notification center"));
   el("notification-close").setAttribute("aria-label", notificationUiText("关闭通知", "Close notifications"));
   el("notification-close").title = notificationUiText("关闭通知", "Close notifications");
+  el("notification-filters").setAttribute("aria-label", notificationUiText("通知筛选", "Notification filters"));
+  document.querySelectorAll("[data-notification-filter]").forEach((button) => {
+    const active = button.dataset.notificationFilter === state.notificationFilter;
+    button.textContent = notificationFilterText(button.dataset.notificationFilter);
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-selected", String(active));
+  });
+  const footer = el("notification-footer");
+  footer.classList.toggle("hidden", !state.notificationTotal);
+  el("notification-loaded-summary").textContent = notificationUiText(
+    `已加载 ${state.notifications.length} / ${state.notificationTotal}`,
+    `${state.notifications.length} of ${state.notificationTotal} loaded`,
+  );
+  const loadMore = el("notification-load-more");
+  loadMore.textContent = state.notificationLoading
+    ? notificationUiText("加载中", "Loading")
+    : notificationUiText("加载更多", "Load more");
+  loadMore.disabled = state.notificationLoading;
+  loadMore.classList.toggle("hidden", state.notifications.length >= state.notificationTotal);
 }
 
 function closeNotificationMenu() {
@@ -1721,14 +1760,20 @@ async function openNotification(notification) {
 function renderNotifications() {
   const list = el("notification-list");
   list.replaceChildren(); updateNotificationChrome();
-  if (!state.notifications.length) {
+  const visibleNotifications = state.notifications.filter((notification) => notificationMatchesFilter(notification));
+  if (!visibleNotifications.length) {
     const empty = document.createElement("div"); empty.className = "notification-empty";
     empty.innerHTML = '<i class="fa-regular fa-bell" aria-hidden="true"></i>';
-    const title = document.createElement("strong"); title.textContent = notificationUiText("暂无通知", "No notifications");
-    const copy = document.createElement("span"); copy.textContent = notificationUiText("重要的验证与账户更新会出现在这里。", "Verification and account updates will appear here.");
+    const filtered = state.notificationFilter !== "all";
+    const title = document.createElement("strong"); title.textContent = filtered
+      ? notificationUiText(`暂无${notificationFilterText(state.notificationFilter)}通知`, `No ${notificationFilterText(state.notificationFilter).toLowerCase()} notifications`)
+      : notificationUiText("暂无通知", "No notifications");
+    const copy = document.createElement("span"); copy.textContent = filtered
+      ? notificationUiText("可以切换其他分类，或加载更多历史通知。", "Switch categories or load more notification history.")
+      : notificationUiText("重要的验证与账户更新会出现在这里。", "Verification and account updates will appear here.");
     empty.append(title, copy); list.append(empty); return;
   }
-  state.notifications.forEach((notification) => {
+  visibleNotifications.forEach((notification) => {
     const presentation = notificationPresentation(notification);
     const item = document.createElement("button"); item.type = "button";
     item.className = `notification-item notification-${presentation.tone}${notification.read_at ? " is-read" : " is-unread"}`;
@@ -1750,15 +1795,24 @@ function renderNotifications() {
 
 window.addEventListener("verigo:localechange", renderNotifications);
 
-async function loadNotifications() {
+async function loadNotifications({ append = false } = {}) {
   if (!state.user || state.notificationLoading) return;
+  if (append && state.notifications.length >= state.notificationTotal) return;
   state.notificationLoading = true; updateNotificationChrome(); setNotificationFeedback();
-  if (!state.notifications.length) {
+  if (!append && !state.notifications.length) {
     el("notification-list").innerHTML = `<div class="notification-loading"><i class="fa-solid fa-circle-notch fa-spin" aria-hidden="true"></i><span>${notificationUiText("正在加载通知", "Loading notifications")}</span></div>`;
   }
   try {
-    const payload = await api("/api/notifications");
-    state.notifications = payload.items || [];
+    const offset = append ? state.notifications.length : 0;
+    const payload = await api(`/api/notifications?offset=${offset}&limit=${state.notificationLimit}`);
+    const items = payload.items || [];
+    if (append) {
+      const existing = new Set(state.notifications.map((notification) => notification.id));
+      state.notifications.push(...items.filter((notification) => !existing.has(notification.id)));
+    } else {
+      state.notifications = items;
+    }
+    state.notificationOffset = state.notifications.length;
     state.notificationUnread = Number(payload.unread_count || 0);
     state.notificationTotal = Number(payload.total || state.notifications.length);
     renderNotifications();
@@ -1780,6 +1834,11 @@ el("notification-button").addEventListener("click", async () => {
   await loadNotifications();
 });
 el("notification-close").addEventListener("click", closeNotificationMenu);
+document.querySelectorAll("[data-notification-filter]").forEach((button) => button.addEventListener("click", () => {
+  state.notificationFilter = button.dataset.notificationFilter;
+  renderNotifications();
+}));
+el("notification-load-more").addEventListener("click", () => loadNotifications({ append: true }));
 el("notification-mark-all").addEventListener("click", async () => {
   if (!state.notificationUnread) return;
   const previous = state.notifications.map((notification) => notification.read_at);
