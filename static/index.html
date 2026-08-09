@@ -17,8 +17,8 @@
   <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"Organization","name":"Verigo","url":"https://verigo.site/","logo":"https://verigo.site/static/favicon.svg"},{"@type":"WebApplication","name":"Verigo","url":"https://verigo.site/","applicationCategory":"BusinessApplication","operatingSystem":"Web","description":"面向销售、招聘与出海团队的邮箱验证、名单清洗和企业邮箱查找工具。","offers":{"@type":"Offer","price":"0.50","priceCurrency":"CNY","description":"100 次批量验证"}},{"@type":"FAQPage","mainEntity":[{"@type":"Question","name":"Catch-all 邮箱是什么意思？","acceptedAnswer":{"@type":"Answer","text":"Catch-all 是企业邮箱域名的一种设置：发往该域名的任意前缀都可能被服务器接收或转发，因此无法仅凭服务器响应确认某个具体收件人真实存在。"}},{"@type":"Question","name":"企业邮箱查找和普通验证有什么区别？","acceptedAnswer":{"@type":"Answer","text":"普通验证用于确认已有邮箱是否可用；企业邮箱查找用于获取目标企业的业务联络邮箱，适合销售开发、招聘和商务合作。"}}]}]}</script>
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" referrerpolicy="no-referrer">
-  <link rel="stylesheet" href="/static/css/app.css?v=notification-center-v2">
-  <link rel="stylesheet" href="/static/css/product.css?v=notification-center-v2">
+  <link rel="stylesheet" href="/static/css/app.css?v=notification-center-v3">
+  <link rel="stylesheet" href="/static/css/product.css?v=notification-center-v3">
 </head>
 <body class="product-surface">
   <header class="topbar">
@@ -43,10 +43,18 @@
           <div><strong id="notification-heading-title">通知</strong><small id="notification-summary">没有未读通知</small></div>
           <div class="notification-heading-actions">
             <button id="notification-mark-all" class="notification-mark-all" type="button">全部已读</button>
+            <button id="notification-refresh" class="notification-heading-icon" type="button" aria-label="刷新通知" title="刷新通知"><i class="fa-solid fa-rotate" aria-hidden="true"></i></button>
+            <button id="notification-settings" class="notification-heading-icon" type="button" aria-label="通知设置" title="通知设置" aria-controls="notification-preferences" aria-expanded="false"><i class="fa-solid fa-gear" aria-hidden="true"></i></button>
             <button id="notification-close" class="notification-close" type="button" aria-label="关闭通知" title="关闭通知"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
           </div>
         </div>
         <div id="notification-feedback" class="notification-feedback hidden" role="status"></div>
+        <div id="notification-preferences" class="notification-preferences hidden">
+          <div class="notification-preferences-title"><strong>通知设置</strong><small>仅保存在当前浏览器</small></div>
+          <label class="notification-preference"><span><strong>紧凑显示</strong><small>隐藏正文，减少列表占用空间</small></span><input id="notification-compact" type="checkbox"></label>
+          <label class="notification-preference"><span><strong>自动刷新</strong><small>每分钟检查一次新通知</small></span><input id="notification-auto-refresh" type="checkbox"></label>
+          <button id="notification-reset-preferences" class="notification-reset-preferences" type="button">恢复默认设置</button>
+        </div>
         <div id="notification-filters" class="notification-filters" role="tablist" aria-label="通知筛选">
           <button class="notification-filter is-active" type="button" role="tab" aria-selected="true" data-notification-filter="all">全部</button>
           <button class="notification-filter" type="button" role="tab" aria-selected="false" data-notification-filter="unread">未读</button>
@@ -595,6 +603,6 @@
   </dialog>
 
   <script src="/static/js/i18n.js?v=locale-v1" defer></script>
-  <script src="/static/js/app.js?v=notification-center-v2" defer></script>
+  <script src="/static/js/app.js?v=notification-center-v3" defer></script>
 </body>
 </html>

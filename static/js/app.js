@@ -29,7 +29,12 @@ const state = {
   notificationTotal: 0,
   notificationOffset: 0,
   notificationLimit: 30,
-  notificationFilter: "all",
+  notificationFilter: ["all", "unread", "verification", "account"].includes(localStorage.getItem("verigo_notification_filter"))
+    ? localStorage.getItem("verigo_notification_filter") : "all",
+  notificationPreferences: {
+    compact: localStorage.getItem("verigo_notification_compact") === "1",
+    autoRefresh: localStorage.getItem("verigo_notification_auto_refresh") !== "0",
+  },
   recentJobs: { offset: 0, limit: 8, total: 0 },
   adminAccountOffset: 0,
   retryCountdownTimer: null,
@@ -1448,6 +1453,14 @@ el("history-search")?.addEventListener("input", () => { state.history.offset = 0
 el("history-filter")?.addEventListener("change", () => { state.history.offset = 0; loadHistoryPage(); });
 el("history-prev")?.addEventListener("click", () => { if (state.history.offset >= state.history.limit) { state.history.offset -= state.history.limit; loadHistoryPage(); } });
 el("history-next")?.addEventListener("click", () => { if (state.history.offset + state.history.limit < state.history.total) { state.history.offset += state.history.limit; loadHistoryPage(); } });
+function scheduleNotificationPolling() {
+  clearInterval(state.notificationTimer);
+  state.notificationTimer = null;
+  if (state.user && state.notificationPreferences.autoRefresh) {
+    state.notificationTimer = window.setInterval(loadNotifications, 60000);
+  }
+}
+
 function updateAccount() {
   el("account-button").textContent = state.user ? state.user.email : "登录";
   el("account-name").textContent = state.user?.email || "";
@@ -1476,14 +1489,12 @@ function updateAccount() {
   el("recent-block").classList.toggle("hidden", !state.user);
   el("account-menu").classList.add("hidden");
   closeNotificationMenu();
-  clearInterval(state.notificationTimer);
-  state.notificationTimer = null;
   if (state.user) {
     loadRecentJobs();
     loadNotifications();
-    state.notificationTimer = window.setInterval(loadNotifications, 60000);
     syncOnboarding();
   }
+  scheduleNotificationPolling();
 }
 
 window.addEventListener("verigo:localechange", () => {
@@ -1663,6 +1674,23 @@ function notificationFilterText(filter) {
   return labels[filter] || labels.all;
 }
 
+function notificationDateGroup(value) {
+  const date = new Date(value); const today = new Date();
+  const start = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const target = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const days = Math.round((start - target) / 86400000);
+  const key = `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
+  if (days === 0) return { key, label: notificationUiText("今天", "Today") };
+  if (days === 1) return { key, label: notificationUiText("昨天", "Yesterday") };
+  return { key, label: new Intl.DateTimeFormat(VerigoI18n.locale === "en" ? "en-US" : "zh-CN", { month: "short", day: "numeric" }).format(date) };
+}
+
+function applyNotificationPreferences() {
+  el("notification-menu").classList.toggle("is-compact", state.notificationPreferences.compact);
+  el("notification-compact").checked = state.notificationPreferences.compact;
+  el("notification-auto-refresh").checked = state.notificationPreferences.autoRefresh;
+}
+
 function updateNotificationChrome() {
   const count = el("notification-count");
   count.textContent = state.notificationUnread > 99 ? "99+" : String(state.notificationUnread);
@@ -1676,6 +1704,21 @@ function updateNotificationChrome() {
   el("notification-menu").setAttribute("aria-label", notificationUiText("通知中心", "Notification center"));
   el("notification-close").setAttribute("aria-label", notificationUiText("关闭通知", "Close notifications"));
   el("notification-close").title = notificationUiText("关闭通知", "Close notifications");
+  el("notification-refresh").setAttribute("aria-label", notificationUiText("刷新通知", "Refresh notifications"));
+  el("notification-refresh").title = notificationUiText("刷新通知", "Refresh notifications");
+  el("notification-refresh").disabled = state.notificationLoading;
+  el("notification-settings").setAttribute("aria-label", notificationUiText("通知设置", "Notification settings"));
+  el("notification-settings").title = notificationUiText("通知设置", "Notification settings");
+  el("notification-settings").setAttribute("aria-expanded", String(!el("notification-preferences").classList.contains("hidden")));
+  const preferenceTitle = el("notification-preferences").querySelector(".notification-preferences-title");
+  preferenceTitle.querySelector("strong").textContent = notificationUiText("通知设置", "Notification settings");
+  preferenceTitle.querySelector("small").textContent = notificationUiText("仅保存在当前浏览器", "Saved in this browser only");
+  const preferenceRows = el("notification-preferences").querySelectorAll(".notification-preference span");
+  preferenceRows[0].querySelector("strong").textContent = notificationUiText("紧凑显示", "Compact view");
+  preferenceRows[0].querySelector("small").textContent = notificationUiText("隐藏正文，减少列表占用空间", "Hide message previews to fit more notifications");
+  preferenceRows[1].querySelector("strong").textContent = notificationUiText("自动刷新", "Auto refresh");
+  preferenceRows[1].querySelector("small").textContent = notificationUiText("每分钟检查一次新通知", "Check for new notifications every minute");
+  el("notification-reset-preferences").textContent = notificationUiText("恢复默认设置", "Restore defaults");
   el("notification-filters").setAttribute("aria-label", notificationUiText("通知筛选", "Notification filters"));
   document.querySelectorAll("[data-notification-filter]").forEach((button) => {
     const active = button.dataset.notificationFilter === state.notificationFilter;
@@ -1695,11 +1738,14 @@ function updateNotificationChrome() {
     : notificationUiText("加载更多", "Load more");
   loadMore.disabled = state.notificationLoading;
   loadMore.classList.toggle("hidden", state.notifications.length >= state.notificationTotal);
+  applyNotificationPreferences();
 }
 
 function closeNotificationMenu() {
   el("notification-menu")?.classList.add("hidden");
+  el("notification-preferences")?.classList.add("hidden");
   el("notification-button")?.setAttribute("aria-expanded", "false");
+  el("notification-settings")?.setAttribute("aria-expanded", "false");
 }
 
 function setNotificationFeedback(message = "", retry = false) {
@@ -1773,7 +1819,13 @@ function renderNotifications() {
       : notificationUiText("重要的验证与账户更新会出现在这里。", "Verification and account updates will appear here.");
     empty.append(title, copy); list.append(empty); return;
   }
+  let previousGroup = null;
   visibleNotifications.forEach((notification) => {
+    const group = notificationDateGroup(notification.created_at);
+    if (group.key !== previousGroup) {
+      const heading = document.createElement("div"); heading.className = "notification-date-group"; heading.textContent = group.label;
+      list.append(heading); previousGroup = group.key;
+    }
     const presentation = notificationPresentation(notification);
     const item = document.createElement("button"); item.type = "button";
     item.className = `notification-item notification-${presentation.tone}${notification.read_at ? " is-read" : " is-unread"}`;
@@ -1836,9 +1888,29 @@ el("notification-button").addEventListener("click", async () => {
 el("notification-close").addEventListener("click", closeNotificationMenu);
 document.querySelectorAll("[data-notification-filter]").forEach((button) => button.addEventListener("click", () => {
   state.notificationFilter = button.dataset.notificationFilter;
+  localStorage.setItem("verigo_notification_filter", state.notificationFilter);
   renderNotifications();
 }));
 el("notification-load-more").addEventListener("click", () => loadNotifications({ append: true }));
+el("notification-refresh").addEventListener("click", () => loadNotifications());
+el("notification-settings").addEventListener("click", () => {
+  const preferences = el("notification-preferences"); preferences.classList.toggle("hidden"); updateNotificationChrome();
+});
+el("notification-compact").addEventListener("change", (event) => {
+  state.notificationPreferences.compact = event.target.checked;
+  localStorage.setItem("verigo_notification_compact", event.target.checked ? "1" : "0");
+  applyNotificationPreferences();
+});
+el("notification-auto-refresh").addEventListener("change", (event) => {
+  state.notificationPreferences.autoRefresh = event.target.checked;
+  localStorage.setItem("verigo_notification_auto_refresh", event.target.checked ? "1" : "0");
+  scheduleNotificationPolling();
+});
+el("notification-reset-preferences").addEventListener("click", () => {
+  state.notificationPreferences = { compact: false, autoRefresh: true };
+  localStorage.removeItem("verigo_notification_compact"); localStorage.removeItem("verigo_notification_auto_refresh");
+  applyNotificationPreferences(); scheduleNotificationPolling();
+});
 el("notification-mark-all").addEventListener("click", async () => {
   if (!state.notificationUnread) return;
   const previous = state.notifications.map((notification) => notification.read_at);
