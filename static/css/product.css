@@ -23,6 +23,8 @@ body.product-surface { min-width: 320px; margin: 0; color: var(--product-ink); b
 .product-surface .nav-item i { font-size: 13px; }
 .product-surface .nav-item:hover { color: var(--product-green-dark); background: #e8f1eb; }
 .product-surface .nav-item.active { color: var(--product-green-dark); background: #fff; box-shadow: 0 1px 4px rgba(24,48,37,.12); }
+.product-surface .nav-redeem { min-width:82px; margin-left:4px; color:#fff; background:var(--product-green); }
+.product-surface .nav-redeem:hover { color:#fff; background:var(--product-green-dark); }
 .product-surface .account-area { gap: 8px; }
 .product-surface .locale-toggle,
 .product-surface .notification-button { width: 38px; min-width: 38px; height: 38px; padding: 0; justify-content: center; border: 1px solid var(--product-line); border-radius: 5px; color: #415249; background: #fff; }
@@ -189,7 +191,8 @@ body.product-surface { min-width: 320px; margin: 0; color: var(--product-ink); b
   .product-surface .topbar { height: 60px; min-height: 60px; grid-template-columns: 1fr auto; grid-template-areas: "brand account"; padding: 0 16px; }
   .product-surface .brand { grid-area: brand; }
   .product-surface .account-area { grid-area: account; }
-  .product-surface .product-nav { position: fixed; z-index: 45; grid-area: auto; top: calc(100vh - 64px); top: calc(100dvh - 64px); left: 0; right: 0; bottom: auto; height: 64px; display: grid; grid-template-columns: repeat(5,minmax(0,1fr)); padding: 4px 8px env(safe-area-inset-bottom); border-top: 1px solid var(--product-line); border-radius: 0; background: rgba(255,255,255,.98); box-shadow: 0 -6px 20px rgba(20,45,33,.08); }
+  .product-surface .product-nav { position: fixed; z-index: 45; grid-area: auto; top: calc(100vh - 64px); top: calc(100dvh - 64px); left: 0; right: 0; bottom: auto; height: 64px; display: grid; grid-template-columns: repeat(6,minmax(0,1fr)); padding: 4px 8px env(safe-area-inset-bottom); border-top: 1px solid var(--product-line); border-radius: 0; background: rgba(255,255,255,.98); box-shadow: 0 -6px 20px rgba(20,45,33,.08); }
+  .product-surface .nav-redeem { min-width:0; margin-left:0; }
   .product-surface .nav-item { width: 100%; min-width: 0; height: 55px; display: flex; flex-direction: column; justify-content: center; gap: 3px; padding: 0 3px; font-size: 10px; }
   .product-surface .nav-item i { font-size: 15px; }
   .product-surface .workspace,

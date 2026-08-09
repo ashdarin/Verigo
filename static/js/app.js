@@ -41,6 +41,7 @@ const state = {
   onboardingTimer: null,
   workspace: { loaded: false },
   pendingView: null,
+  pendingRedemption: false,
   activeResultItem: null,
   history: { offset: 0, limit: 10, total: 0 },
   historyTimer: null,
@@ -1481,7 +1482,6 @@ function updateAccount() {
   el("dashboard-nav").classList.toggle("hidden", !state.user?.is_admin);
   el("admin-credits-nav").classList.toggle("hidden", !state.user?.is_admin);
   el("wallet-nav").classList.toggle("hidden", !state.user);
-  el("redeem-nav")?.classList.toggle("hidden", !state.user);
   el("workspace-nav").classList.toggle("hidden", !state.user);
   el("notification-button").classList.toggle("hidden", !state.user);
   el("claim-trial-button").classList.toggle(
@@ -1542,11 +1542,25 @@ el("dashboard-refresh").addEventListener("click", loadDashboardMetrics);
 async function loadWallet() { const data = await api("/api/wallet"); const set=(id,v)=>el(id).textContent=Number(v||0).toLocaleString("zh-CN"); set("wallet-available",data.available_verifications); el("wallet-paid").textContent=`${Number(data.paid_verifications||0).toLocaleString("zh-CN")} 次`; el("wallet-used").textContent=`${Number(data.paid_verifications_used||0).toLocaleString("zh-CN")} 次`; el("wallet-recharged").textContent=`¥${(Number(data.cumulative_recharge_fen||0)/100).toFixed(2)}`; el("wallet-value").textContent=`¥${Number(data.remaining_paid_value_yuan||0).toFixed(2)}`; el("wallet-spent").textContent=`¥${Number(data.paid_used_value_yuan||0).toFixed(2)}`; el("wallet-price").textContent=`100 次 ¥${(data.price_fen_per_100/100).toFixed(2)}`; el("wallet-trial-note").textContent=data.trial_verifications?`另有 ${data.trial_verifications} 体验次数`:"不含体验次数"; el("wallet-updated").textContent=`更新于 ${new Date().toLocaleString("zh-CN")}`; const days=data.usage_daily||[]; const max=Math.max(1,...days.map(x=>x.verifications)); el("wallet-usage-chart").innerHTML=days.map(x=>`<div class="wallet-bar" style="height:${Math.max(4,x.verifications/max*180)}px"><span>${x.verifications}</span></div>`).join(""); el("wallet-transactions").innerHTML=(data.transactions||[]).map(x=>`<div class="wallet-transaction"><div><strong>${x.title}</strong><small>${x.credits>0?"+":""}${x.credits} 次 ${x.note||""}</small></div><div><strong>${x.amount_fen==null?"—":`${x.credits<0?"-":"+"}¥${(x.amount_fen/100).toFixed(2)}`}</strong><small>${new Date(x.created_at).toLocaleString("zh-CN")}</small></div></div>`).join("")||"暂无资金流水"; }
 el("wallet-refresh").addEventListener("click", loadWallet);
 
+function focusRedemptionForm() {
+  window.setTimeout(() => {
+    el("wallet-redemption").scrollIntoView({ behavior: "smooth", block: "center" });
+    el("redemption-code").focus({ preventScroll: true });
+  }, 0);
+}
+
 el("redeem-nav")?.addEventListener("click", () => {
   el("account-menu").classList.add("hidden");
+  if (!state.user) {
+    state.pendingView = "wallet";
+    state.pendingRedemption = true;
+    setAuthMode("login");
+    el("auth-error").textContent = "请先登录后兑换验证额度";
+    el("auth-dialog").showModal();
+    return;
+  }
   switchView("wallet");
-  el("wallet-redemption").scrollIntoView({ behavior: "smooth", block: "center" });
-  el("redemption-code").focus({ preventScroll: true });
+  focusRedemptionForm();
 });
 
 el("redemption-code")?.addEventListener("input", (event) => {
@@ -2385,6 +2399,10 @@ el("auth-form").addEventListener("submit", async (event) => {
       const nextView = state.pendingView;
       state.pendingView = null;
       switchView(nextView);
+      if (state.pendingRedemption) {
+        state.pendingRedemption = false;
+        focusRedemptionForm();
+      }
     }
     if (state.user && state.view === "workspace") await loadWorkspaceHome();
   } catch (error) {

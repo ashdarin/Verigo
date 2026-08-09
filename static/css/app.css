@@ -58,7 +58,6 @@ button { cursor: pointer; }
 .account-menu button:hover { background: #faefee; }
 .account-menu .account-action { color: var(--ink); }
 .account-menu .account-action:hover { background: #edf6f1; }
-.account-menu .account-redeem { color: var(--accent-dark); font-weight: 750; }
 .account-menu .account-delete { color: var(--bad); }
 .notification-button { position: relative; min-height: 34px; padding: 0 9px; border: 1px solid var(--line); border-radius: 5px; background: #fff; color: var(--ink); font-size: 12px; font-weight: 700; }
 .notification-button:hover, .notification-button[aria-expanded="true"] { border-color: var(--accent); color: var(--accent); }
