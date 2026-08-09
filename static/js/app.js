@@ -1635,6 +1635,51 @@ el("admin-redemption-form")?.addEventListener("submit", async (event) => {
   } finally { submit.disabled = false; }
 });
 
+const companyCatalogState = { offset: 0, limit: 25, total: 0, hasMore: false };
+function companyCatalogQuery() {
+  const params = new URLSearchParams({ offset: String(companyCatalogState.offset), limit: String(companyCatalogState.limit) });
+  const fields = {
+    query: el("company-catalog-query")?.value,
+    country: el("company-catalog-country")?.value,
+    industry: el("company-catalog-industry")?.value,
+    size: el("company-catalog-size")?.value,
+    has_website: el("company-catalog-website")?.value,
+  };
+  Object.entries(fields).forEach(([key, value]) => { if (value) params.set(key, value.trim()); });
+  return params;
+}
+async function loadCompanyCatalog() {
+  const status = el("company-catalog-status");
+  const body = el("company-catalog-results");
+  if (!status || !body) return;
+  status.className = "admin-credit-result";
+  status.textContent = "正在查询公司目录…";
+  try {
+    const data = await api(`/api/admin/company-catalog/search?${companyCatalogQuery()}`);
+    companyCatalogState.total = Number(data.total || 0);
+    companyCatalogState.hasMore = Boolean(data.has_more);
+    body.replaceChildren();
+    (data.items || []).forEach((item) => {
+      const row = document.createElement("tr");
+      const cells = [item.name, [item.country, item.region, item.locality].filter(Boolean).join(" / "), item.industry || "-", item.size || "-", item.website || "-"];
+      cells.forEach((value) => { const cell = document.createElement("td"); cell.textContent = value; row.append(cell); });
+      body.append(row);
+    });
+    if (!body.children.length) { const row = document.createElement("tr"); const cell = document.createElement("td"); cell.colSpan = 5; cell.textContent = "没有匹配的公司"; row.append(cell); body.append(row); }
+    const page = Math.floor(companyCatalogState.offset / companyCatalogState.limit) + 1;
+    const totalLabel = companyCatalogState.hasMore ? `至少 ${companyCatalogState.total.toLocaleString("zh-CN")}` : companyCatalogState.total.toLocaleString("zh-CN");
+    el("company-catalog-page").textContent = `第 ${page} 页（${totalLabel} 家）`;
+    el("company-catalog-prev").disabled = companyCatalogState.offset === 0;
+    el("company-catalog-next").disabled = !companyCatalogState.hasMore;
+    status.classList.add("success"); status.textContent = "查询完成";
+  } catch (error) {
+    status.classList.add("error"); status.textContent = error.message;
+  }
+}
+el("company-catalog-form")?.addEventListener("submit", (event) => { event.preventDefault(); companyCatalogState.offset = 0; loadCompanyCatalog(); });
+el("company-catalog-prev")?.addEventListener("click", () => { companyCatalogState.offset = Math.max(0, companyCatalogState.offset - companyCatalogState.limit); loadCompanyCatalog(); });
+el("company-catalog-next")?.addEventListener("click", () => { companyCatalogState.offset += companyCatalogState.limit; loadCompanyCatalog(); });
+
 function showOnboardingStep(step) {
   const dialog = el("onboarding-dialog");
   document.querySelectorAll("[data-onboarding-step]").forEach((section) => {

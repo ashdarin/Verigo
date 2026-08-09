@@ -1,0 +1,22 @@
+[Unit]
+Description=Verigo private Company Finder catalogue API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+EnvironmentFile=/etc/verigo-company-finder/service.env
+WorkingDirectory=/opt/verigo-company-finder
+ExecStart=/opt/verigo-company-finder/.venv/bin/python -m uvicorn company_finder_service:app --host 127.0.0.1 --port 8010 --workers 1
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/opt/verigo-company-finder
+
+[Install]
+WantedBy=multi-user.target

@@ -17,6 +17,11 @@ Name/
 .venv/
 venv/
 __pycache__/
+free_company_dataset.csv
+company_catalog.duckdb
+company_catalog*.duckdb
+.env.local
+.tinyb
 *.py[cod]
 .pytest_cache/
 .mypy_cache/

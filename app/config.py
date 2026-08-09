@@ -212,6 +212,29 @@ class Settings:
     name_catalog_pool_size: int = max(
         100, int(os.getenv("VERIGO_NAME_CATALOG_POOL_SIZE", "10000"))
     )
+    # The company catalogue is a separately managed, read-only analytical
+    # database. It is never stored alongside account, billing, or job data.
+    company_catalog_enabled: bool = env_bool("VERIGO_COMPANY_CATALOG_ENABLED", False)
+    company_catalog_path: Path = Path(
+        os.getenv("VERIGO_COMPANY_CATALOG_PATH", str(BASE_DIR / "data" / "company_catalog.duckdb"))
+    )
+    company_catalog_query_memory_limit: str = os.getenv(
+        "VERIGO_COMPANY_CATALOG_QUERY_MEMORY_LIMIT", "512MB"
+    )
+    # Optional legacy Tinybird catalogue backend. Its token is server-only
+    # and must never be exposed through the browser or static files.
+    company_catalog_tinybird_url: str = os.getenv("VERIGO_COMPANY_CATALOG_TINYBIRD_URL", "").rstrip("/")
+    company_catalog_tinybird_token: str = os.getenv("VERIGO_COMPANY_CATALOG_TINYBIRD_TOKEN", "")
+    company_catalog_tinybird_timeout_seconds: float = max(
+        1.0, float(os.getenv("VERIGO_COMPANY_CATALOG_TINYBIRD_TIMEOUT_SECONDS", "8"))
+    )
+    # Optional private Company Finder service. Verigo reaches it over a
+    # server-to-server tunnel; it is never called by browser code.
+    company_catalog_service_url: str = os.getenv("VERIGO_COMPANY_CATALOG_SERVICE_URL", "").rstrip("/")
+    company_catalog_service_token: str = os.getenv("VERIGO_COMPANY_CATALOG_SERVICE_TOKEN", "")
+    company_catalog_service_timeout_seconds: float = max(
+        1.0, float(os.getenv("VERIGO_COMPANY_CATALOG_SERVICE_TIMEOUT_SECONDS", "8"))
+    )
     smtp_limiter_path: Path = Path(
         os.getenv("VERIGO_SMTP_LIMITER_PATH", str(BASE_DIR / "data" / "smtp_limiter.db"))
     )

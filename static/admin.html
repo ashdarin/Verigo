@@ -138,6 +138,20 @@
         <form id="admin-redemption-form" class="admin-redemption-form"><label for="admin-redemption-amount">面额与邮箱额度</label><select id="admin-redemption-amount"><option value="5">¥5 · 1,000 个邮箱</option><option value="10">¥10 · 2,000 个邮箱</option><option value="20">¥20 · 4,000 个邮箱</option><option value="50">¥50 · 10,000 个邮箱</option><option value="100">¥100 · 20,000 个邮箱</option></select><label for="admin-redemption-quantity">生成数量</label><input id="admin-redemption-quantity" type="number" min="1" max="100" value="1"><button id="admin-redemption-submit" class="primary-action" type="submit">生成兑换码</button></form>
         <div id="admin-redemption-result" class="admin-redemption-result hidden" aria-live="polite"></div>
       </section>
+      <section class="admin-redemption-card company-catalog-card" aria-labelledby="company-catalog-heading">
+        <div><p class="eyebrow">Company Finder MVP</p><h2 id="company-catalog-heading">公司目录筛选</h2><p>仅管理员内测。按行业、国家和公司规模筛选公司基础信息；不会展示来源链接，也不会批量导出。</p></div>
+        <form id="company-catalog-form" class="admin-company-catalog-form">
+          <label>公司名称或关键词<input id="company-catalog-query" type="search" maxlength="120" placeholder="例如：software"></label>
+          <label>国家/地区<input id="company-catalog-country" type="text" maxlength="80" placeholder="例如：united states"></label>
+          <label>行业<input id="company-catalog-industry" type="text" maxlength="160" placeholder="例如：software"></label>
+          <label>公司规模<input id="company-catalog-size" type="text" maxlength="40" placeholder="例如：51-200"></label>
+          <label>官网<select id="company-catalog-website"><option value="">不限</option><option value="true">有官网</option><option value="false">无官网</option></select></label>
+          <button class="primary-action" type="submit">筛选公司</button>
+        </form>
+        <p id="company-catalog-status" class="admin-credit-result" role="status"></p>
+        <div class="admin-company-catalog-table-wrap"><table class="admin-company-catalog-table"><thead><tr><th>公司</th><th>国家/地区</th><th>行业</th><th>规模</th><th>官网</th></tr></thead><tbody id="company-catalog-results"></tbody></table></div>
+        <div class="admin-company-catalog-pagination"><button id="company-catalog-prev" class="download-action" type="button" disabled>上一页</button><span id="company-catalog-page">-</span><button id="company-catalog-next" class="download-action" type="button" disabled>下一页</button></div>
+      </section>
       <section id="admin-account-summary" class="admin-account-summary"><div class="report-card-heading"><div><h2>功能使用趋势</h2><p>单个验证、批量验证与工作邮箱查找</p></div></div><div id="admin-feature-chart" class="admin-feature-chart"></div><div id="admin-feature-legend" class="report-legend"></div></section>
       <section class="admin-accounts-section"><div class="report-card-heading"><div><h2>全部账户</h2><p id="admin-accounts-meta">按注册时间排序</p></div><button id="admin-accounts-refresh" class="download-action" type="button">刷新</button></div><div id="admin-accounts-list" class="admin-accounts-list"></div><div class="pagination"><span id="admin-accounts-page"></span><div><button id="admin-accounts-prev" class="page-button" type="button">上一页</button><span id="admin-accounts-pages" class="page-numbers"></span><button id="admin-accounts-next" class="page-button" type="button">下一页</button></div></div></section>
     </section>

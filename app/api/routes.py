@@ -45,6 +45,8 @@ from app.api.schemas import (
     ProspectingCompanyImportResponse,
     ProspectingCompanyPageResponse,
     ProspectingCompanyUpdateRequest,
+    CompanyCatalogFacetResponse,
+    CompanyCatalogSearchResponse,
     SavedProspectingContactsResponse,
     ResultsResponse,
     ListCreateRequest, ListUpdateRequest, ListResultIdsRequest, SaveJobResultRequest, SaveJobResultsRequest, ReverifyRequest,
@@ -89,6 +91,7 @@ from app.db.domain_previews import domain_preview_store
 from app.db.jobs import Job, job_store, utc_now
 from app.db.metrics import metrics_store
 from app.db.prospecting import ProspectingRun, prospecting_store
+from app.db import company_catalog
 from app.db.result_objects import result_object_store
 from app.tasks.verification import (
     clean_emails,
@@ -928,6 +931,55 @@ def create_redemption_codes(
         admin.id, payload.amount_yuan, payload.quantity
     )
     return AdminRedemptionCodeCreateResponse(**result)
+
+
+@router.get("/admin/company-catalog/status")
+def company_catalog_status(_: Annotated[User, Depends(require_admin)]) -> dict[str, object]:
+    try:
+        return company_catalog.status()
+    except company_catalog.CompanyCatalogUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.get("/admin/company-catalog/search", response_model=CompanyCatalogSearchResponse)
+def search_company_catalog(
+    _: Annotated[User, Depends(require_admin)],
+    country: str | None = Query(default=None, max_length=80),
+    industry: str | None = Query(default=None, max_length=160),
+    region: str | None = Query(default=None, max_length=160),
+    size: str | None = Query(default=None, max_length=40),
+    query: str | None = Query(default=None, max_length=120),
+    has_website: bool | None = Query(default=None),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=25, ge=1, le=50),
+) -> CompanyCatalogSearchResponse:
+    try:
+        total, items, has_more = company_catalog.search(
+            country=country, industry=industry, region=region, size=size, query=query,
+            has_website=has_website, offset=offset, limit=limit,
+        )
+    except company_catalog.CompanyCatalogUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return CompanyCatalogSearchResponse(
+        total=total, offset=offset, limit=limit, items=items, has_more=has_more,
+    )
+
+
+@router.get("/admin/company-catalog/facets/{facet}", response_model=CompanyCatalogFacetResponse)
+def company_catalog_facets(
+    facet: str,
+    _: Annotated[User, Depends(require_admin)],
+    country: str | None = Query(default=None, max_length=80),
+    industry: str | None = Query(default=None, max_length=160),
+) -> CompanyCatalogFacetResponse:
+    try:
+        return CompanyCatalogFacetResponse(items=company_catalog.facets(
+            facet, country=country, industry=industry,
+        ))
+    except company_catalog.CompanyCatalogUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.post("/discovery/candidates", response_model=DiscoveryResponse)

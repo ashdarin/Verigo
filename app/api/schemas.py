@@ -256,6 +256,18 @@ class ProspectingCompanyDiscoverRequest(BaseModel):
         return normalize_country(value)
 
 
+class CompanyCatalogSearchResponse(BaseModel):
+    total: int
+    offset: int
+    limit: int
+    items: list[dict[str, Any]]
+    has_more: bool = False
+
+
+class CompanyCatalogFacetResponse(BaseModel):
+    items: list[dict[str, Any]]
+
+
 class PaymentOrderRequest(BaseModel):
     packages: int = Field(ge=1, le=1000)
 
