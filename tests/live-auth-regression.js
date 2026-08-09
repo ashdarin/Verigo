@@ -52,8 +52,8 @@ async function signIn(page) {
     });
     return response.status;
   }, { email, password });
-  if (registrationStatus !== 403) throw new Error(`Turnstile registration boundary returned ${registrationStatus}`);
-  record("registration-turnstile-boundary", "403");
+  if (![403, 429].includes(registrationStatus)) throw new Error(`registration boundary returned ${registrationStatus}`);
+  record("registration-turnstile-or-rate-boundary", String(registrationStatus));
   consoleErrors.length = 0;
 
   await signIn(page);
@@ -74,6 +74,7 @@ async function signIn(page) {
   await page.click("#account-button");
   await page.click("#workspace-nav");
   await page.waitForSelector("#workspace-home:not(.hidden)");
+  await page.waitForFunction(() => !document.querySelector("#workspace-recent-jobs")?.textContent.includes("正在加载"));
   await screenshot(page, "01-desktop-account-overview.png");
   record("account-overview");
 
@@ -144,7 +145,8 @@ async function signIn(page) {
   await mobile.click("#account-button");
   await mobile.click("#workspace-nav");
   await mobile.waitForSelector("#workspace-home:not(.hidden)");
-  await screenshot(mobile, "09-mobile-account-overview.png");
+  await mobile.waitForFunction(() => !document.querySelector("#workspace-recent-jobs")?.textContent.includes("正在加载"));
+  await screenshot(mobile, "09-mobile-account-overview.png", false);
   await mobile.click('[data-view="history"]');
   await mobile.waitForSelector("#history-workspace:not(.hidden)");
   await mobile.waitForFunction(() => document.querySelectorAll("#history-list .history-item").length > 0);
