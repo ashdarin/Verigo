@@ -24,6 +24,9 @@ const state = {
   turnstileWidgetId: null,
   notifications: [],
   notificationTimer: null,
+  notificationLoading: false,
+  notificationUnread: 0,
+  notificationTotal: 0,
   recentJobs: { offset: 0, limit: 8, total: 0 },
   adminAccountOffset: 0,
   retryCountdownTimer: null,
@@ -1469,7 +1472,7 @@ function updateAccount() {
   );
   el("recent-block").classList.toggle("hidden", !state.user);
   el("account-menu").classList.add("hidden");
-  el("notification-menu").classList.add("hidden");
+  closeNotificationMenu();
   clearInterval(state.notificationTimer);
   state.notificationTimer = null;
   if (state.user) {
@@ -1623,81 +1626,180 @@ async function loadAdminAccounts(){try{const data=await api(`/api/admin/accounts
 async function loadAdminFeatureUsage(){const data=await api("/api/admin/feature-usage");const days=data.daily||[];const width=620,height=350,p={top:18,right:12,bottom:30,left:30},max=Math.max(1,...days.flatMap(day=>[day.single,day.batch,day.discovery]));const x=index=>p.left+(days.length>1?index*(width-p.left-p.right)/(days.length-1):(width-p.left-p.right)/2),point=(value,index)=>`${x(index)},${p.top+(height-p.top-p.bottom)*(1-value/max)}`;const series=[["single","single"],["batch","batch"],["discovery","discovery"]];const grid=[0,.5,1].map(step=>{const y=p.top+(height-p.top-p.bottom)*step;return `<line class="admin-feature-grid" x1="${p.left}" y1="${y}" x2="${width-p.right}" y2="${y}"/><text class="admin-feature-axis" x="0" y="${y+4}">${Math.round(max*(1-step))}</text>`;}).join("");const labels=days.map((day,index)=>index%2&&days.length>8?"":`<text class="admin-feature-axis" text-anchor="middle" x="${x(index)}" y="${height-8}">${day.day.slice(5).replace("-","/")}</text>`).join("");const lines=series.map(([key,name])=>`<polyline class="admin-feature-line-${name}" points="${days.map((day,index)=>point(day[key],index)).join(" ")}" fill="none" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>${days.map((day,index)=>{const [px,py]=point(day[key],index).split(",");return `<circle cx="${px}" cy="${py}" r="3" fill="currentColor" class="admin-feature-line-${name}"><title>${day.day} ${key} ${day[key]}</title></circle>`;}).join("")}`).join("");el("admin-feature-chart").innerHTML=`<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="功能使用趋势">${grid}${lines}${labels}</svg>`;el("admin-feature-legend").innerHTML=`<span>单个 ${data.totals.single}</span><span>批量 ${data.totals.batch}</span><span>查找 ${data.totals.discovery}</span>`;}
 el("admin-accounts-refresh").addEventListener("click",()=>{state.adminAccountOffset=0;loadAdminAccounts();});el("admin-accounts-prev").addEventListener("click",()=>{state.adminAccountOffset=Math.max(0,state.adminAccountOffset-50);loadAdminAccounts();});el("admin-accounts-next").addEventListener("click",()=>{state.adminAccountOffset+=50;loadAdminAccounts();});
 el("admin-account-lookup").addEventListener("click", async()=>{try{await api(`/api/admin/accounts?email=${encodeURIComponent(el("admin-credit-email").value)}`);}catch(error){el("admin-credit-result").textContent=error.message;}});
+function notificationUiText(zh, en) {
+  return VerigoI18n.locale === "en" ? en : zh;
+}
+
+function notificationPresentation(notification) {
+  if (notification.kind === "verification_review") return {
+    icon: "fa-solid fa-rotate", tone: "review", action: notificationUiText("查看结果", "View result"), destination: "result",
+  };
+  if (notification.kind === "payment") return {
+    icon: "fa-solid fa-receipt", tone: "payment", action: notificationUiText("查看账单", "View billing"), destination: "wallet",
+  };
+  if (notification.kind === "credit_grant" || notification.kind === "credit_deduction") return {
+    icon: "fa-solid fa-coins", tone: "credit", action: notificationUiText("查看额度", "View credits"), destination: "wallet",
+  };
+  return { icon: "fa-regular fa-bell", tone: "info", action: "", destination: null };
+}
+
+function updateNotificationChrome() {
+  const count = el("notification-count");
+  count.textContent = state.notificationUnread > 99 ? "99+" : String(state.notificationUnread);
+  count.classList.toggle("hidden", !state.notificationUnread);
+  el("notification-summary").textContent = state.notificationUnread
+    ? notificationUiText(`${state.notificationUnread} 条未读`, `${state.notificationUnread} unread`)
+    : notificationUiText("没有未读通知", "No unread notifications");
+  el("notification-mark-all").disabled = state.notificationLoading || !state.notificationUnread;
+  el("notification-heading-title").textContent = notificationUiText("通知", "Notifications");
+  el("notification-mark-all").textContent = notificationUiText("全部已读", "Mark all read");
+  el("notification-menu").setAttribute("aria-label", notificationUiText("通知中心", "Notification center"));
+  el("notification-close").setAttribute("aria-label", notificationUiText("关闭通知", "Close notifications"));
+  el("notification-close").title = notificationUiText("关闭通知", "Close notifications");
+}
+
+function closeNotificationMenu() {
+  el("notification-menu")?.classList.add("hidden");
+  el("notification-button")?.setAttribute("aria-expanded", "false");
+}
+
+function setNotificationFeedback(message = "", retry = false) {
+  const feedback = el("notification-feedback");
+  feedback.replaceChildren();
+  feedback.classList.toggle("hidden", !message);
+  if (!message) return;
+  const copy = document.createElement("span"); copy.textContent = message; feedback.append(copy);
+  if (retry) {
+    const button = document.createElement("button"); button.type = "button";
+    button.textContent = notificationUiText("重试", "Retry");
+    button.addEventListener("click", loadNotifications); feedback.append(button);
+  }
+}
+
+async function markNotificationRead(notification) {
+  if (notification.read_at) return;
+  notification.read_at = new Date().toISOString();
+  state.notificationUnread = Math.max(0, state.notificationUnread - 1);
+  updateNotificationChrome(); renderNotifications();
+  try {
+    await api(`/api/notifications/${notification.id}/read`, { method: "POST" });
+  } catch (error) {
+    notification.read_at = null;
+    state.notificationUnread += 1;
+    updateNotificationChrome(); renderNotifications();
+    throw error;
+  }
+}
+
+async function openNotification(notification) {
+  const presentation = notificationPresentation(notification);
+  try {
+    await markNotificationRead(notification);
+    if (presentation.destination === "wallet") {
+      closeNotificationMenu(); switchView("wallet"); return;
+    }
+    if (presentation.destination !== "result" || !notification.target_job_id || !Number.isInteger(notification.target_result_index)) return;
+    closeNotificationMenu();
+    switchView("single");
+    el("result-search").value = ""; el("result-filter").value = "all";
+    state.jobId = notification.target_job_id;
+    state.guestToken = null;
+    state.page = Math.floor(notification.target_result_index / pageSize);
+    sessionStorage.setItem("verigo_job_id", state.jobId);
+    const job = await api(`/api/jobs/${state.jobId}`);
+    showJob(job); await loadResults();
+    const result = state.results.find((item) => Number(item.original_index) === notification.target_result_index);
+    if (result) openResultDetails(result);
+    await api(`/api/jobs/${state.jobId}/results/${notification.target_result_index}/reviewed`, { method: "POST" });
+  } catch (error) {
+    const message = error.message || notificationUiText("通知操作失败", "Notification action failed");
+    errorBox.textContent = message;
+    setNotificationFeedback(message, true);
+  }
+}
+
 function renderNotifications() {
   const list = el("notification-list");
-  list.replaceChildren();
+  list.replaceChildren(); updateNotificationChrome();
   if (!state.notifications.length) {
-    const empty = document.createElement("p");
-    empty.className = "notification-empty";
-    empty.textContent = VerigoI18n.text("暂无通知");
-    list.append(empty);
-    return;
+    const empty = document.createElement("div"); empty.className = "notification-empty";
+    empty.innerHTML = '<i class="fa-regular fa-bell" aria-hidden="true"></i>';
+    const title = document.createElement("strong"); title.textContent = notificationUiText("暂无通知", "No notifications");
+    const copy = document.createElement("span"); copy.textContent = notificationUiText("重要的验证与账户更新会出现在这里。", "Verification and account updates will appear here.");
+    empty.append(title, copy); list.append(empty); return;
   }
   state.notifications.forEach((notification) => {
-    const item = document.createElement("article");
-    item.className = "notification-item";
-    if (notification.target_job_id && notification.target_result_index !== null) {
-      item.classList.add("targeted");
-      item.title = notification.target_email || "查看对应邮箱";
-      item.addEventListener("click", async () => {
-        try {
-          state.jobId = notification.target_job_id;
-          state.guestToken = null;
-          sessionStorage.setItem("verigo_job_id", state.jobId);
-          const job = await api(`/api/jobs/${state.jobId}`);
-          state.page = Math.floor((notification.target_result_index || 0) / pageSize);
-          showJob(job); await loadResults();
-          await api(`/api/notifications/${notification.id}/read`, { method: "POST" });
-          await api(`/api/jobs/${state.jobId}/results/${notification.target_result_index}/reviewed`, { method: "POST" });
-          await loadNotifications();
-        } catch (error) {
-          errorBox.textContent = error.message;
-        }
-      });
-    }
-    const title = document.createElement("strong");
-    title.textContent = VerigoI18n.notificationTitle(notification);
-    const body = document.createElement("p");
-    body.textContent = VerigoI18n.notificationBody(notification);
-    const time = document.createElement("time");
-    time.textContent = VerigoI18n.formatDate(notification.created_at);
-    item.append(title, body, time);
-    list.append(item);
+    const presentation = notificationPresentation(notification);
+    const item = document.createElement("button"); item.type = "button";
+    item.className = `notification-item notification-${presentation.tone}${notification.read_at ? " is-read" : " is-unread"}`;
+    item.addEventListener("click", () => openNotification(notification));
+    const icon = document.createElement("span"); icon.className = "notification-icon";
+    icon.innerHTML = `<i class="${presentation.icon}" aria-hidden="true"></i>`;
+    const content = document.createElement("span"); content.className = "notification-copy";
+    const title = document.createElement("strong"); title.textContent = VerigoI18n.notificationTitle(notification);
+    const body = document.createElement("span"); body.className = "notification-body"; body.textContent = VerigoI18n.notificationBody(notification);
+    const meta = document.createElement("span"); meta.className = "notification-meta";
+    const time = document.createElement("time"); time.textContent = VerigoI18n.formatDate(notification.created_at);
+    meta.append(time);
+    if (presentation.action) { const action = document.createElement("span"); action.className = "notification-action"; action.textContent = presentation.action; meta.append(action); }
+    content.append(title, body, meta);
+    const unread = document.createElement("span"); unread.className = "notification-unread-dot"; unread.setAttribute("aria-hidden", "true");
+    item.append(icon, content, unread); list.append(item);
   });
 }
 
 window.addEventListener("verigo:localechange", renderNotifications);
 
 async function loadNotifications() {
-  if (!state.user) return;
+  if (!state.user || state.notificationLoading) return;
+  state.notificationLoading = true; updateNotificationChrome(); setNotificationFeedback();
+  if (!state.notifications.length) {
+    el("notification-list").innerHTML = `<div class="notification-loading"><i class="fa-solid fa-circle-notch fa-spin" aria-hidden="true"></i><span>${notificationUiText("正在加载通知", "Loading notifications")}</span></div>`;
+  }
   try {
     const payload = await api("/api/notifications");
-    state.notifications = payload.items;
-    el("notification-count").textContent = payload.unread_count > 99 ? "99+" : String(payload.unread_count);
-    el("notification-count").classList.toggle("hidden", !payload.unread_count);
+    state.notifications = payload.items || [];
+    state.notificationUnread = Number(payload.unread_count || 0);
+    state.notificationTotal = Number(payload.total || state.notifications.length);
     renderNotifications();
-    await loadRecentJobs();
-  } catch (_) {
-    state.notifications = [];
+  } catch (error) {
+    setNotificationFeedback(error.message || notificationUiText("通知加载失败", "Unable to load notifications"), true);
+    if (!state.notifications.length) renderNotifications();
+  } finally {
+    state.notificationLoading = false; updateNotificationChrome();
   }
 }
 
 el("notification-button").addEventListener("click", async () => {
   const menu = el("notification-menu");
   const opening = menu.classList.contains("hidden");
-  menu.classList.toggle("hidden", !opening);
+  if (!opening) { closeNotificationMenu(); return; }
+  menu.classList.remove("hidden");
+  el("notification-button").setAttribute("aria-expanded", "true");
   el("account-menu").classList.add("hidden");
-  if (!opening) return;
   await loadNotifications();
 });
+el("notification-close").addEventListener("click", closeNotificationMenu);
+el("notification-mark-all").addEventListener("click", async () => {
+  if (!state.notificationUnread) return;
+  const previous = state.notifications.map((notification) => notification.read_at);
+  state.notifications.forEach((notification) => { if (!notification.read_at) notification.read_at = new Date().toISOString(); });
+  const unread = state.notificationUnread; state.notificationUnread = 0; renderNotifications();
+  try { await api("/api/notifications/read", { method: "POST" }); }
+  catch (error) {
+    state.notifications.forEach((notification, index) => { notification.read_at = previous[index]; });
+    state.notificationUnread = unread; renderNotifications();
+    setNotificationFeedback(error.message || notificationUiText("无法标记为已读", "Unable to mark as read"), true);
+  }
+});
 document.addEventListener("click", (event) => {
-  if (!el("notification-menu").contains(event.target) && !el("notification-button").contains(event.target)) el("notification-menu").classList.add("hidden");
+  if (!el("notification-menu").contains(event.target) && !el("notification-button").contains(event.target)) closeNotificationMenu();
   if (!el("account-menu").contains(event.target) && !el("account-button").contains(event.target)) el("account-menu").classList.add("hidden");
   const drawer = el("result-detail-drawer");
   if (drawer?.classList.contains("open") && event.target === drawer) closeResultDetails();
 });
 document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape") { el("notification-menu").classList.add("hidden"); el("account-menu").classList.add("hidden"); closeResultDetails(); }
+  if (event.key === "Escape") { closeNotificationMenu(); el("account-menu").classList.add("hidden"); closeResultDetails(); }
 });
 el("admin-credit-grant-form").addEventListener("submit", async (event) => {
   event.preventDefault();

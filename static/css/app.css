@@ -60,9 +60,30 @@ button { cursor: pointer; }
 .account-menu .account-action:hover { background: #edf6f1; }
 .account-menu .account-delete { color: var(--bad); }
 .notification-button { position: relative; min-height: 34px; padding: 0 9px; border: 1px solid var(--line); border-radius: 5px; background: #fff; color: var(--ink); font-size: 12px; font-weight: 700; }
-.notification-button:hover { border-color: var(--accent); color: var(--accent); }.notification-count { display: inline-grid; min-width: 16px; height: 16px; margin-left: 4px; place-items: center; border-radius: 8px; background: var(--bad); color: #fff; font-size: 10px; font-variant-numeric: tabular-nums; }
-.notification-menu { position: absolute; z-index: 20; top: 43px; right: 84px; width: min(360px, calc(100vw - 32px)); max-height: 380px; overflow: auto; border: 1px solid var(--line); border-radius: 6px; background: #fff; box-shadow: var(--shadow); color: var(--ink); }.notification-list { display: grid; }.notification-item { padding: 12px 13px; border-bottom: 1px solid var(--line); }.notification-item:last-child { border-bottom: 0; }.notification-item strong { display: block; font-size: 13px; }.notification-item p { margin: 5px 0 0; color: var(--muted); font-size: 12px; line-height: 1.45; }.notification-item time { display: block; margin-top: 6px; color: var(--muted); font-size: 10px; }.notification-empty { padding: 18px 13px; color: var(--muted); font-size: 12px; }
-.notification-item.targeted { cursor: pointer; }.notification-item.targeted:hover { background: #fff8f5; }.result-email-update { display: inline-block; width: 8px; height: 8px; margin-left: 7px; border-radius: 50%; background: var(--bad); vertical-align: middle; }
+.notification-button:hover, .notification-button[aria-expanded="true"] { border-color: var(--accent); color: var(--accent); }
+.notification-count { position: absolute; top: -5px; right: -5px; display: inline-grid; min-width: 17px; height: 17px; padding: 0 4px; place-items: center; border: 2px solid #fff; border-radius: 9px; background: var(--bad); color: #fff; font-size: 9px; font-variant-numeric: tabular-nums; }
+.notification-menu { position: absolute; z-index: 50; top: 43px; right: 84px; width: min(410px, calc(100vw - 32px)); max-height: min(560px, calc(100vh - 80px)); display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--line); border-radius: 7px; background: #fff; box-shadow: 0 20px 55px rgba(24,48,37,.17); color: var(--ink); }
+.notification-heading { min-height: 65px; display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px 14px; border-bottom: 1px solid var(--line); background: #fbfcfb; }
+.notification-heading > div:first-child { min-width: 0; display: grid; gap: 3px; }
+.notification-heading strong { font-size: 15px; }.notification-heading small { color: var(--muted); font-size: 11px; }
+.notification-heading-actions { display: flex; align-items: center; gap: 5px; }
+.notification-mark-all, .notification-close { min-height: 32px; border: 0; border-radius: 4px; background: transparent; color: var(--accent-dark); font-size: 11px; font-weight: 700; }
+.notification-mark-all { padding: 0 8px; }.notification-close { width: 32px; padding: 0; display: grid; place-items: center; color: var(--muted); }
+.notification-mark-all:hover, .notification-close:hover { background: #e8f3ec; }.notification-mark-all:disabled { color: #a4ada8; background: transparent; cursor: default; }
+.notification-feedback { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 14px; border-bottom: 1px solid #f0d0cd; background: #fff3f2; color: var(--bad); font-size: 11px; }
+.notification-feedback button { padding: 4px 7px; border: 1px solid #ddb4b0; border-radius: 4px; background: #fff; color: var(--bad); font-size: 11px; }
+.notification-list { min-height: 96px; display: grid; overflow-y: auto; overscroll-behavior: contain; }
+.notification-item { width: 100%; min-height: 92px; display: grid; grid-template-columns: 38px minmax(0,1fr) 8px; align-items: start; gap: 11px; padding: 14px; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: #fff; color: var(--ink); text-align: left; }
+.notification-item:last-child { border-bottom: 0; }.notification-item:hover, .notification-item:focus-visible { background: #f5faf7; outline: 0; }
+.notification-item.is-unread { background: #f3faf6; }.notification-item.is-unread:hover { background: #eaf6ef; }
+.notification-icon { width: 36px; height: 36px; display: grid; place-items: center; border-radius: 6px; background: #edf3ef; color: #53645b; }
+.notification-review .notification-icon { background: #e5f4eb; color: var(--accent-dark); }.notification-payment .notification-icon, .notification-credit .notification-icon { background: #edf5e4; color: #557322; }
+.notification-copy { min-width: 0; display: grid; gap: 4px; }.notification-copy strong { overflow-wrap: anywhere; font-size: 13px; line-height: 1.35; }.notification-body { color: var(--muted); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.notification-meta { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 3px; }.notification-meta time { color: #89938e; font-size: 10px; }.notification-action { color: var(--accent-dark); font-size: 10px; font-weight: 750; }
+.notification-unread-dot { width: 7px; height: 7px; margin-top: 5px; border-radius: 50%; background: transparent; }.notification-item.is-unread .notification-unread-dot { background: var(--accent); }
+.notification-empty, .notification-loading { min-height: 150px; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 8px; padding: 24px; color: var(--muted); text-align: center; }
+.notification-empty i { color: #9aaba2; font-size: 21px; }.notification-empty strong { color: var(--ink); font-size: 13px; }.notification-empty span, .notification-loading span { max-width: 260px; font-size: 11px; line-height: 1.5; }
+.result-email-update { display: inline-block; width: 8px; height: 8px; margin-left: 7px; border-radius: 50%; background: var(--bad); vertical-align: middle; }
 .confirm-delete { display: flex; align-items: flex-start; gap: 8px; margin: 16px 0; font-weight: 500; line-height: 1.45; }
 .confirm-delete input { width: auto; min-height: 0; margin-top: 3px; }
 .danger-primary { background: var(--bad); }

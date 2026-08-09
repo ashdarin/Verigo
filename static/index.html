@@ -17,8 +17,8 @@
   <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"Organization","name":"Verigo","url":"https://verigo.site/","logo":"https://verigo.site/static/favicon.svg"},{"@type":"WebApplication","name":"Verigo","url":"https://verigo.site/","applicationCategory":"BusinessApplication","operatingSystem":"Web","description":"面向销售、招聘与出海团队的邮箱验证、名单清洗和企业邮箱查找工具。","offers":{"@type":"Offer","price":"0.50","priceCurrency":"CNY","description":"100 次批量验证"}},{"@type":"FAQPage","mainEntity":[{"@type":"Question","name":"Catch-all 邮箱是什么意思？","acceptedAnswer":{"@type":"Answer","text":"Catch-all 是企业邮箱域名的一种设置：发往该域名的任意前缀都可能被服务器接收或转发，因此无法仅凭服务器响应确认某个具体收件人真实存在。"}},{"@type":"Question","name":"企业邮箱查找和普通验证有什么区别？","acceptedAnswer":{"@type":"Answer","text":"普通验证用于确认已有邮箱是否可用；企业邮箱查找用于获取目标企业的业务联络邮箱，适合销售开发、招聘和商务合作。"}}]}]}</script>
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" referrerpolicy="no-referrer">
-  <link rel="stylesheet" href="/static/css/app.css?v=cloudshell-crm-v1">
-  <link rel="stylesheet" href="/static/css/product.css?v=product-shell-v3">
+  <link rel="stylesheet" href="/static/css/app.css?v=notification-center-v1">
+  <link rel="stylesheet" href="/static/css/product.css?v=notification-center-v1">
 </head>
 <body class="product-surface">
   <header class="topbar">
@@ -36,9 +36,19 @@
     <div class="account-area">
       <button id="locale-toggle" class="locale-toggle" type="button" aria-label="Switch to English" title="Switch to English"><i class="fa-solid fa-globe" aria-hidden="true"></i><span id="locale-code">CN</span></button>
       <button id="claim-trial-button" class="claim-trial hidden" type="button">验证邮箱领取体验额度</button>
-      <button id="notification-button" class="notification-button hidden" type="button" aria-label="通知"><i class="fa-regular fa-bell" aria-hidden="true"></i><span class="sr-only">通知</span><span id="notification-count" class="notification-count hidden"></span></button>
+      <button id="notification-button" class="notification-button hidden" type="button" aria-label="通知" aria-controls="notification-menu" aria-expanded="false"><i class="fa-regular fa-bell" aria-hidden="true"></i><span class="sr-only">通知</span><span id="notification-count" class="notification-count hidden"></span></button>
       <button id="account-button" class="account-button" type="button">登录</button>
-      <div id="notification-menu" class="notification-menu hidden" aria-live="polite"><div id="notification-list" class="notification-list"></div></div>
+      <section id="notification-menu" class="notification-menu hidden" aria-label="通知中心">
+        <div class="notification-heading">
+          <div><strong id="notification-heading-title">通知</strong><small id="notification-summary">没有未读通知</small></div>
+          <div class="notification-heading-actions">
+            <button id="notification-mark-all" class="notification-mark-all" type="button">全部已读</button>
+            <button id="notification-close" class="notification-close" type="button" aria-label="关闭通知" title="关闭通知"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
+          </div>
+        </div>
+        <div id="notification-feedback" class="notification-feedback hidden" role="status"></div>
+        <div id="notification-list" class="notification-list" aria-live="polite"></div>
+      </section>
       <div id="account-menu" class="account-menu hidden">
         <div class="account-summary"><strong id="account-name"></strong><small id="account-credits" class="account-credits"></small></div>
         <button id="workspace-nav" class="account-action hidden" type="button" data-view="workspace"><i class="fa-solid fa-house" aria-hidden="true"></i>账户概览</button>
@@ -575,6 +585,6 @@
   </dialog>
 
   <script src="/static/js/i18n.js?v=locale-v1" defer></script>
-  <script src="/static/js/app.js?v=cloudshell-crm-v1" defer></script>
+  <script src="/static/js/app.js?v=notification-center-v1" defer></script>
 </body>
 </html>

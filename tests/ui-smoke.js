@@ -1,5 +1,6 @@
 const { chromium } = require("playwright");
-const BASE_URL = process.env.VERIGO_UI_BASE || "http://127.0.0.1:8000";
+const BASE_URL = process.env.VERIGO_UI_BASE || "http://127.0.0.1:8000/verify";
+const BASE_ORIGIN = new URL(BASE_URL).origin;
 
 async function checkViewport(browser, name, width, height) {
   const page = await browser.newPage({ viewport: { width, height } });
@@ -186,7 +187,7 @@ async function checkEnglishLocale(browser) {
     }),
   }));
   await page.goto(BASE_URL, { waitUntil: "networkidle" });
-  await page.click("#locale-toggle");
+  await page.evaluate(() => document.querySelector("#locale-toggle").click());
   await page.fill("#single-email-input", "locale-check@yahoo.com");
   await page.click("#start-button");
   await page.waitForFunction(() => document.querySelectorAll("#results-body td").length >= 3);
@@ -228,7 +229,7 @@ async function checkEnglishDiscoveryAndDocs(browser) {
   await page.route("**/api/jobs?offset=0&limit=8", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ total: 0, offset: 0, limit: 8, items: [] }) }));
   await page.route("**/api/notifications", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: [], unread_count: 0 }) }));
   await page.goto(BASE_URL, { waitUntil: "networkidle" });
-  await page.click("#locale-toggle");
+  await page.evaluate(() => document.querySelector("#locale-toggle").click());
   await page.click('[data-view="batch"]');
   await page.fill("#email-input", "coverage@qq.com");
   await page.click('[data-view="discovery"]');
@@ -245,7 +246,7 @@ async function checkEnglishDiscoveryAndDocs(browser) {
   await page.close();
 
   const docs = await browser.newPage({ viewport: { width: 390, height: 844 } });
-  await docs.goto(`${BASE_URL}/api-docs`, { waitUntil: "domcontentloaded" });
+  await docs.goto(`${BASE_ORIGIN}/api-docs`, { waitUntil: "domcontentloaded" });
   await docs.click("#docs-locale-toggle");
   const documentation = await docs.evaluate(() => ({
     lang: document.documentElement.lang,
@@ -344,7 +345,7 @@ async function checkDashboard(browser) {
       })),
     }),
   }));
-  await page.goto(`${BASE_URL}/dashboard`, { waitUntil: "networkidle" });
+  await page.goto(`${BASE_ORIGIN}/dashboard`, { waitUntil: "networkidle" });
   await page.waitForSelector("#dashboard-workspace:not(.hidden)");
   const result = await page.evaluate(() => ({
     title: document.title,
@@ -381,7 +382,7 @@ async function checkAdminCredits(browser) {
       paid_credits: 25, reference: "admin_grant:smoke", created_at: new Date().toISOString(),
     }),
   }));
-  await page.goto(`${BASE_URL}/admin/credits`, { waitUntil: "networkidle" });
+  await page.goto(`${BASE_ORIGIN}/admin/credits`, { waitUntil: "networkidle" });
   await page.waitForSelector("#admin-credits-workspace:not(.hidden)");
   await page.fill("#admin-credit-email", "customer@example.com");
   await page.fill("#admin-credit-amount", "25");
@@ -399,9 +400,60 @@ async function checkAdminCredits(browser) {
   return { adminCredits: true };
 }
 
+async function checkNotificationCenter(browser) {
+  const viewport = process.env.VERIGO_NOTIFICATION_VIEWPORT === "desktop" ? { width: 1440, height: 900 } : { width: 390, height: 844 };
+  const page = await browser.newPage({ viewport });
+  const now = new Date().toISOString();
+  const notifications = [
+    { id: "review-1", kind: "verification_review", title: "邮箱复核结果已更新", body: "person@example.com 的复核结果已更新", created_at: now, read_at: null, target_job_id: "notify-job", target_email: "person@example.com", target_result_index: 0 },
+    { id: "credit-1", kind: "credit_grant", title: "额度已到账", body: "管理员已向你的账户增加 100 额度。", created_at: now, read_at: null, target_job_id: null, target_email: null, target_result_index: null },
+    { id: "payment-1", kind: "payment", title: "充值到账", body: "已到账 100 次验证额度。", created_at: now, read_at: now, target_job_id: null, target_email: null, target_result_index: null },
+  ];
+  await page.route("**/api/auth/me", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ id: "notify-user", email: "notify@example.com", email_verified: true, credits: 100, paid_credits: 100, trial_credits: 0, trial_credit_expires_at: null, needs_email_binding: false, is_admin: false }) }));
+  await page.route("**/api/jobs?offset=0&limit=8", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ total: 0, offset: 0, limit: 8, items: [] }) }));
+  await page.route("**/api/notifications", async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: notifications, unread_count: notifications.filter((item) => !item.read_at).length, total: notifications.length, offset: 0, limit: 30 }) });
+  });
+  await page.route("**/api/notifications/read", async (route) => {
+    notifications.forEach((item) => { item.read_at = item.read_at || now; });
+    await route.fulfill({ status: 204, body: "" });
+  });
+  await page.route("**/api/notifications/*/read", async (route) => {
+    const id = route.request().url().split("/").at(-2); const item = notifications.find((entry) => entry.id === id); if (item) item.read_at = now;
+    await route.fulfill({ status: 204, body: "" });
+  });
+  await page.route("**/api/jobs/notify-job", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ id: "notify-job", status: "completed", worker_count: 1, completed: 1, total: 1, progress: 100, summary: { total: 1, deliverable: 1, undeliverable: 0, unknown: 0 }, created_at: now, started_at: now, finished_at: now, download_url: null, error: null, queue_position: null, qq_slow: false }) }));
+  await page.route("**/api/jobs/notify-job/results?**", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ total: 1, available: 1, offset: 0, limit: 50, items: [{ email: "person@example.com", deliverable: true, valid: true, progress_state: "completed", original_index: 0, checks: { format: true, domain: true, mx: true, smtp: true }, verification_method: "standard", smtp_result: "250 OK", message: "250 OK", domain_type: "normal" }] }) }));
+  await page.route("**/api/jobs/notify-job/results/0/reviewed", (route) => route.fulfill({ status: 204, body: "" }));
+  await page.route("**/api/wallet", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ available_verifications: 100, paid_verifications: 100, paid_verifications_used: 0, cumulative_recharge_fen: 50, remaining_paid_value_yuan: 0.5, paid_used_value_yuan: 0, price_fen_per_100: 50, trial_verifications: 0, usage_daily: [], transactions: [] }) }));
+  await page.goto(BASE_URL, { waitUntil: "networkidle" });
+  await page.click("#notification-button");
+  await page.waitForFunction(() => document.querySelectorAll(".notification-item").length === 3);
+  if (process.env.VERIGO_NOTIFICATION_SCREENSHOT) await page.screenshot({ path: process.env.VERIGO_NOTIFICATION_SCREENSHOT });
+  if ((await page.textContent("#notification-summary")) !== "2 条未读" || await page.locator(".notification-item.is-unread").count() !== 2) throw new Error("notifications: unread state is incorrect");
+  await page.click("#notification-mark-all");
+  await page.waitForFunction(() => document.querySelectorAll(".notification-item.is-unread").length === 0);
+  if (!(await page.locator("#notification-count").evaluate((node) => node.classList.contains("hidden")))) throw new Error("notifications: badge should clear after mark all");
+  await page.locator(".notification-review").click();
+  await page.waitForFunction(() => document.querySelector("#result-detail-drawer")?.classList.contains("open"));
+  if (!(await page.locator("#notification-menu").evaluate((node) => node.classList.contains("hidden")))) throw new Error("notifications: result navigation must close the panel");
+  await page.click("#close-result-detail");
+  await page.click("#notification-button");
+  await page.locator(".notification-credit").click();
+  await page.waitForSelector("#wallet-workspace:not(.hidden)");
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth);
+  if (overflow) throw new Error("notifications: mobile panel causes horizontal overflow");
+  await page.close();
+  return { notificationCenter: true };
+}
+
 (async () => {
   const browser = await chromium.launch({ headless: true });
   try {
+    if (process.env.VERIGO_UI_ONLY_NOTIFICATION === "1") {
+      console.log(JSON.stringify([await checkNotificationCenter(browser)]));
+      return;
+    }
     const desktop = await checkViewport(browser, "desktop", 1440, 900);
     const mobile = await checkViewport(browser, "mobile", 390, 844);
     const interaction = await checkAccountAndImport(browser);
@@ -411,7 +463,8 @@ async function checkAdminCredits(browser) {
     const englishDesktopHeadingAndApiKeys = await checkEnglishDesktopHeadingAndApiKeys(browser);
     const dashboard = await checkDashboard(browser);
     const adminCredits = await checkAdminCredits(browser);
-    console.log(JSON.stringify([desktop, mobile, interaction, mobileTrialAction, englishLocale, englishDiscoveryAndDocs, englishDesktopHeadingAndApiKeys, dashboard, adminCredits]));
+    const notificationCenter = await checkNotificationCenter(browser);
+    console.log(JSON.stringify([desktop, mobile, interaction, mobileTrialAction, englishLocale, englishDiscoveryAndDocs, englishDesktopHeadingAndApiKeys, dashboard, adminCredits, notificationCenter]));
   } finally {
     await browser.close();
   }
