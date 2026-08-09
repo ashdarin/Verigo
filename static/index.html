@@ -17,8 +17,8 @@
   <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"Organization","name":"Verigo","url":"https://verigo.site/","logo":"https://verigo.site/static/favicon.svg"},{"@type":"WebApplication","name":"Verigo","url":"https://verigo.site/","applicationCategory":"BusinessApplication","operatingSystem":"Web","description":"面向销售、招聘与出海团队的邮箱验证、名单清洗和企业邮箱查找工具。","offers":{"@type":"Offer","price":"0.50","priceCurrency":"CNY","description":"100 次批量验证"}},{"@type":"FAQPage","mainEntity":[{"@type":"Question","name":"Catch-all 邮箱是什么意思？","acceptedAnswer":{"@type":"Answer","text":"Catch-all 是企业邮箱域名的一种设置：发往该域名的任意前缀都可能被服务器接收或转发，因此无法仅凭服务器响应确认某个具体收件人真实存在。"}},{"@type":"Question","name":"企业邮箱查找和普通验证有什么区别？","acceptedAnswer":{"@type":"Answer","text":"普通验证用于确认已有邮箱是否可用；企业邮箱查找用于获取目标企业的业务联络邮箱，适合销售开发、招聘和商务合作。"}}]}]}</script>
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" referrerpolicy="no-referrer">
-  <link rel="stylesheet" href="/static/css/app.css?v=notification-center-v4">
-  <link rel="stylesheet" href="/static/css/product.css?v=notification-center-v4">
+  <link rel="stylesheet" href="/static/css/app.css?v=redemption-codes-v1">
+  <link rel="stylesheet" href="/static/css/product.css?v=redemption-codes-v1">
 </head>
 <body class="product-surface">
   <header class="topbar">
@@ -70,6 +70,7 @@
         <div class="account-summary"><strong id="account-name"></strong><small id="account-credits" class="account-credits"></small></div>
         <button id="workspace-nav" class="account-action hidden" type="button" data-view="workspace"><i class="fa-solid fa-house" aria-hidden="true"></i>账户概览</button>
         <button id="wallet-nav" class="account-action hidden" type="button" data-view="wallet"><i class="fa-regular fa-credit-card" aria-hidden="true"></i>额度与账单</button>
+        <button id="redeem-nav" class="account-action account-redeem hidden" type="button"><i class="fa-solid fa-ticket" aria-hidden="true"></i>兑换额度</button>
         <button id="dashboard-nav" class="account-action hidden" type="button" data-view="dashboard"><i class="fa-solid fa-chart-line" aria-hidden="true"></i>运营监控</button>
         <button id="admin-credits-nav" class="account-action hidden" type="button" data-view="admin-credits"><i class="fa-solid fa-sliders" aria-hidden="true"></i>额度管理</button>
         <div class="account-menu-separator"></div>
@@ -422,6 +423,11 @@
         <p id="admin-credit-result" class="admin-credit-result" role="status"></p>
         <button id="admin-credit-submit" class="primary-action" type="submit">确认授予</button>
       </form>
+      <section class="admin-redemption-card" aria-labelledby="admin-redemption-heading">
+        <div><p class="eyebrow">临时支付通道</p><h2 id="admin-redemption-heading">生成兑换码</h2><p>完整兑换码仅在生成后展示一次。系统只保存哈希，无法再次查看。</p></div>
+        <form id="admin-redemption-form" class="admin-redemption-form"><label for="admin-redemption-amount">面额与邮箱额度</label><select id="admin-redemption-amount"><option value="5">¥5 · 1,000 个邮箱</option><option value="10">¥10 · 2,000 个邮箱</option><option value="20">¥20 · 4,000 个邮箱</option><option value="50">¥50 · 10,000 个邮箱</option><option value="100">¥100 · 20,000 个邮箱</option></select><label for="admin-redemption-quantity">生成数量</label><input id="admin-redemption-quantity" type="number" min="1" max="100" value="1"><button id="admin-redemption-submit" class="primary-action" type="submit">生成兑换码</button></form>
+        <div id="admin-redemption-result" class="admin-redemption-result hidden" aria-live="polite"></div>
+      </section>
       <section id="admin-account-summary" class="admin-account-summary"><div class="report-card-heading"><div><h2>功能使用趋势</h2><p>单个验证、批量验证与工作邮箱查找</p></div></div><div id="admin-feature-chart" class="admin-feature-chart"></div><div id="admin-feature-legend" class="report-legend"></div></section>
       <section class="admin-accounts-section"><div class="report-card-heading"><div><h2>全部账户</h2><p id="admin-accounts-meta">按注册时间排序</p></div><button id="admin-accounts-refresh" class="download-action" type="button">刷新</button></div><div id="admin-accounts-list" class="admin-accounts-list"></div><div class="pagination"><span id="admin-accounts-page"></span><div><button id="admin-accounts-prev" class="page-button" type="button">上一页</button><span id="admin-accounts-pages" class="page-numbers"></span><button id="admin-accounts-next" class="page-button" type="button">下一页</button></div></div></section>
     </section>
@@ -430,7 +436,8 @@
   <main id="wallet-workspace" class="wallet-workspace hidden">
     <section class="report-heading"><div><p class="eyebrow">账户中心</p><h2>资金与使用</h2><p id="wallet-updated" class="report-updated"></p></div><div class="report-actions"><span id="wallet-price" class="report-period"></span><button id="wallet-refresh" class="download-action" type="button">刷新</button></div></section>
     <section class="report-scorecards"><article class="report-scorecard"><span>累计充值</span><strong id="wallet-recharged">¥0.00</strong><small>实收金额</small></article><article class="report-scorecard"><span>付费余额价值</span><strong id="wallet-value">¥0.00</strong><small id="wallet-paid">0 次</small></article><article class="report-scorecard"><span>已用于验证</span><strong id="wallet-spent">¥0.00</strong><small id="wallet-used">0 次</small></article><article class="report-scorecard"><span>可用验证次数</span><strong id="wallet-available">0</strong><small id="wallet-trial-note">含体验次数</small></article></section>
-    <section class="wallet-purchase"><div><p class="eyebrow">购买验证额度</p><h2>按需充值，立即用于批量验证</h2><p>100 次 ¥0.50。购买完成后额度自动进入账户。</p></div><div class="purchase-actions"><label for="purchase-packages">购买份数（每份 100 次）</label><div><input id="purchase-packages" type="number" min="1" max="1000" value="1"><button id="purchase-button" class="primary-action" type="button">购买 100 次 · ¥0.50</button></div><p id="purchase-status" class="purchase-status" role="status"></p></div></section>
+    <section id="wallet-redemption" class="wallet-redemption"><div><p class="eyebrow">兑换验证额度</p><h2>已有兑换码？立即到账</h2><p>¥5 = 1,000 个邮箱 · ¥10 = 2,000 个 · ¥20 = 4,000 个 · ¥50 = 10,000 个 · ¥100 = 20,000 个</p></div><form id="redemption-form" class="redemption-form"><label for="redemption-code">兑换码</label><div><input id="redemption-code" type="text" maxlength="64" autocomplete="off" spellcheck="false" placeholder="VRG-XXXX-XXXX-XXXX" required><button id="redemption-submit" class="primary-action" type="submit">立即兑换</button></div><p id="redemption-status" class="purchase-status" role="status"></p></form></section>
+    <section class="wallet-purchase wallet-purchase-secondary"><div><p class="eyebrow">在线购买</p><h2>按需充值，立即用于批量验证</h2><p>100 次 ¥0.50。在线支付通道配置完成后可直接购买。</p></div><div class="purchase-actions"><label for="purchase-packages">购买份数（每份 100 次）</label><div><input id="purchase-packages" type="number" min="1" max="1000" value="1"><button id="purchase-button" class="primary-action" type="button">购买 100 次 · ¥0.50</button></div><p id="purchase-status" class="purchase-status" role="status"></p></div></section>
     <section class="report-secondary-grid"><section class="report-card"><div class="report-card-heading"><div><h2>验证使用趋势</h2><p>最近 14 天</p></div></div><div id="wallet-usage-chart" class="wallet-usage-chart"></div></section><section class="report-card"><div class="report-card-heading"><div><h2>资金流水</h2><p>实收、退款和管理员调整</p></div></div><div id="wallet-transactions" class="wallet-transactions"></div></section></section>
   </main>
 
@@ -602,6 +609,6 @@
   </dialog>
 
   <script src="/static/js/i18n.js?v=locale-v1" defer></script>
-  <script src="/static/js/app.js?v=notification-center-v4" defer></script>
+  <script src="/static/js/app.js?v=redemption-codes-v1" defer></script>
 </body>
 </html>

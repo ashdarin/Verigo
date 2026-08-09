@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Verigo Admin</title><link rel="stylesheet" href="/static/css/app.css?v=surface"></head><body class="admin-surface">  <header class="topbar">
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Verigo Admin</title><link rel="stylesheet" href="/static/css/app.css?v=redemption-codes-v1"></head><body class="admin-surface">  <header class="topbar">
     <a class="brand" href="/" aria-label="Verigo 首页">
       <span class="brand-mark">V</span>
       <span>Verigo</span>
@@ -133,6 +133,11 @@
         <p id="admin-credit-result" class="admin-credit-result" role="status"></p>
         <button id="admin-credit-submit" class="primary-action" type="submit">确认授予</button>
       </form>
+      <section class="admin-redemption-card" aria-labelledby="admin-redemption-heading">
+        <div><p class="eyebrow">临时支付通道</p><h2 id="admin-redemption-heading">生成兑换码</h2><p>完整兑换码仅在生成后展示一次。系统只保存哈希，无法再次查看。</p></div>
+        <form id="admin-redemption-form" class="admin-redemption-form"><label for="admin-redemption-amount">面额与邮箱额度</label><select id="admin-redemption-amount"><option value="5">¥5 · 1,000 个邮箱</option><option value="10">¥10 · 2,000 个邮箱</option><option value="20">¥20 · 4,000 个邮箱</option><option value="50">¥50 · 10,000 个邮箱</option><option value="100">¥100 · 20,000 个邮箱</option></select><label for="admin-redemption-quantity">生成数量</label><input id="admin-redemption-quantity" type="number" min="1" max="100" value="1"><button id="admin-redemption-submit" class="primary-action" type="submit">生成兑换码</button></form>
+        <div id="admin-redemption-result" class="admin-redemption-result hidden" aria-live="polite"></div>
+      </section>
       <section id="admin-account-summary" class="admin-account-summary"><div class="report-card-heading"><div><h2>功能使用趋势</h2><p>单个验证、批量验证与工作邮箱查找</p></div></div><div id="admin-feature-chart" class="admin-feature-chart"></div><div id="admin-feature-legend" class="report-legend"></div></section>
       <section class="admin-accounts-section"><div class="report-card-heading"><div><h2>全部账户</h2><p id="admin-accounts-meta">按注册时间排序</p></div><button id="admin-accounts-refresh" class="download-action" type="button">刷新</button></div><div id="admin-accounts-list" class="admin-accounts-list"></div><div class="pagination"><span id="admin-accounts-page"></span><div><button id="admin-accounts-prev" class="page-button" type="button">上一页</button><span id="admin-accounts-pages" class="page-numbers"></span><button id="admin-accounts-next" class="page-button" type="button">下一页</button></div></div></section>
     </section>
@@ -280,6 +285,6 @@
   </dialog>
 
   <script src="/static/js/i18n.js?v=locale-v1" defer></script>
-  <script src="/static/js/app.js?v=commercial-v2" defer></script>
+  <script src="/static/js/app.js?v=redemption-codes-v1" defer></script>
 
 <script src="/static/js/i18n.js"></script><script src="/static/js/app.js"></script></body></html>

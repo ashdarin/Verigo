@@ -17,10 +17,14 @@ from urllib.parse import quote
 from fastapi import APIRouter, Body, Depends, File, Header, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, Response
 
-from app.api.auth import optional_user, require_admin, require_user, request_network_hash
+from app.api.auth import (
+    check_attempt_limit, optional_user, require_admin, require_user, request_network_hash,
+)
 from app.api.schemas import (
     AdminCreditAdjustmentResponse,
     AdminCreditGrantRequest,
+    AdminRedemptionCodeCreateRequest,
+    AdminRedemptionCodeCreateResponse,
     CreateJobRequest,
     DiscoveryRequest,
     DiscoveryResponse,
@@ -30,6 +34,8 @@ from app.api.schemas import (
     NotificationListResponse,
     PaymentOrderRequest,
     PaymentOrderResponse,
+    RedemptionCodeRequest,
+    RedemptionCodeResponse,
     ProspectingRunRequest,
     ProspectingRunResponse,
     ProspectingRunPageResponse,
@@ -891,6 +897,37 @@ def mark_notification_read(
 @router.get("/wallet")
 def wallet_snapshot(user: Annotated[User, Depends(require_user)]) -> dict[str, object]:
     return auth_store.wallet_snapshot(user.id)
+
+
+@router.post("/wallet/redeem", response_model=RedemptionCodeResponse)
+def redeem_credit_code(
+    payload: RedemptionCodeRequest,
+    request: Request,
+    user: Annotated[User, Depends(require_user)],
+) -> RedemptionCodeResponse:
+    check_attempt_limit(
+        f"redemption:{user.id}:{request_network_hash(request)}", limit=12, window=900
+    )
+    try:
+        result = auth_store.redeem_credit_code(user.id, payload.code)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return RedemptionCodeResponse(**result)
+
+
+@router.post(
+    "/admin/redemption-codes",
+    response_model=AdminRedemptionCodeCreateResponse,
+    status_code=201,
+)
+def create_redemption_codes(
+    payload: AdminRedemptionCodeCreateRequest,
+    admin: Annotated[User, Depends(require_admin)],
+) -> AdminRedemptionCodeCreateResponse:
+    result = auth_store.create_redemption_codes(
+        admin.id, payload.amount_yuan, payload.quantity
+    )
+    return AdminRedemptionCodeCreateResponse(**result)
 
 
 @router.post("/discovery/candidates", response_model=DiscoveryResponse)

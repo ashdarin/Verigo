@@ -269,6 +269,29 @@ class PaymentOrderResponse(BaseModel):
     payment_enabled: bool = False
 
 
+class RedemptionCodeRequest(BaseModel):
+    code: str = Field(min_length=8, max_length=64)
+
+
+class RedemptionCodeResponse(BaseModel):
+    credits: int
+    amount_fen: int
+    available_credits: int
+    redeemed_at: str
+
+
+class AdminRedemptionCodeCreateRequest(BaseModel):
+    amount_yuan: Literal[5, 10, 20, 50, 100]
+    quantity: int = Field(default=1, ge=1, le=100)
+
+
+class AdminRedemptionCodeCreateResponse(BaseModel):
+    amount_yuan: int
+    credits: int
+    codes: list[str]
+    created_at: str
+
+
 class AdminCreditGrantRequest(BaseModel):
     email: str = Field(min_length=3, max_length=254)
     credits: int = Field(ge=1, le=1_000_000)

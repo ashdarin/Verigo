@@ -153,6 +153,25 @@ class AuthStore:
                     """
                 )
                 connection.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS redemption_codes (
+                        id TEXT PRIMARY KEY,
+                        code_hash TEXT NOT NULL UNIQUE,
+                        code_suffix TEXT NOT NULL,
+                        amount_fen INTEGER NOT NULL,
+                        credits INTEGER NOT NULL,
+                        created_by_user_id TEXT NOT NULL,
+                        created_at TEXT NOT NULL,
+                        redeemed_by_user_id TEXT,
+                        redeemed_at TEXT
+                    )
+                    """
+                )
+                connection.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_redemption_codes_redeemed "
+                    "ON redemption_codes(redeemed_by_user_id, redeemed_at DESC)"
+                )
+                connection.execute(
                     "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email COLLATE NOCASE) WHERE email IS NOT NULL"
                 )
                 connection.execute(
@@ -866,12 +885,25 @@ class AuthStore:
                 """SELECT credits, amount_fen, paid_at FROM payment_orders
                    WHERE user_id=? AND status='paid' ORDER BY paid_at DESC LIMIT 20""", (user_id,)
             ).fetchall()
+            redemptions = connection.execute(
+                """SELECT credits, amount_fen, redeemed_at, code_suffix
+                   FROM redemption_codes WHERE redeemed_by_user_id=?
+                   ORDER BY redeemed_at DESC LIMIT 20""", (user_id,)
+            ).fetchall()
+            redemption_fen = int(connection.execute(
+                """SELECT COALESCE(SUM(amount_fen), 0) FROM redemption_codes
+                   WHERE redeemed_by_user_id=?""", (user_id,)
+            ).fetchone()[0])
             paid_used = int(connection.execute(
                 "SELECT COALESCE(SUM(paid_credits), 0) FROM credit_debits WHERE user_id=?", (user_id,)
             ).fetchone()[0])
         transactions = [
             {"kind": "payment", "title": "充值到账", "credits": int(r[0]), "amount_fen": int(r[1]), "note": "", "created_at": str(r[2])}
             for r in paid_orders
+        ] + [
+            {"kind": "redemption", "title": "兑换码到账", "credits": int(r[0]),
+             "amount_fen": int(r[1]), "note": f"兑换码尾号 {r[3]}", "created_at": str(r[2])}
+            for r in redemptions
         ] + [
             {"kind": "adjustment", "title": "管理员授予" if int(r[0]) > 0 else "管理员扣减", "credits": int(r[0]), "amount_fen": int(r[1]) if r[1] is not None else None, "note": str(r[2]), "created_at": str(r[3])}
             for r in adjustments
@@ -895,12 +927,104 @@ class AuthStore:
             "trial_expires_at": user.trial_credit_expires_at,
             "verifications_used": usage_total,
             "paid_verifications_used": paid_used,
-            "cumulative_recharge_fen": paid_order_fen + paid_adjustments_fen,
+            "cumulative_recharge_fen": paid_order_fen + redemption_fen + paid_adjustments_fen,
             "cumulative_refund_fen": refund_adjustments_fen,
             "paid_used_value_yuan": round(paid_used * price_fen_per_100 / 10_000, 2),
             "remaining_paid_value_yuan": round(user.paid_credits * price_fen_per_100 / 10_000, 2),
             "usage_daily": [{"day": str(day), "verifications": int(total)} for day, total in reversed(usage_rows)],
             "transactions": transactions[:20],
+        }
+
+    @staticmethod
+    def _normalize_redemption_code(code: str) -> str:
+        return "".join(character for character in code.upper() if character.isalnum())
+
+    def create_redemption_codes(
+        self, created_by_user_id: str, amount_yuan: int, quantity: int = 1
+    ) -> dict[str, object]:
+        self.initialize()
+        denominations = {5: 1000, 10: 2000, 20: 4000, 50: 10000, 100: 20000}
+        if amount_yuan not in denominations:
+            raise ValueError("不支持该兑换码面额")
+        if quantity < 1 or quantity > 100:
+            raise ValueError("单次可生成 1 至 100 个兑换码")
+        alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+        created_at = utc_now().isoformat()
+        credits = denominations[amount_yuan]
+        codes: list[str] = []
+        with closing(self._connect()) as connection:
+            begin_immediate(connection)
+            for _ in range(quantity):
+                while True:
+                    body = "".join(secrets.choice(alphabet) for _ in range(12))
+                    normalized = f"VRG{body}"
+                    if connection.execute(
+                        "SELECT 1 FROM redemption_codes WHERE code_hash=?",
+                        (token_hash(normalized),),
+                    ).fetchone() is None:
+                        break
+                code = f"VRG-{body[:4]}-{body[4:8]}-{body[8:]}"
+                connection.execute(
+                    """INSERT INTO redemption_codes(
+                        id, code_hash, code_suffix, amount_fen, credits,
+                        created_by_user_id, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (uuid.uuid4().hex, token_hash(normalized), body[-4:], amount_yuan * 100,
+                     credits, created_by_user_id, created_at),
+                )
+                codes.append(code)
+            connection.commit()
+        return {"amount_yuan": amount_yuan, "credits": credits, "codes": codes, "created_at": created_at}
+
+    def redeem_credit_code(self, user_id: str, code: str) -> dict[str, object]:
+        self.initialize()
+        normalized = self._normalize_redemption_code(code)
+        if len(normalized) != 15 or not normalized.startswith("VRG"):
+            raise ValueError("兑换码无效，请检查后重试")
+        redeemed_at = utc_now().isoformat()
+        with closing(self._connect()) as connection:
+            begin_immediate(connection)
+            row = connection.execute(
+                "SELECT id, amount_fen, credits, redeemed_at FROM redemption_codes WHERE code_hash=?",
+                (token_hash(normalized),),
+            ).fetchone()
+            if row is None:
+                connection.rollback()
+                raise ValueError("兑换码无效，请检查后重试")
+            if row[3] is not None:
+                connection.rollback()
+                raise ValueError("该兑换码已被使用")
+            updated = connection.execute(
+                """UPDATE redemption_codes SET redeemed_by_user_id=?, redeemed_at=?
+                   WHERE id=? AND redeemed_at IS NULL""",
+                (user_id, redeemed_at, row[0]),
+            ).rowcount
+            if updated != 1:
+                connection.rollback()
+                raise ValueError("该兑换码已被使用")
+            connection.execute(
+                "UPDATE users SET credits=credits+? WHERE id=?", (int(row[2]), user_id)
+            )
+            reference = f"redemption:{row[0]}"
+            connection.execute(
+                """INSERT INTO credit_ledger(user_id, delta, kind, reference, created_at)
+                   VALUES (?, ?, 'redemption', ?, ?)""",
+                (user_id, int(row[2]), reference, redeemed_at),
+            )
+            self._insert_notification(
+                connection, user_id, "credit_grant", "兑换额度已到账",
+                f"兑换成功，{int(row[2]):,} 个邮箱验证额度已加入账户。", redeemed_at,
+            )
+            balance = connection.execute(
+                "SELECT credits FROM users WHERE id=?", (user_id,)
+            ).fetchone()
+            if balance is None:
+                connection.rollback()
+                raise ValueError("账户不存在")
+            connection.commit()
+        return {
+            "credits": int(row[2]), "amount_fen": int(row[1]),
+            "available_credits": int(balance[0]), "redeemed_at": redeemed_at,
         }
 
     def admin_account_snapshot(self, email: str) -> dict[str, object]:
@@ -1439,6 +1563,10 @@ class AuthStore:
                 "notifications",
             ):
                 connection.execute(f"DELETE FROM {table} WHERE user_id=?", (user_id,))
+            connection.execute(
+                "UPDATE redemption_codes SET redeemed_by_user_id=NULL WHERE redeemed_by_user_id=?",
+                (user_id,),
+            )
             deleted = connection.execute("DELETE FROM users WHERE id=?", (user_id,)).rowcount
             if deleted != 1:
                 connection.rollback()

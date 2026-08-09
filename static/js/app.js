@@ -1481,6 +1481,7 @@ function updateAccount() {
   el("dashboard-nav").classList.toggle("hidden", !state.user?.is_admin);
   el("admin-credits-nav").classList.toggle("hidden", !state.user?.is_admin);
   el("wallet-nav").classList.toggle("hidden", !state.user);
+  el("redeem-nav")?.classList.toggle("hidden", !state.user);
   el("workspace-nav").classList.toggle("hidden", !state.user);
   el("notification-button").classList.toggle("hidden", !state.user);
   el("claim-trial-button").classList.toggle(
@@ -1540,6 +1541,85 @@ async function loadWorkspaceHome() {
 el("dashboard-refresh").addEventListener("click", loadDashboardMetrics);
 async function loadWallet() { const data = await api("/api/wallet"); const set=(id,v)=>el(id).textContent=Number(v||0).toLocaleString("zh-CN"); set("wallet-available",data.available_verifications); el("wallet-paid").textContent=`${Number(data.paid_verifications||0).toLocaleString("zh-CN")} 次`; el("wallet-used").textContent=`${Number(data.paid_verifications_used||0).toLocaleString("zh-CN")} 次`; el("wallet-recharged").textContent=`¥${(Number(data.cumulative_recharge_fen||0)/100).toFixed(2)}`; el("wallet-value").textContent=`¥${Number(data.remaining_paid_value_yuan||0).toFixed(2)}`; el("wallet-spent").textContent=`¥${Number(data.paid_used_value_yuan||0).toFixed(2)}`; el("wallet-price").textContent=`100 次 ¥${(data.price_fen_per_100/100).toFixed(2)}`; el("wallet-trial-note").textContent=data.trial_verifications?`另有 ${data.trial_verifications} 体验次数`:"不含体验次数"; el("wallet-updated").textContent=`更新于 ${new Date().toLocaleString("zh-CN")}`; const days=data.usage_daily||[]; const max=Math.max(1,...days.map(x=>x.verifications)); el("wallet-usage-chart").innerHTML=days.map(x=>`<div class="wallet-bar" style="height:${Math.max(4,x.verifications/max*180)}px"><span>${x.verifications}</span></div>`).join(""); el("wallet-transactions").innerHTML=(data.transactions||[]).map(x=>`<div class="wallet-transaction"><div><strong>${x.title}</strong><small>${x.credits>0?"+":""}${x.credits} 次 ${x.note||""}</small></div><div><strong>${x.amount_fen==null?"—":`${x.credits<0?"-":"+"}¥${(x.amount_fen/100).toFixed(2)}`}</strong><small>${new Date(x.created_at).toLocaleString("zh-CN")}</small></div></div>`).join("")||"暂无资金流水"; }
 el("wallet-refresh").addEventListener("click", loadWallet);
+
+el("redeem-nav")?.addEventListener("click", () => {
+  el("account-menu").classList.add("hidden");
+  switchView("wallet");
+  el("wallet-redemption").scrollIntoView({ behavior: "smooth", block: "center" });
+  el("redemption-code").focus({ preventScroll: true });
+});
+
+el("redemption-code")?.addEventListener("input", (event) => {
+  event.currentTarget.value = event.currentTarget.value.toUpperCase();
+});
+el("redemption-form")?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const submit = el("redemption-submit");
+  const status = el("redemption-status");
+  submit.disabled = true;
+  status.className = "purchase-status";
+  status.textContent = "正在兑换…";
+  try {
+    const result = await api("/api/wallet/redeem", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code: el("redemption-code").value }),
+    });
+    status.classList.add("success");
+    status.textContent = `兑换成功：${result.credits.toLocaleString("zh-CN")} 个邮箱额度已到账，当前可用 ${result.available_credits.toLocaleString("zh-CN")} 个。`;
+    el("redemption-code").value = "";
+    state.user.credits = result.available_credits;
+    state.user.paid_credits = Number(state.user.paid_credits || 0) + result.credits;
+    updateAccount();
+    await Promise.all([loadWallet(), loadNotifications()]);
+  } catch (error) {
+    status.classList.add("error");
+    status.textContent = error.message;
+  } finally { submit.disabled = false; }
+});
+
+el("admin-redemption-form")?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const submit = el("admin-redemption-submit");
+  const result = el("admin-redemption-result");
+  submit.disabled = true;
+  result.className = "admin-redemption-result";
+  result.replaceChildren();
+  try {
+    const created = await api("/api/admin/redemption-codes", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        amount_yuan: Number(el("admin-redemption-amount").value),
+        quantity: Number(el("admin-redemption-quantity").value),
+      }),
+    });
+    const heading = document.createElement("strong");
+    heading.textContent = `已生成 ${created.codes.length} 个 ¥${created.amount_yuan} 兑换码，每个含 ${created.credits.toLocaleString("zh-CN")} 个邮箱额度。请立即保存：`;
+    const list = document.createElement("div");
+    list.className = "admin-redemption-code-list";
+    created.codes.forEach((code) => {
+      const item = document.createElement("code");
+      item.className = "admin-redemption-code";
+      item.textContent = code;
+      list.append(item);
+    });
+    const copy = document.createElement("button");
+    copy.type = "button";
+    copy.className = "admin-redemption-copy";
+    copy.textContent = "复制全部兑换码";
+    copy.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(created.codes.join("\n"));
+        copy.textContent = "已复制";
+      } catch (_) { copy.textContent = "复制失败，请手动选择"; }
+    });
+    result.append(heading, list, copy);
+  } catch (error) {
+    result.classList.add("error");
+    result.textContent = error.message;
+  } finally { submit.disabled = false; }
+});
 
 function showOnboardingStep(step) {
   const dialog = el("onboarding-dialog");
