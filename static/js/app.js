@@ -85,8 +85,47 @@ const modeLabels = {
   8: ["验证任务", "mode-standard"],
 };
 
+const emailPattern = /^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+$/;
+
+function inputTokens(text) {
+  return String(text || "").split(/[\s,;，；]+/).map((value) => value.trim()).filter(Boolean);
+}
+
+function normalizeEmails(values) {
+  const seen = new Set();
+  return values.filter((value) => {
+    const email = String(value).trim();
+    const key = email.toLowerCase();
+    if (!emailPattern.test(email) || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).map((value) => String(value).trim());
+}
+
 function splitEmails(text) {
-  return text.split(/[\s,;，；]+/).map((value) => value.trim()).filter((value) => value.includes("@"));
+  return normalizeEmails(inputTokens(text));
+}
+
+function updateBatchInputSummary() {
+  const summary = state.mode === "file" ? el("file-input-summary") : el("batch-input-summary");
+  const cleanButton = el("clean-email-input");
+  if (!summary) return;
+  const source = state.mode === "file" ? state.fileEmails : inputTokens(batchInput?.value);
+  const emails = normalizeEmails(source);
+  const invalid = source.filter((value) => !emailPattern.test(String(value).trim())).length;
+  const duplicates = Math.max(0, source.length - invalid - emails.length);
+  const blankLines = state.mode === "paste"
+    ? String(batchInput?.value || "").split(/\r?\n/).filter((line) => !line.trim()).length : 0;
+  if (!source.length && !blankLines) {
+    summary.textContent = state.mode === "file" ? "导入后将自动去重，空白和无效地址不会计费。" : "将自动忽略空白行、无效地址和重复邮箱。";
+  } else {
+    const removed = [];
+    if (duplicates) removed.push(`重复 ${duplicates} 条`);
+    if (blankLines) removed.push(`空白 ${blankLines} 行`);
+    if (invalid) removed.push(`无效 ${invalid} 条`);
+    summary.textContent = `实际验证 ${emails.length.toLocaleString()} 条${removed.length ? `，已排除 ${removed.join("、")}` : "，不会重复计费"}。`;
+  }
+  if (cleanButton) cleanButton.disabled = state.mode !== "paste" || (!duplicates && !blankLines && !invalid);
 }
 
 function currentEmails() {
@@ -120,8 +159,10 @@ function updateProviderNotice(emails) {
 }
 
 function updateCount() {
-  const total = currentEmails().length;
-  updateProviderNotice(currentEmails());
+  const emails = currentEmails();
+  const total = emails.length;
+  updateProviderNotice(emails);
+  updateBatchInputSummary();
   if (!count || !startButton) return;
   count.textContent = total.toLocaleString();
   if (state.view === "single") {
@@ -449,6 +490,11 @@ document.querySelectorAll("[data-mode]").forEach((button) => {
 
 batchInput.addEventListener("input", updateCount);
 singleInput.addEventListener("input", updateCount);
+el("clean-email-input")?.addEventListener("click", () => {
+  batchInput.value = splitEmails(batchInput.value).join("\n");
+  batchInput.focus();
+  updateCount();
+});
 let engagementRecorded = false;
 const analyticsStartedAt = performance.now();
 function sendEngagement(seconds) {

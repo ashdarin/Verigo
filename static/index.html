@@ -149,6 +149,10 @@
           <input id="list-name-input" type="text" maxlength="200" placeholder="例如：海外客户名单-8月" autocomplete="off">
           <label for="email-input">邮箱列表</label>
           <textarea id="email-input" rows="11" placeholder="name@example.com&#10;hello@company.cn" spellcheck="false"></textarea>
+          <div class="batch-input-tools">
+            <p id="batch-input-summary" class="batch-input-summary" aria-live="polite">将自动忽略空白行和重复邮箱。</p>
+            <button id="clean-email-input" class="text-action" type="button">清理重复和空白</button>
+          </div>
         </section>
 
         <section id="file-panel" class="input-mode hidden">
@@ -159,6 +163,7 @@
             <strong id="file-title">选择文件</strong>
             <small id="file-meta">TXT · CSV · JSON · XLSX · XLSM · XLS</small>
           </label>
+          <p id="file-input-summary" class="batch-input-summary" aria-live="polite"></p>
         </section>
 </section>
 
