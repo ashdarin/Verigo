@@ -251,7 +251,26 @@ class CloudShellCoordinator:
                         row for row in rows
                         if int(row[1]) and (not row[4] or row[4] <= now.isoformat())
                     ]
+                # Prefer accounts that already have a fresh worker heartbeat.
+                # Otherwise a previously active but now-offline account can keep
+                # the active slot while a live Cloud Shell worker is prevented
+                # from claiming queued work.
+                healthy_before = (
+                    now - timedelta(seconds=settings.node_stale_seconds)
+                ).isoformat()
+                healthy_worker_ids = {
+                    str(value[0]).rsplit("-", 1)[0]
+                    if str(value[0]).rsplit("-", 1)[-1].isdigit()
+                    else str(value[0])
+                    for value in db.execute(
+                        """SELECT worker_id FROM worker_nodes
+                           WHERE target='gmail' AND health='healthy'
+                             AND last_seen_at >= ?""",
+                        (healthy_before,),
+                    ).fetchall()
+                }
                 eligible.sort(key=lambda row: (
+                    -int(str(row[0]) in healthy_worker_ids),
                     -int(row[6]), int(row[2]), int(row[3]), row[4] or "", row[0]
                 ))
                 selected = {str(row[0]) for row in eligible[: min(desired, len(eligible))]}
