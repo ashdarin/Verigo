@@ -694,24 +694,23 @@ def report_tencent_qq_results(
         job.id, worker_name, payload.lease_id, normalized, execution_target=execution_target,
     ):
         raise HTTPException(status_code=409, detail="Remote worker lease is no longer active")
-    refreshed = job_store.get(job.id)
-    if refreshed is None:
-        raise HTTPException(status_code=404, detail="Verification job no longer exists")
-    if job_store.reconcile_catch_all_conflicts(job.id):
+    # Incremental callbacks must stay cheap for large remote shards. The old
+    # path reloaded every result and rescanned all Catch-all evidence after
+    # every single SMTP response, amplifying SQLite I/O as O(results * shard).
+    # Full reconciliation remains on the shard completion path below.
+    if payload.control_probes:
         refreshed = job_store.get(job.id)
         if refreshed is None:
             raise HTTPException(status_code=404, detail="Verification job no longer exists")
-    protected = apply_prospecting_receiver_protection(refreshed, payload.control_probes)
-    if protected is not None:
-        sync_parent_job(protected)
-        return {
-            "status": protected.status,
-            "stop_requested": True,
-            "accepted": len(payload.results),
-            "persisted": len(payload.results),
-        }
-    if payload.results:
-        sync_parent_job(job)
+        protected = apply_prospecting_receiver_protection(refreshed, payload.control_probes)
+        if protected is not None:
+            sync_parent_job(protected)
+            return {
+                "status": protected.status,
+                "stop_requested": True,
+                "accepted": len(payload.results),
+                "persisted": len(payload.results),
+            }
     return {
         "status": job.status,
         "stop_requested": False,
