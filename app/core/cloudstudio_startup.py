@@ -17,9 +17,14 @@ if [ ! -d /workspace/Verigo/.git ]; then
   git clone --depth 1 --branch main https://github.com/ashdarin/Verigo.git /workspace/Verigo >/tmp/verigo-qq-git.log 2>&1
 fi
 cd /workspace/Verigo
+git fetch --quiet origin main >/tmp/verigo-qq-git.log 2>&1 || true
+git reset --quiet --hard origin/main >>/tmp/verigo-qq-git.log 2>&1 || true
 if [ ! -x .venv/bin/python ]; then
-  echo \"Verigo worker environment is not initialized\" >/tmp/verigo-qq-worker.log
-  exit 1
+  python3 -m venv .venv >/tmp/verigo-qq-venv.log 2>&1
+fi
+if [ ! -f .venv/.verigo-worker-deps ] || ! cmp -s requirements.txt .venv/.verigo-worker-deps; then
+  .venv/bin/python -m pip install --disable-pip-version-check -q -r requirements.txt >/tmp/verigo-qq-pip.log 2>&1
+  cp requirements.txt .venv/.verigo-worker-deps
 fi
 if pgrep -f '[a]pp.tencent_qq_worker' >/dev/null; then exit 0; fi
 setsid -f .venv/bin/python -m app.tencent_qq_worker >/tmp/verigo-qq-worker.log 2>&1 </dev/null
