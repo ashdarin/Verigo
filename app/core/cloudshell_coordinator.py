@@ -308,6 +308,20 @@ class CloudShellCoordinator:
             and (not row[2] or row[2] <= _now().isoformat())
         )
 
+    def worker_is_healthy(self, worker_id: str) -> bool:
+        """Return whether one account already has a live polling process."""
+        self.initialize()
+        cutoff = (_now() - timedelta(seconds=settings.node_stale_seconds)).isoformat()
+        with closing(self._connect()) as db:
+            row = db.execute(
+                """SELECT 1 FROM worker_nodes
+                   WHERE target='gmail' AND health='healthy' AND last_seen_at >= ?
+                     AND (worker_id=? OR worker_id LIKE ?)
+                   LIMIT 1""",
+                (cutoff, worker_id, f"{worker_id}-%"),
+            ).fetchone()
+        return row is not None
+
     def reserve(self, worker_id: str, reserved_units: int) -> str | None:
         """Reserve a claim slot if this worker is currently least-used."""
         if not self.enabled:

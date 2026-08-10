@@ -87,6 +87,8 @@ class CloudShellLifecycle:
         if not cloudshell_coordinator.account_can_wake(self._account_id):
             return
         self._wake_event.set()
+        if cloudshell_coordinator.worker_is_healthy(self._worker_id):
+            return
         if time.monotonic() < self._retry_after:
             return
         if not self.configured or not self._lock.acquire(blocking=False):
