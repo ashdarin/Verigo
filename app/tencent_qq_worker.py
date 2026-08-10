@@ -159,12 +159,14 @@ def _verify_job(job: dict[str, object], control: dict[str, object]) -> None:
         worker_count = 1
     completed_results: list[dict[str, Any]] = []
     pending_reports: list[dict[str, Any]] = []
+    last_report_at = [time.monotonic()]
 
     def flush_reports() -> None:
         if not pending_reports:
             return
         response = report_results(job_id, list(pending_reports), lease_id)
         pending_reports.clear()
+        last_report_at[0] = time.monotonic()
         control["stopped"] = bool(response.get("stop_requested"))
 
     def on_result(raw_result: dict[str, Any]) -> None:
@@ -191,7 +193,7 @@ def _verify_job(job: dict[str, object], control: dict[str, object]) -> None:
             })
         # The first visible 4xx result must already include its retry schedule.
         pending_reports.append(result)
-        if len(pending_reports) >= 8:
+        if len(pending_reports) >= 8 or time.monotonic() - last_report_at[0] >= 5:
             flush_reports()
 
     if bool(job.get("stop_on_deliverable")):
