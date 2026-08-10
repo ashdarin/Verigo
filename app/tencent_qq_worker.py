@@ -99,11 +99,17 @@ def stopped(job_id: str, state: dict[str, object]) -> bool:
     return bool(state["stopped"])
 
 
-def report_result(job_id: str, result: dict[str, Any], lease_id: str | None = None) -> dict[str, Any]:
-    payload: dict[str, object] = {"results": [result]}
+def report_results(
+    job_id: str, results: list[dict[str, Any]], lease_id: str | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, object] = {"results": results}
     if lease_id:
         payload["lease_id"] = lease_id
     return request_json(f"/api/workers/{WORKER_TARGET}/jobs/{job_id}/results", payload)
+
+
+def report_result(job_id: str, result: dict[str, Any], lease_id: str | None = None) -> dict[str, Any]:
+    return report_results(job_id, [result], lease_id)
 
 
 def complete_job(
@@ -152,6 +158,15 @@ def _verify_job(job: dict[str, object], control: dict[str, object]) -> None:
     if any(is_qq_email(email) for email in emails):
         worker_count = 1
     completed_results: list[dict[str, Any]] = []
+    pending_reports: list[dict[str, Any]] = []
+
+    def flush_reports() -> None:
+        if not pending_reports:
+            return
+        response = report_results(job_id, list(pending_reports), lease_id)
+        pending_reports.clear()
+        control["stopped"] = bool(response.get("stop_requested"))
+
     def on_result(raw_result: dict[str, Any]) -> None:
         if stopped(job_id, control):
             return
@@ -175,8 +190,9 @@ def _verify_job(job: dict[str, object], control: dict[str, object]) -> None:
                 ).isoformat(),
             })
         # The first visible 4xx result must already include its retry schedule.
-        response = report_result(job_id, result, lease_id)
-        control["stopped"] = bool(response.get("stop_requested"))
+        pending_reports.append(result)
+        if len(pending_reports) >= 8:
+            flush_reports()
 
     if bool(job.get("stop_on_deliverable")):
         verifier = create_verifier(1)
@@ -212,6 +228,7 @@ def _verify_job(job: dict[str, object], control: dict[str, object]) -> None:
             result_callback=on_result,
             should_stop=lambda: stopped(job_id, control),
         )
+        flush_reports()
         if stopped(job_id, control):
             return
     if not stopped(job_id, control):
