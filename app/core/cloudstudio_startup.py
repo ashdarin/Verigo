@@ -15,12 +15,14 @@ def worker_start_script(worker_processes: int = 1) -> str:
     slots = " ".join(str(slot) for slot in range(1, processes + 1))
     return f"""set -eu
 curl -fsS --retry 3 --retry-delay 2 -X POST -H \"X-Verigo-CloudStudio-Probe-Token: ${{VERIGO_CLOUDSTUDIO_PROBE_TOKEN}}\" -H \"X-Verigo-CloudStudio-Workspace-Key: ${{VERIGO_CLOUDSTUDIO_SPACE_KEY}}\" https://verigo.site/api/workers/cloudstudio/probe >/tmp/verigo-cloudstudio-probe.log 2>&1 || true
-if [ ! -d /workspace/Verigo/.git ]; then
-  git clone --depth 1 --branch main https://github.com/ashdarin/Verigo.git /workspace/Verigo >/tmp/verigo-qq-git.log 2>&1
-fi
+mkdir -p /workspace/Verigo
+bundle=/tmp/verigo-cloudstudio-worker.tar.gz
+curl -fsS --retry 5 --retry-delay 2 --retry-connrefused \
+  -H "X-Verigo-Worker-Token: ${{VERIGO_TENCENT_QQ_WORKER_TOKEN}}" \
+  "https://verigo.site/api/workers/${{VERIGO_REMOTE_WORKER_TARGET}}/bundle" \
+  -o "$bundle"
+tar -xzf "$bundle" -C /workspace/Verigo
 cd /workspace/Verigo
-git fetch --quiet origin main >/tmp/verigo-qq-git.log 2>&1 || true
-git reset --quiet --hard origin/main >>/tmp/verigo-qq-git.log 2>&1 || true
 if [ ! -x .venv/bin/python ]; then
   python3 -m venv .venv >/tmp/verigo-qq-venv.log 2>&1
 fi

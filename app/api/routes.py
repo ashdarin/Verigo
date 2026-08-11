@@ -426,6 +426,23 @@ def require_remote_worker(worker_target: str, token: str | None) -> str:
     return execution_target
 
 
+@router.get("/workers/{worker_target}/bundle", response_class=FileResponse)
+def download_remote_worker_bundle(
+    worker_target: str,
+    token: Annotated[str | None, Header(alias="X-Verigo-Worker-Token")] = None,
+) -> FileResponse:
+    """Serve the current worker code without depending on GitHub availability."""
+    require_remote_worker(worker_target, token)
+    bundle_path = settings.database_path.parent / "cloudstudio-worker.tar.gz"
+    if not bundle_path.is_file():
+        raise HTTPException(status_code=503, detail="Remote worker bundle is not ready")
+    return FileResponse(
+        bundle_path,
+        media_type="application/gzip",
+        filename="cloudstudio-worker.tar.gz",
+    )
+
+
 def require_remote_job(job_id: str, worker_id: str, execution_target: str, lease_id: str | None = None) -> Job:
     job = require_job(job_id, include_results=False)
     valid_lease = bool(

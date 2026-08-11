@@ -19,8 +19,10 @@ from app.core.verification_worker import timeout_result
 script = worker_start_script()
 assert "CloudStudio-Probe-Token" in script
 assert "app.tencent_qq_worker" in script
-assert "git clone --depth 1 --branch main https://github.com/ashdarin/Verigo.git" in script
-assert "git pull --ff-only" not in script
+assert "/api/workers/${VERIGO_REMOTE_WORKER_TARGET}/bundle" in script
+assert "X-Verigo-Worker-Token" in script
+assert "git clone" not in script
+assert "git fetch" not in script
 assert "verigo-qq-worker-watchdog.sh" in script
 assert "verigo-qq-worker-watchdog.pid" in script
 assert "kill -0" in script

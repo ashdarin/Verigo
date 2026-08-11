@@ -213,6 +213,12 @@ fi
 test -f "$release_path/app/main.py"
 test -f "$release_path/RELEASE_VERSION"
 
+worker_bundle_tmp=$(mktemp "$state_dir/data/.cloudstudio-worker.XXXXXX.tar.gz")
+tar -czf "$worker_bundle_tmp" -C "$release_path" app requirements.txt
+chown verigo:verigo "$worker_bundle_tmp"
+chmod 640 "$worker_bundle_tmp"
+mv -f "$worker_bundle_tmp" "$state_dir/data/cloudstudio-worker.tar.gz"
+
 if ! command -v aws >/dev/null && grep -q '^VERIGO_BACKUP_S3_BUCKET=.' /etc/verigo/backup.env 2>/dev/null; then
     apt-get update
     DEBIAN_FRONTEND=noninteractive apt-get install -y awscli
