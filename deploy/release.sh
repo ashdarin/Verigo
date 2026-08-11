@@ -214,7 +214,7 @@ test -f "$release_path/app/main.py"
 test -f "$release_path/RELEASE_VERSION"
 
 worker_bundle_tmp=$(mktemp "$state_dir/data/.cloudstudio-worker.XXXXXX.tar.gz")
-tar -czf "$worker_bundle_tmp" -C "$release_path" app requirements.txt
+tar -czf "$worker_bundle_tmp" -C "$release_path" app requirements.txt RELEASE_VERSION
 chown verigo:verigo "$worker_bundle_tmp"
 chmod 640 "$worker_bundle_tmp"
 mv -f "$worker_bundle_tmp" "$state_dir/data/cloudstudio-worker.tar.gz"

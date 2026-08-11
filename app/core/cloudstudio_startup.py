@@ -23,6 +23,7 @@ curl -fsS --retry 5 --retry-delay 2 --retry-connrefused \
   -o "$bundle"
 tar -xzf "$bundle" -C /workspace/Verigo
 cd /workspace/Verigo
+release_version="$(cat RELEASE_VERSION 2>/dev/null || printf unknown)"
 if [ ! -x .venv/bin/python ]; then
   python3 -m venv .venv >/tmp/verigo-qq-venv.log 2>&1
 fi
@@ -45,7 +46,7 @@ while true; do
 done
 VERIGO_WATCHDOG
 chmod 700 /tmp/verigo-qq-worker-watchdog.sh
-layout="${{VERIGO_REMOTE_WORKER_TARGET}}:${{VERIGO_TENCENT_QQ_WORKER_ID}}:{processes}"
+layout="${{VERIGO_REMOTE_WORKER_TARGET}}:${{VERIGO_TENCENT_QQ_WORKER_ID}}:{processes}:$release_version"
 layout_file=/tmp/verigo-qq-worker-layout
 layout_ready=true
 if [ ! -s "$layout_file" ] || [ "$(cat "$layout_file")" != "$layout" ]; then

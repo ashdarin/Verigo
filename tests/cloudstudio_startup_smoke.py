@@ -75,7 +75,7 @@ multi_script = worker_start_script(3)
 assert "for slot in 1 2 3" in multi_script
 assert 'VERIGO_TENCENT_QQ_WORKER_ID="${base_worker_id}-${slot}"' in multi_script
 assert "verigo-qq-worker-watchdog-${slot}.pid" in multi_script
-assert 'layout="${VERIGO_REMOTE_WORKER_TARGET}:${VERIGO_TENCENT_QQ_WORKER_ID}:3"' in multi_script
+assert 'layout="${VERIGO_REMOTE_WORKER_TARGET}:${VERIGO_TENCENT_QQ_WORKER_ID}:3:$release_version"' in multi_script
 multi_command = worker_start_command(3)
 encoded = multi_command.removeprefix("echo ").removesuffix(" | base64 -d | bash")
 assert base64.b64decode(encoded).decode() == multi_script
