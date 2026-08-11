@@ -22,7 +22,7 @@ def main() -> None:
     )):
         raise SystemExit("Cloud Studio and QQ worker environment variables must be configured")
 
-    lifecycle, envs = workspace_configuration(settings)
+    lifecycle, envs = workspace_configuration(settings, worker_processes=3)
     request = models.ModifyWorkspaceRequest()
     request.SpaceKey = settings.cloudstudio_space_key
     request.Lifecycle = lifecycle

@@ -2,7 +2,54 @@
 
 from __future__ import annotations
 
+import signal
 import time
+from contextlib import contextmanager
+
+from app.config import settings
+
+
+class EmailVerificationTimeout(TimeoutError):
+    pass
+
+
+@contextmanager
+def email_verification_deadline(seconds: int):
+    """Bound one verifier call on Linux worker processes."""
+    if not hasattr(signal, "SIGALRM") or not hasattr(signal, "setitimer"):
+        yield
+        return
+
+    def raise_timeout(_signum, _frame):
+        raise EmailVerificationTimeout(f"email verification exceeded {seconds} seconds")
+
+    previous_handler = signal.getsignal(signal.SIGALRM)
+    signal.signal(signal.SIGALRM, raise_timeout)
+    previous_timer = signal.setitimer(signal.ITIMER_REAL, float(seconds))
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous_handler)
+        if previous_timer[0] > 0:
+            signal.setitimer(signal.ITIMER_REAL, *previous_timer)
+
+
+def timeout_result(email: str, index: int) -> dict[str, object]:
+    return {
+        "email": email,
+        "original_index": index,
+        "valid": True,
+        "deliverable": None,
+        "checks": {"format": True, "domain": None, "mx": None, "smtp": None},
+        "domain_type": "normal",
+        "verification_method": "email_timeout",
+        "smtp_result": "Verification timed out and will be retried",
+        "message": "Verification timed out and will be retried",
+        "failure_stage": "smtp",
+        "failure_reason": "smtp_timeout",
+        "retry_policy": "delayed",
+    }
 
 
 def run_verification_worker(
@@ -48,7 +95,11 @@ def run_verification_worker(
                 "is_consumer_fix": is_consumer_fix,
             })
 
-            result = verifier.verify_email_comprehensive(email, process_id)
+            try:
+                with email_verification_deadline(settings.email_hard_timeout_seconds):
+                    result = verifier.verify_email_comprehensive(email, process_id)
+            except EmailVerificationTimeout:
+                result = timeout_result(email, index)
             result["original_index"] = index
             cache_after = len(verifier.dns_cache)
             if cache_after == cache_before and f"mx_{domain}" in verifier.dns_cache:

@@ -190,7 +190,8 @@ class EmailVerifier:
         if host.endswith('.qq.com') or host.endswith('.foxmail.com'):
             # Separate QQ MX records must still share one provider-wide lease.
             with self.smtp_limiter.permit(
-                'qq-smtp-global', 1, wait_seconds=settings.qq_smtp_wait_seconds
+                'qq-smtp-global', settings.qq_smtp_per_mx,
+                wait_seconds=settings.qq_smtp_wait_seconds,
             ) as global_acquired:
                 if not global_acquired:
                     yield False

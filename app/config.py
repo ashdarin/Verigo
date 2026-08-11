@@ -171,6 +171,9 @@ class Settings:
     qq_smtp_wait_seconds: float = max(
         1.0, float(os.getenv("VERIGO_QQ_SMTP_WAIT_SECONDS", "300"))
     )
+    email_hard_timeout_seconds: int = max(
+        30, int(os.getenv("VERIGO_EMAIL_HARD_TIMEOUT_SECONDS", "90"))
+    )
     qq_backoff_base_seconds: float = max(
         1.0, float(os.getenv("VERIGO_QQ_BACKOFF_BASE_SECONDS", "30"))
     )
