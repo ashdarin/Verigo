@@ -8,6 +8,7 @@ import subprocess
 import sys
 import threading
 import time
+from datetime import datetime, timezone
 from typing import Any
 
 from app.config import settings
@@ -18,6 +19,11 @@ from app.core.result_retry import (
     is_retryable_smtp_result,
     is_smtp_greylisted,
     smtp_temporary_status,
+)
+from app.core.verification_worker import (
+    EmailVerificationTimeout,
+    email_verification_deadline,
+    timeout_result,
 )
 
 
@@ -31,6 +37,7 @@ WORKER_ID = os.getenv(
 POLL_SECONDS = max(0.1, float(os.getenv("VERIGO_TENCENT_QQ_POLL_SECONDS", "0.25")))
 RETRY_SECONDS = max(1.0, float(os.getenv("VERIGO_TENCENT_QQ_RETRY_SECONDS", "5")))
 WORKER_CAPACITY = max(1, int(os.getenv("VERIGO_REMOTE_WORKER_CAPACITY", "1")))
+PARENT_TIMEOUT_GRACE_SECONDS = 15
 
 
 class WorkerRequestError(RuntimeError):
@@ -138,15 +145,39 @@ def skipped_result(email: str, index: int) -> dict[str, object]:
     }
 
 
-def _verify_job(job: dict[str, object], control: dict[str, object]) -> None:
-    job_id = str(job["id"])
+def job_emails_and_indices(job: dict[str, object]) -> tuple[list[str], list[int]]:
     items = job.get("items")
     if isinstance(items, list):
         emails = [str(item["email"]) for item in items if isinstance(item, dict)]
-        original_indices = [int(item["original_index"]) for item in items if isinstance(item, dict)]
-    else:
-        emails = [str(email) for email in job["emails"]]
-        original_indices = list(range(len(emails)))
+        indices = [int(item["original_index"]) for item in items if isinstance(item, dict)]
+        return emails, indices
+    emails = [str(email) for email in job["emails"]]
+    return emails, list(range(len(emails)))
+
+
+def report_parent_timeout(job: dict[str, object], lease_id: str) -> None:
+    """Persist retryable results and close a lease after the batch parent stalls."""
+    emails, original_indices = job_emails_and_indices(job)
+    retry_at = datetime.fromtimestamp(
+        time.time() + settings.temporary_smtp_retry_seconds, timezone.utc
+    ).isoformat()
+    results: list[dict[str, Any]] = []
+    for email, original_index in zip(emails, original_indices):
+        result = timeout_result(email, original_index)
+        result.update({
+            "retry_state": "scheduled",
+            "retry_attempt": 1,
+            "retry_max_attempts": settings.temporary_smtp_immediate_retries,
+            "retry_at": retry_at,
+        })
+        results.append(result)
+    report_results(str(job["id"]), results, lease_id)
+    complete_job(str(job["id"]), lease_id)
+
+
+def _verify_job(job: dict[str, object], control: dict[str, object]) -> None:
+    job_id = str(job["id"])
+    emails, original_indices = job_emails_and_indices(job)
     lease_id = str(job.get("lease_id") or "") or None
     if WORKER_TARGET == "gmail":
         remote_limit = settings.cloudshell_worker_max_workers
@@ -266,7 +297,18 @@ def verify_job(job: dict[str, object]) -> None:
     thread = threading.Thread(target=heartbeat, name=f"lease-heartbeat-{job_id}", daemon=True)
     thread.start()
     try:
-        _verify_job(job, control)
+        try:
+            with email_verification_deadline(
+                settings.email_hard_timeout_seconds + PARENT_TIMEOUT_GRACE_SECONDS
+            ):
+                _verify_job(job, control)
+        except EmailVerificationTimeout:
+            print(
+                f"Remote worker parent timeout for {job_id}; scheduling retry",
+                file=sys.stderr,
+                flush=True,
+            )
+            report_parent_timeout(job, lease_id)
     finally:
         done.set()
         thread.join(timeout=2)

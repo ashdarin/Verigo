@@ -42,6 +42,18 @@ with patch.object(worker, "_verify_job") as verify:
     worker.verify_job(job)
     verify.assert_called_once()
 
+timeout_job = {
+    "id": "parent-timeout-smoke",
+    "lease_id": "timeout-lease",
+    "items": [{"email": "slow@qq.com", "original_index": 17}],
+}
+with patch.object(
+    worker, "_verify_job", side_effect=worker.EmailVerificationTimeout("stalled")
+):
+    with patch.object(worker, "report_parent_timeout") as report_timeout:
+        worker.verify_job(timeout_job)
+        report_timeout.assert_called_once_with(timeout_job, "timeout-lease")
+
 with patch.object(
     worker.subprocess,
     "run",
