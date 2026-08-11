@@ -63,6 +63,11 @@ class Settings:
     scheduler_remote_shard_size: int = max(
         1, int(os.getenv("VERIGO_SCHEDULER_REMOTE_SHARD_SIZE", "25"))
     )
+    # QQ SMTP is slow enough that large leases serialize work inside a single
+    # worker and starve otherwise healthy Cloud Studio processes.
+    qq_scheduler_shard_size: int = max(
+        1, int(os.getenv("VERIGO_QQ_SCHEDULER_SHARD_SIZE", "1"))
+    )
     # Small discovery leases let several otherwise idle nodes share one
     # company domain while the MX scheduler remains the global safety limit.
     prospecting_scheduler_shard_size: int = max(

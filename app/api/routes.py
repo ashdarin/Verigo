@@ -611,12 +611,15 @@ async def claim_tencent_qq_job(
     try:
         deadline = time.monotonic() + wait_seconds
         while True:
+            shard_size = min(
+                settings.scheduler_remote_shard_size,
+                settings.remote_worker_max_emails_per_job,
+            )
+            if execution_target == TENCENT_QQ_TARGET:
+                shard_size = min(shard_size, settings.qq_scheduler_shard_size)
             job = job_store.claim_remote_lease(
                 worker_name, execution_target, capacity=worker_capacity,
-                shard_size=min(
-                    settings.scheduler_remote_shard_size,
-                    settings.remote_worker_max_emails_per_job,
-                ),
+                shard_size=shard_size,
                 allow_local_fallback=True,
                 prospecting_shard_size=settings.prospecting_scheduler_shard_size,
             )
