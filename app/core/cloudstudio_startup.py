@@ -51,7 +51,13 @@ if [ ! -s "$layout_file" ] || [ "$(cat "$layout_file")" != "$layout" ]; then
 fi
 for slot in {slots}; do
   pid_file="/tmp/verigo-qq-worker-watchdog-${{slot}}.pid"
-  if [ ! -s "$pid_file" ] || ! kill -0 "$(cat "$pid_file")" 2>/dev/null; then
+  if [ ! -s "$pid_file" ]; then
+    layout_ready=false
+    continue
+  fi
+  pid="$(cat "$pid_file")"
+  if ! kill -0 "$pid" 2>/dev/null || \
+      ! ps -p "$pid" -o args= 2>/dev/null | grep -Fq "/tmp/verigo-qq-worker-watchdog.sh $slot"; then
     layout_ready=false
   fi
 done

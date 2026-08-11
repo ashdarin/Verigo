@@ -24,6 +24,8 @@ assert "git pull --ff-only" not in script
 assert "verigo-qq-worker-watchdog.sh" in script
 assert "verigo-qq-worker-watchdog.pid" in script
 assert "kill -0" in script
+assert "ps -p" in script
+assert "grep -Fq" in script
 assert "nohup setsid" in script
 assert "sleep 5" in script
 

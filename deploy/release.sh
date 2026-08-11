@@ -332,6 +332,7 @@ systemctl restart verigo
 # restart while SQLite migrations and imports are still warming up.
 for _ in {1..60}; do
     if curl -fsS http://127.0.0.1:8000/api/health >/dev/null; then
+        systemctl restart verigo-worker-api.service
         systemctl restart verigo-supervisor.service
         # Jobs were drained before activation, so workers can safely reload
         # the release instead of retaining modules from the old symlink target.
