@@ -23,9 +23,14 @@ verigo.site {
         -Server
     }
 
-    reverse_proxy 127.0.0.1:8000 {
-        # Retry briefly while the application process is reloading during a
-        # release, preventing crawlers from seeing a transient 502.
-        lb_try_duration 10s
+    route {
+        @worker_api path /api/workers/*
+        reverse_proxy @worker_api 127.0.0.1:8001
+
+        reverse_proxy 127.0.0.1:8000 {
+            # Retry briefly while the application process is reloading during a
+            # release, preventing crawlers from seeing a transient 502.
+            lb_try_duration 10s
+        }
     }
 }
