@@ -1,0 +1,24 @@
+[Unit]
+Description=Verigo Cloud Studio IDE keepalive
+After=network-online.target verigo.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=verigo
+Group=verigo
+WorkingDirectory=/opt/verigo/current
+EnvironmentFile=/etc/verigo/verigo.env
+Environment=PLAYWRIGHT_BROWSERS_PATH=/opt/verigo/data/playwright
+Environment=PYTHONPATH=/opt/verigo/current
+ExecStart=/opt/verigo/.venv/bin/python /opt/verigo/current/deploy/cloudstudio_keepalive.py
+Restart=always
+RestartSec=15
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/opt/verigo/data
+
+[Install]
+WantedBy=multi-user.target
