@@ -199,6 +199,42 @@ reclaimed = store.claim_remote_lease("stale-worker", "stale-test", shard_size=1)
 assert reclaimed is not None and reclaimed.pending_indices == [0]
 assert store.abandon_lease(stale_job.id, "stale-worker", reclaimed.lease_id or "")
 
+# A remote fleet can hang after every worker has claimed work.  The supervisor
+# reaper must close the stale lease and release its MX capacity without waiting
+# for a new worker to poll for a claim.
+hung_job = Job(
+    id="hung-remote-lease", emails=["hung@gmail.com"], worker_count=1,
+    execution_target="hung-test",
+)
+store.add(hung_job)
+hung_lease = store.claim_remote_lease("hung-worker", "hung-test", shard_size=1)
+assert hung_lease is not None and hung_lease.lease_id
+connection = store._connect()
+connection.execute(
+    "UPDATE job_leases SET heartbeat_at=? WHERE id=?",
+    ((utc_now() - timedelta(days=1)).isoformat(), hung_lease.lease_id),
+)
+connection.execute(
+    "UPDATE jobs SET heartbeat_at=? WHERE id=?",
+    ((utc_now() - timedelta(days=1)).isoformat(), hung_job.id),
+)
+connection.close()
+assert store.requeue_stale_jobs() == 1
+connection = store._connect()
+lease_row = connection.execute(
+    "SELECT completed_at FROM job_leases WHERE id=?", (hung_lease.lease_id,)
+).fetchone()
+mx_row = connection.execute(
+    "SELECT 1 FROM mx_scheduler_leases WHERE lease_id=?", (hung_lease.lease_id,)
+).fetchone()
+connection.close()
+assert lease_row is not None and lease_row[0] is not None
+assert mx_row is None
+assert store.get(hung_job.id).results[0]["progress_state"] == "pending"
+reclaimed_hung = store.claim_remote_lease("reclaim-worker", "hung-test", shard_size=1)
+assert reclaimed_hung is not None and reclaimed_hung.pending_indices == [0]
+assert store.abandon_lease(hung_job.id, "reclaim-worker", reclaimed_hung.lease_id or "")
+
 # Final callbacks persist their result rows, reconcile catch-all conflicts,
 # and close the lease as one transaction.
 atomic = Job(
