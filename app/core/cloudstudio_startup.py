@@ -31,13 +31,13 @@ if [ ! -f .venv/.verigo-worker-deps ] || ! cmp -s requirements.txt .venv/.verigo
   .venv/bin/python -m pip install --disable-pip-version-check -q -r requirements.txt >/tmp/verigo-qq-pip.log 2>&1
   cp requirements.txt .venv/.verigo-worker-deps
 fi
-for pid_file in /tmp/verigo-qq-worker-*.pid; do
+for pid_file in /tmp/verigo-qq-worker-*.pid /tmp/verigo-qq-worker-watchdog.pid /tmp/verigo-qq-worker-watchdog-*.pid; do
   [ -s "$pid_file" ] || continue
   pid="$(cat "$pid_file")"
   kill -TERM -- "-${{pid}}" 2>/dev/null || kill "$pid" 2>/dev/null || true
 done
 sleep 2
-rm -f /tmp/verigo-qq-worker-*.pid
+rm -f /tmp/verigo-qq-worker-*.pid /tmp/verigo-qq-worker-watchdog.pid /tmp/verigo-qq-worker-watchdog-*.pid
 : >/tmp/verigo-qq-worker.log
 for slot in {slots}; do
   pid_file="/tmp/verigo-qq-worker-${{slot}}.pid"

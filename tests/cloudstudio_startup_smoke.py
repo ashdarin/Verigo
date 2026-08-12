@@ -23,7 +23,7 @@ assert "/api/workers/${VERIGO_REMOTE_WORKER_TARGET}/bundle" in script
 assert "X-Verigo-Worker-Token" in script
 assert "git clone" not in script
 assert "git fetch" not in script
-assert "verigo-qq-worker-watchdog" not in script
+assert "verigo-qq-worker-watchdog-*.pid" in script
 assert "verigo-qq-worker-${slot}.pid" in script
 assert "kill -0" in script
 assert "nohup setsid" in script
