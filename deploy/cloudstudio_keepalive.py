@@ -69,10 +69,17 @@ def keep_workspace_active(label: str, config: object) -> None:
 
 
 def main() -> None:
-    workspaces = (
-        ("qq", settings),
-        ("domestic", secondary_cloudstudio_config),
-    )
+    workspaces = []
+    if settings.tencent_qq_worker_enabled and settings.cloudstudio_lifecycle_enabled:
+        workspaces.append(("qq", settings))
+    if (
+        secondary_cloudstudio_config.tencent_qq_worker_enabled
+        and secondary_cloudstudio_config.cloudstudio_lifecycle_enabled
+    ):
+        workspaces.append(("domestic", secondary_cloudstudio_config))
+    if not workspaces:
+        logger.info("No Cloud Studio workspace is enabled")
+        return
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(workspaces)) as executor:
         futures = [executor.submit(keep_workspace_active, *workspace) for workspace in workspaces]
         for future in futures:
