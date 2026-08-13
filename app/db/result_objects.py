@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import uuid
 from contextlib import closing
@@ -10,6 +11,9 @@ from typing import Any
 from app.config import settings
 from app.db.pg_compat import PgConnection, as_iso, as_json, postgres_active
 from app.db.sqlite import connect as connect_sqlite
+
+
+logger = logging.getLogger(__name__)
 
 
 def now_iso() -> str:
@@ -22,7 +26,10 @@ class ResultObjectStore:
     def _connect(self):
         from app.db.pg_compat import connect_app
 
-        return connect_app()
+        connection = connect_app()
+        if not isinstance(connection, PgConnection):
+            connection.row_factory = sqlite3.Row
+        return connection
 
     def initialize(self) -> None:
         if postgres_active():
@@ -72,7 +79,8 @@ class ResultObjectStore:
                 (owner_id, task_id, result_index),
             ).fetchone()
             if row:
-                if result.get("progress_state") not in {"pending", "verifying"} and row["status"] in {"queued", "running"}:
+                incoming_pending = result.get("progress_state") in {"pending", "verifying"}
+                if not incoming_pending:
                     connection.execute(
                         "UPDATE result_objects SET status=?, verification_method=?, server_response=?, confidence=?, metadata_json=? WHERE id=? AND owner_id=?",
                         (self._status(result), result.get("verification_method") or result.get("strategy"), result.get("smtp_result") or result.get("message"), result.get("confidence") or row["confidence"], json.dumps({k: result[k] for k in ("domain_type", "original_index", "first_name", "last_name", "domain") if k in result}, ensure_ascii=False), row["id"], owner_id),
@@ -240,6 +248,45 @@ class ResultObjectStore:
 
     def export_rows(self, owner_id: str, list_id: str) -> list[dict[str, Any]]:
         return self.list_results(owner_id, list_id, 0, 100000)[1]
+
+    @staticmethod
+    def source_for_job(job: Any) -> str:
+        """Tag saved objects the same way the save-result API does."""
+        if getattr(job, "execution_target", "") == "discovery" or getattr(job, "stop_on_deliverable", False):
+            return "discovery"
+        if getattr(job, "execution_target", "") == "reverify":
+            return "reverify"
+        emails = getattr(job, "emails", None) or []
+        return "single" if len(emails) == 1 else "batch"
+
+    def publish_completed_job(self, job: Any) -> int:
+        """Persist settled rows for a user-visible completed job.
+
+        Internal child / retry jobs are skipped; callers publish the parent
+        once it itself is completed. Failures are swallowed per-row so a
+        result_objects write cannot roll back job completion.
+        """
+        owner_id = getattr(job, "owner_id", None)
+        if not owner_id or getattr(job, "parent_id", None) or getattr(job, "retry_parent_id", None):
+            return 0
+        source = self.source_for_job(job)
+        written = 0
+        for fallback_index, raw in enumerate(getattr(job, "results", None) or []):
+            result = dict(raw)
+            if result.get("progress_state") in {"pending", "verifying"}:
+                continue
+            index = int(result.get("original_index", fallback_index))
+            try:
+                self.ensure_result(owner_id, job.id, index, result, source)
+                written += 1
+            except Exception:
+                logger.exception(
+                    "Failed to persist result_object owner=%s job=%s index=%s",
+                    owner_id,
+                    getattr(job, "id", ""),
+                    index,
+                )
+        return written
 
 
 result_object_store = ResultObjectStore()

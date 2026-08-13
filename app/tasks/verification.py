@@ -228,6 +228,7 @@ class VerificationTasks:
             job_store.record_catch_all(job)
             write_csv(job)
             job_store.persist(job)
+            publish_completed_result_objects(job)
             return job
         if execution_target == TENCENT_QQ_TARGET:
             worker_lifecycle.notify_job_queued()
@@ -336,7 +337,10 @@ class VerificationTasks:
             elif target == GMAIL_TARGET:
                 notify_cloudshell_job_queued()
         job_store.refresh_parent(parent.id)
-        return job_store.get(parent.id) or parent
+        refreshed = job_store.get(parent.id) or parent
+        if refreshed.status == "completed":
+            publish_completed_result_objects(refreshed)
+        return refreshed
 
 
 def waiting_result(email: str, index: int) -> dict[str, Any]:
@@ -451,6 +455,13 @@ def _clear_retry_metadata(result: dict[str, Any], state: str = "completed") -> N
     result.pop("retry_max_attempts", None)
 
 
+def publish_completed_result_objects(job: Job) -> None:
+    """Write account-owned settled rows into result_objects after job completion."""
+    from app.db.result_objects import result_object_store
+
+    result_object_store.publish_completed_job(job)
+
+
 def finish_initial_job(job: Job) -> Job:
     """Complete the user task immediately and hand transient results to idle workers."""
     reconcile_catch_all_conflicts(job.results)
@@ -474,6 +485,7 @@ def finish_initial_job(job: Job) -> Job:
         job_store.record_catch_all(visible)
         write_csv(visible)
         job_store.persist(visible)
+        publish_completed_result_objects(visible)
     return visible
 
 
@@ -519,6 +531,7 @@ def finish_background_retry(job: Job) -> Job | None:
     job_store.record_catch_all(parent)
     write_csv(parent)
     job_store.persist(parent)
+    publish_completed_result_objects(parent)
     if next_retry:
         enqueue_background_retry(parent, job, next_retry, job.temporary_retry_attempts + 1)
     if changed and parent.owner_id:
@@ -574,6 +587,7 @@ def finish_background_retry_failure(job: Job, error: str) -> Job | None:
     job_store.cache_results(parent.results)
     write_csv(parent)
     job_store.persist(parent)
+    publish_completed_result_objects(parent)
     if changed and parent.owner_id:
         result_index_by_email = {
             email.lower(): index for index, email in enumerate(parent.emails)
@@ -819,12 +833,7 @@ def run_job(job: Job) -> None:
             if job_store.is_stopped(job.id):
                 return
             job.results = [by_index[index] for index in sorted(by_index)]
-            job_store.cache_results(job.results)
-            job_store.record_catch_all(job)
-            job.finished_at = utc_now()
-            write_csv(job)
-            job.error = None
-            job.status = "completed"
+            finish_initial_job(job)
             return
 
         # A stopped task can be resumed in place. Keep its already reported

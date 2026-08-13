@@ -1,4 +1,8 @@
-"""Ensure JobStore dual-backend changes still work on SQLite (default path)."""
+"""Legacy sqlite JobStore regression.
+
+Application connect_app() is PostgreSQL-only. Legacy sqlite store tests
+require isolated sqlite connect (app.db.sqlite.connect), not connect_app().
+"""
 from __future__ import annotations
 
 import os
@@ -12,7 +16,7 @@ if str(ROOT) not in sys.path:
 
 
 def main() -> int:
-    # Force sqlite mode and isolated DB.
+    # Isolated sqlite file; never go through connect_app().
     for key in list(os.environ):
         if key.startswith("VERIGO_"):
             os.environ.pop(key, None)
@@ -20,15 +24,23 @@ def main() -> int:
         db = Path(tmp) / "t.db"
         os.environ["VERIGO_DATABASE_PATH"] = str(db)
         os.environ["VERIGO_POSTGRES_ENABLED"] = "false"
-        os.environ["VERIGO_ALLOW_SQLITE"] = "true"
         os.environ.pop("VERIGO_DATABASE_URL", None)
         import importlib
         import app.config as config
 
         importlib.reload(config)
+        import app.db.pg_compat as pg_compat
+
+        importlib.reload(pg_compat)
         import app.db.jobs as jobs_mod
 
         importlib.reload(jobs_mod)
+        from app.db.sqlite import connect as sqlite_connect
+
+        def _connect_isolated(self):
+            return sqlite_connect(config.settings.database_path)
+
+        jobs_mod.JobStore._connect = _connect_isolated  # type: ignore[method-assign]
         store = jobs_mod.JobStore()
         store.initialize()
         store.set_service_mode("draining")

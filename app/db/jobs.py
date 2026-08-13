@@ -23,7 +23,14 @@ def _dt(value: Any) -> datetime | None:
 
 
 def _sql_ts(value: Any) -> Any:
-    """Bind timestamps as datetime on PG, ISO text on SQLite."""
+    """Bind timestamps as datetime on PG, ISO text on SQLite.
+
+    Never compare a PostgreSQL ``timestamptz`` column to ``datetime.isoformat()``
+    text. psycopg sends Python ``str`` as ``text``, so PostgreSQL may evaluate
+    ``timestamptz < text`` by casting the column to text (``YYYY-MM-DD HH:MM``).
+    ``isoformat()`` uses ``T`` in that position, and space < ``T``, so a fresh
+    heartbeat looks older than any same-day cutoff and nodes flip offline.
+    """
     if value is None or value == "":
         return None
     parsed = value if isinstance(value, datetime) else as_datetime(value)
@@ -493,8 +500,9 @@ class JobStore:
                 for key, limit, _cooldown in profile_rows
             ),
             "cooling": sum(
-                bool(cooldown and str(cooldown) > utc_now().isoformat())
+                1
                 for _key, _limit, cooldown in profile_rows
+                if (parsed := _dt(cooldown)) is not None and parsed > now
             ),
         }
         return {
@@ -1818,9 +1826,9 @@ class JobStore:
                 pressure_events += outcome["pressure"]
                 if not cooldown_active:
                     current = max(minimum, (current + 1) // 2)
-                    next_cooldown = (
+                    next_cooldown = _sql_ts(
                         now + timedelta(seconds=settings.scheduler_cooldown_seconds)
-                    ).isoformat()
+                    )
                     adjusted_at = _sql_ts(now)
             elif outcome["success"]:
                 if cooldown_active:
@@ -1855,7 +1863,7 @@ class JobStore:
     def lease_valid(
         self, job_id: str, worker_id: str, lease_id: str, execution_target: str | None = None,
     ) -> bool:
-        stale = (utc_now() - timedelta(seconds=settings.worker_lease_seconds)).isoformat()
+        stale = _sql_ts(utc_now() - timedelta(seconds=settings.worker_lease_seconds))
         target_clause = " AND execution_target=?" if execution_target else ""
         parameters: tuple[Any, ...] = (lease_id, job_id, worker_id, stale)
         if execution_target:
@@ -1914,7 +1922,7 @@ class JobStore:
         """Atomically accept a shard callback and renew its still-active lease."""
         self.initialize()
         now = utc_now()
-        stale = (now - timedelta(seconds=settings.worker_lease_seconds)).isoformat()
+        stale = _sql_ts(now - timedelta(seconds=settings.worker_lease_seconds))
         target_clause = " AND execution_target=?" if execution_target else ""
         parameters: tuple[Any, ...] = (lease_id, job_id, worker_id, stale)
         if execution_target:
@@ -1944,7 +1952,7 @@ class JobStore:
             )
             connection.execute(
                 "UPDATE mx_scheduler_leases SET expires_at=? WHERE lease_id=?",
-                ((now + timedelta(seconds=settings.worker_lease_seconds)).isoformat(), lease_id),
+                (_sql_ts(now + timedelta(seconds=settings.worker_lease_seconds)), lease_id),
             )
             connection.execute("UPDATE jobs SET heartbeat_at=? WHERE id=?", (_sql_ts(now), job_id))
             connection.commit()
@@ -1953,7 +1961,7 @@ class JobStore:
     def complete_lease(self, job_id: str, worker_id: str, lease_id: str) -> bool:
         self.initialize()
         now = utc_now()
-        stale = (now - timedelta(seconds=settings.worker_lease_seconds)).isoformat()
+        stale = _sql_ts(now - timedelta(seconds=settings.worker_lease_seconds))
         with self._lock, closing(self._connect()) as connection:
             begin_immediate(connection)
             row = connection.execute("""
@@ -1989,7 +1997,7 @@ class JobStore:
         """Atomically persist a final shard, reconcile conflicts, and close its lease."""
         self.initialize()
         now = utc_now()
-        stale = (now - timedelta(seconds=settings.worker_lease_seconds)).isoformat()
+        stale = _sql_ts(now - timedelta(seconds=settings.worker_lease_seconds))
         target_clause = " AND execution_target=?" if execution_target else ""
         parameters: tuple[Any, ...] = (lease_id, job_id, worker_id, stale)
         if execution_target:
@@ -2027,7 +2035,7 @@ class JobStore:
     def abandon_lease(self, job_id: str, worker_id: str, lease_id: str) -> bool:
         """Return only a failed worker's unfinished shard to the queue."""
         self.initialize()
-        stale = (utc_now() - timedelta(seconds=settings.worker_lease_seconds)).isoformat()
+        stale = _sql_ts(utc_now() - timedelta(seconds=settings.worker_lease_seconds))
         with self._lock, closing(self._connect()) as connection:
             begin_immediate(connection)
             row = connection.execute("""
@@ -2048,7 +2056,7 @@ class JobStore:
                     f"AND original_index IN ({placeholders}) AND progress_state='verifying'",
                     (job_id, *indices),
                 )
-            now = utc_now().isoformat()
+            now = _sql_ts(utc_now())
             connection.execute("UPDATE job_leases SET completed_at=? WHERE id=?", (now, lease_id))
             connection.execute("DELETE FROM mx_scheduler_leases WHERE lease_id=?", (lease_id,))
             connection.execute(
@@ -2061,7 +2069,7 @@ class JobStore:
     def requeue_orphaned_results(self) -> int:
         """Release only rows whose worker lease is no longer active."""
         self.initialize()
-        stale = (utc_now() - timedelta(seconds=settings.worker_lease_seconds)).isoformat()
+        stale = _sql_ts(utc_now() - timedelta(seconds=settings.worker_lease_seconds))
         with self._lock, closing(self._connect()) as connection:
             begin_immediate(connection)
             released = self._release_orphaned_results(connection, stale)
@@ -2069,7 +2077,7 @@ class JobStore:
             return released
 
     @staticmethod
-    def _release_orphaned_results(connection: sqlite3.Connection, stale_before: str) -> int:
+    def _release_orphaned_results(connection: sqlite3.Connection, stale_before: Any) -> int:
         """Return verifying rows to the queue when no fresh lease owns them."""
         return connection.execute("""
             UPDATE job_results SET progress_state='pending'
@@ -2092,7 +2100,7 @@ class JobStore:
         with closing(self._connect()) as connection:
             connection.execute(
                 "UPDATE jobs SET heartbeat_at = ? WHERE id = ? AND worker_id = ? AND status = 'running'",
-                (job.heartbeat_at.isoformat(), job.id, job.worker_id),
+                (_sql_ts(job.heartbeat_at), job.id, job.worker_id),
             )
 
     def requeue_stale_jobs(self) -> int:
@@ -2101,15 +2109,15 @@ class JobStore:
         stale_before = utc_now() - timedelta(seconds=settings.worker_lease_seconds)
         with closing(self._connect()) as connection:
             begin_immediate(connection)
-            stale_before_iso = stale_before.isoformat()
-            self._release_orphaned_results(connection, stale_before_iso)
+            stale_before_bind = _sql_ts(stale_before)
+            self._release_orphaned_results(connection, stale_before_bind)
             requeued = connection.execute(
                 """
                 UPDATE jobs SET status='queued', worker_id=NULL, heartbeat_at=NULL,
                     error='工作节点已重新领取任务'
                 WHERE status='running' AND heartbeat_at IS NOT NULL AND heartbeat_at < ?
                 """,
-                (stale_before_iso,),
+                (stale_before_bind,),
             ).rowcount
             connection.commit()
             return requeued
@@ -2289,7 +2297,7 @@ class JobStore:
     ) -> None:
         """Record a remote heartbeat in the canonical node registry."""
         self.initialize()
-        now = utc_now().isoformat()
+        now = _sql_ts(utc_now())
         with closing(self._connect()) as connection:
             existing = connection.execute(
                 "SELECT capacity FROM worker_nodes WHERE target=? AND worker_id=?",
@@ -2333,9 +2341,9 @@ class JobStore:
         """Derive stale/offline node state from durable heartbeats."""
         self.initialize()
         now = now or utc_now()
-        stale_before = (now - timedelta(seconds=settings.node_stale_seconds)).isoformat()
+        stale_before = _sql_ts(now - timedelta(seconds=settings.node_stale_seconds))
         offline_seconds = max(settings.node_stale_seconds + 1, settings.node_offline_seconds)
-        offline_before = (now - timedelta(seconds=offline_seconds)).isoformat()
+        offline_before = _sql_ts(now - timedelta(seconds=offline_seconds))
         with self._lock, closing(self._connect()) as connection:
             begin_immediate(connection)
             offline = connection.execute(
@@ -2371,7 +2379,7 @@ class JobStore:
         self, target: str, deadline: datetime | None, error: str | None
     ) -> WorkerRuntime:
         self.initialize()
-        now = utc_now().isoformat()
+        now = _sql_ts(utc_now())
         with closing(self._connect()) as connection:
             connection.execute(
                 """
@@ -2388,7 +2396,7 @@ class JobStore:
                     stop_requested_at=NULL,
                     last_stop_error=NULL
                 """,
-                (target, now, deadline.isoformat() if deadline else None, error),
+                (target, now, _sql_ts(deadline) if deadline else None, error),
             )
         return self.worker_runtime(target)
 
@@ -2406,7 +2414,7 @@ class JobStore:
 
     def begin_worker_idle(self, target: str) -> WorkerRuntime:
         self.initialize()
-        now = utc_now().isoformat()
+        now = _sql_ts(utc_now())
         with closing(self._connect()) as connection:
             connection.execute(
                 """
@@ -2441,7 +2449,7 @@ class JobStore:
                     stop_requested_at=excluded.stop_requested_at,
                     last_stop_error=excluded.last_stop_error
                 """,
-                (target, utc_now().isoformat(), error),
+                (target, _sql_ts(utc_now()), error),
             )
 
     def is_stopped(self, job_id: str) -> bool:
@@ -2485,7 +2493,7 @@ class JobStore:
                         deferred_retry_at=NULL, error=?
                     WHERE execution_target=? AND status='queued' AND created_at <= ?
                     """,
-                    (destination_target, message, source_target, cutoff.isoformat()),
+                    (destination_target, message, source_target, _sql_ts(cutoff)),
                 )
                 connection.commit()
             except Exception:

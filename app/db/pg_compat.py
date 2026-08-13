@@ -70,15 +70,8 @@ def postgres_active() -> bool:
 
 def connect_app():
     """Open the sole application database (PostgreSQL)."""
-    import os
-
     if postgres_active():
         return PgConnection()
-    allow = os.getenv("VERIGO_ALLOW_SQLITE", "").strip().lower() in {"1", "true", "yes"}
-    if allow:
-        from app.db.sqlite import connect as sqlite_connect
-
-        return sqlite_connect(settings.database_path)
     raise RuntimeError(
         "SQLite is no longer an application backend. Set VERIGO_DATABASE_URL."
     )

@@ -15,6 +15,12 @@ if hasattr(sys.stdout, "reconfigure"):
 os.environ["VERIGO_DATABASE_PATH"] = str(temp_dir / "verigo.db")
 os.environ["VERIGO_RESULTS_DIR"] = str(temp_dir / "results")
 os.environ["VERIGO_SECURE_COOKIES"] = "false"
+if not os.environ.get("VERIGO_DATABASE_URL", "").strip():
+    print(
+        "SKIP backend_smoke: SQLite is no longer an application backend. "
+        "Set VERIGO_DATABASE_URL to run this smoke against PostgreSQL."
+    )
+    raise SystemExit(0)
 os.environ["VERIGO_FREE_SINGLE_DAILY_LIMIT"] = "2"
 os.environ["VERIGO_EMAIL_VERIFICATION_TRIAL_CREDITS"] = "10"
 os.environ["VERIGO_TRIAL_CREDIT_DAYS"] = "7"
@@ -61,6 +67,7 @@ from app.core.result_retry import (
 from app.core.security import hash_password, token_hash
 from app.db.auth import auth_store
 from app.db.jobs import Job, job_store, utc_now
+from app.db.result_objects import result_object_store
 from app.main import app
 from app.tasks.verification import (
     finish_background_retry,
@@ -439,6 +446,8 @@ background_parent = job_store.get(background_parent.id)
 assert background_parent is not None and background_parent.status == "completed"
 assert background_parent.results[0]["retry_at"]
 assert serialize_job(background_parent).retry_at is not None
+published = result_object_store.recent_results(retry_notice_owner.id, 8)
+assert any(item["email"] == "later@example.com" and item["task_id"] == background_parent.id for item in published)
 background_retry = job_store.retry_children(background_parent.id)[0]
 background_retry.status = "completed"
 background_retry.results = [normalize_result({
@@ -450,6 +459,13 @@ finish_background_retry(background_retry)
 background_parent = job_store.get(background_parent.id)
 assert background_parent is not None
 assert background_parent.results[0]["deliverable"] is False
+updated_objects = result_object_store.recent_results(retry_notice_owner.id, 8)
+assert any(
+    item["email"] == "later@example.com"
+    and item["task_id"] == background_parent.id
+    and item["status"] == "undeliverable"
+    for item in updated_objects
+)
 assert background_parent.results[0]["retry_updated"] is True
 assert background_parent.results[0]["retry_state"] == "completed"
 assert "retry_at" not in background_parent.results[0]

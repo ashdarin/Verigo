@@ -531,7 +531,14 @@ connection.close()
 assert store.abandon_lease(follow_up.id, "route-b", follow_up_lease.lease_id or "")
 
 store.record_worker_seen("health-test", "fresh-node", capacity=3)
+fresh_state = store.reconcile_worker_nodes()
 connection = store._connect()
+assert connection.execute(
+    "SELECT health FROM worker_nodes WHERE target=? AND worker_id=?",
+    ("health-test", "fresh-node"),
+).fetchone()[0] == "healthy"
+assert fresh_state["stale"] == 0
+assert fresh_state["offline"] == 0
 connection.execute(
     "UPDATE worker_nodes SET last_seen_at=? WHERE target=? AND worker_id=?",
     ((utc_now() - timedelta(seconds=240)).isoformat(), "health-test", "fresh-node"),

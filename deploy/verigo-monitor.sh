@@ -18,6 +18,14 @@ mkdir -p "$state_dir"
 issues=()
 public_health_payload=
 readiness_payload=
+# Local PostgreSQL tunnel bind only. Never print DSN / DATABASE_URL / env.
+tunnel_down=0
+if ! ss -lnt 2>/dev/null | awk '$1 ~ /LISTEN/ && $4 == "127.0.0.1:15432" { found=1 } END { exit !found }'; then
+    logger -t verigo-monitor -- "postgres ssh tunnel is not listening on 127.0.0.1:15432"
+    issues+=("postgres ssh tunnel is not listening on 127.0.0.1:15432")
+    tunnel_down=1
+fi
+
 if ! public_health_payload=$(curl -fsS --max-time 12 https://verigo.site/api/health); then
     issues+=("public health endpoint is unavailable")
 else
@@ -74,6 +82,10 @@ then
     issues+=("database is not writable")
 fi
 
+if ! systemctl is-active --quiet verigo-postgres-tunnel; then
+    issues+=("verigo-postgres-tunnel unit is not active")
+fi
+
 disk_used=$(df -P / | awk 'NR==2 {gsub("%", "", $5); print $5}')
 if (( disk_used >= disk_limit )); then
     issues+=("disk usage is ${disk_used}%")
@@ -97,9 +109,15 @@ fi
 
 previous_status=
 previous_sent=0
+tunnel_down_count=0
 if [[ -r "$state_file" ]]; then
     # shellcheck disable=SC1090
     source "$state_file"
+fi
+if (( tunnel_down )); then
+    tunnel_down_count=$((tunnel_down_count + 1))
+else
+    tunnel_down_count=0
 fi
 now=$(date +%s)
 should_send=false
@@ -119,5 +137,12 @@ PY
         curl -fsS --max-time 12 -H 'Content-Type: application/json' \
             --data "$payload" "$VERIGO_ALERT_WEBHOOK_URL" >/dev/null || true
     fi
-    printf 'previous_status=%q\nprevious_sent=%q\n' "$status" "$now" > "$state_file"
+    previous_status=$status
+    previous_sent=$now
+fi
+printf 'previous_status=%q\nprevious_sent=%q\ntunnel_down_count=%q\n' \
+    "$previous_status" "$previous_sent" "$tunnel_down_count" > "$state_file"
+
+if (( tunnel_down )); then
+    exit 1
 fi

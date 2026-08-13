@@ -257,6 +257,37 @@ def test_abandon_lease() -> None:
     assert "heartbeat_at >= %s" in orphan
 
 
+def test_worker_node_timestamps_bind_via_sql_ts() -> None:
+    """PG timestamptz compared to isoformat() text marks every node offline.
+
+    str(datetime) is 'YYYY-MM-DD HH:MM...'; isoformat() is 'YYYY-MM-DDTHH:MM...'.
+    Space < 'T', so a fresh last_seen_at looks older than any same-day cutoff.
+    """
+    import inspect
+    from datetime import datetime, timezone
+
+    from app.db.jobs import JobStore
+
+    now = datetime(2026, 8, 13, 12, 34, 56, tzinfo=timezone.utc)
+    assert str(now)[10] == " "
+    assert now.isoformat()[10] == "T"
+    assert str(now) < now.isoformat()
+
+    seen = inspect.getsource(JobStore.record_worker_seen)
+    recon = inspect.getsource(JobStore.reconcile_worker_nodes)
+    valid = inspect.getsource(JobStore.lease_valid)
+    requeue = inspect.getsource(JobStore.requeue_stale_jobs)
+    summary = inspect.getsource(JobStore.health_summary)
+    assert "_sql_ts" in seen
+    assert "utc_now().isoformat()" not in seen
+    assert "_sql_ts" in recon
+    assert ".isoformat()" not in recon
+    assert "_sql_ts" in valid
+    assert ".isoformat()" not in valid
+    assert "_sql_ts" in requeue
+    assert "str(cooldown) > utc_now().isoformat()" not in summary
+
+
 def test_no_sqlite_only_control_left() -> None:
     """Claim paths must not rely on PRAGMA / INSERT OR * after rewrite."""
     for sql in (
@@ -280,6 +311,7 @@ def main() -> int:
         test_heartbeat_lease,
         test_complete_lease_upsert_on_conflict,
         test_abandon_lease,
+        test_worker_node_timestamps_bind_via_sql_ts,
         test_no_sqlite_only_control_left,
     ]
     failed = 0
