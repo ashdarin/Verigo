@@ -22,6 +22,10 @@ assert '. "$environment_file"' in command
 assert "nohup .venv/bin/python" in command
 assert "VERIGO_REMOTE_WORKER_RELEASE=release-123" in command
 assert "verigo-gmail-worker-2.log" in command
+assert "if ! test -x .venv/bin/python" in command
+assert ".verigo-worker-deps-sha256" in command
+assert command.count(".venv/bin/pip -q install") == 1
+assert "python3 -m venv .venv && .venv/bin/pip" not in command
 try:
     CloudShellLifecycle._worker_command(0)
 except ValueError as exc:

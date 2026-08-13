@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import shlex
@@ -113,11 +114,18 @@ class CloudShellLifecycle:
 
     def _run(self) -> None:
         while not self._stop_event.is_set():
-            if self.configured and (
-                job_store.active_target_count(GMAIL_TARGET)
-                or job_store.active_target_count("local")
-            ):
-                self.notify_job_queued()
+            try:
+                if self.configured and (
+                    job_store.active_target_count(GMAIL_TARGET)
+                    or job_store.active_target_count("local")
+                ):
+                    self.notify_job_queued()
+            except Exception:
+                # A temporary database or provider failure must not permanently
+                # stop the lifecycle thread. The next poll retries the wakeup.
+                logger.exception(
+                    "Cloud Shell lifecycle poll failed for account %s", self._account_id
+                )
             self._wake_event.wait(5)
             self._wake_event.clear()
 
@@ -143,9 +151,20 @@ class CloudShellLifecycle:
             "rm -f .gmail-worker.pid; "
             if worker_number == 1 else ""
         )
+        dependency = "dnspython>=2.6,<3"
+        dependency_hash = hashlib.sha256(dependency.encode()).hexdigest()
+        dependency_marker = ".venv/.verigo-worker-deps-sha256"
+        environment_bootstrap = (
+            "if ! test -x .venv/bin/python; then python3 -m venv .venv; fi; "
+            f"if ! test -s {dependency_marker} || "
+            f"! grep -qx {shlex.quote(dependency_hash)} {dependency_marker}; then "
+            f".venv/bin/pip -q install {shlex.quote(dependency)} && "
+            f"printf '%s\\n' {shlex.quote(dependency_hash)} > {dependency_marker}; "
+            "fi; "
+        )
         return (
-            "cd ~/verigo-worker && python3 -m venv .venv && "
-            ".venv/bin/pip -q install 'dnspython>=2.6,<3' && "
+            "cd ~/verigo-worker && "
+            f"{environment_bootstrap}"
             f"pid_file={pid_file}; environment_file={environment_file}; "
             f"{legacy_cleanup}"
             "if test -s \"$pid_file\" && kill -0 \"$(cat \"$pid_file\")\" 2>/dev/null "

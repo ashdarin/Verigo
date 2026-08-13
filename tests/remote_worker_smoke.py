@@ -20,8 +20,9 @@ with patch.object(worker.subprocess, "run", side_effect=lambda *args, **kwargs: 
         assert run.call_count == 2
         sleep.assert_called_once_with(1)
         command = run.call_args.args[0]
-        assert "--retry-connrefused" in command
+        assert "--retry-connrefused" not in command
         assert "--connect-timeout" in command
+        assert command[command.index("--max-time") + 1] == "75"
 
 with patch.object(
     worker.subprocess,

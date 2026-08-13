@@ -52,9 +52,8 @@ WORKER_REQUEST_ATTEMPTS = 4
 
 def request_json(path: str, payload: dict[str, object] | None = None) -> dict[str, object]:
     command = [
-        "curl", "--silent", "--show-error", "--fail", "--max-time", "30",
-        "--connect-timeout", "10", "--retry", "3", "--retry-delay", "1",
-        "--retry-connrefused",
+        "curl", "--silent", "--show-error", "--fail", "--max-time", "75",
+        "--connect-timeout", "10",
         "-X", "POST", f"{SERVER_URL}{path}",
         "-H", "Content-Type: application/json",
         "-H", f"X-Verigo-Worker-Token: {TOKEN}",
@@ -73,7 +72,7 @@ def request_json(path: str, payload: dict[str, object] | None = None) -> dict[st
                 check=False,
                 capture_output=True,
                 text=True,
-                timeout=35,
+                timeout=85,
             )
             if not response.returncode:
                 return json.loads(response.stdout)
@@ -320,7 +319,7 @@ def main() -> None:
     print(f"Verigo {WORKER_TARGET} worker {WORKER_ID} polling {SERVER_URL}", flush=True)
     while True:
         try:
-            claim = request_json(f"/api/workers/{WORKER_TARGET}/claim?wait_seconds=20")
+            claim = request_json(f"/api/workers/{WORKER_TARGET}/claim?wait_seconds=0")
             job = claim.get("job")
             if not job:
                 time.sleep(POLL_SECONDS)
