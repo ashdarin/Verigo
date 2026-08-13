@@ -418,7 +418,8 @@ class CloudShellCoordinator:
                      ON r.worker_id=u.worker_id AND r.usage_date=u.usage_date
                    WHERE u.usage_date=? AND u.enabled=1 AND u.active=1
                    GROUP BY u.worker_id, u.claimed_units, u.last_claimed_at
-                   ORDER BY u.claimed_units + reserved, u.last_claimed_at, u.worker_id""",
+                   ORDER BY u.claimed_units + COALESCE(SUM(r.reserved_units), 0),
+                            u.last_claimed_at, u.worker_id""",
                 (today,),
             ).fetchall()
             if online_accounts:
