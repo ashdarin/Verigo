@@ -63,14 +63,12 @@ PY
     fi
 fi
 
-if ! PYTHONPATH=/opt/verigo/current /opt/verigo/.venv/bin/python - <<'PY'
-from pathlib import Path
+if ! set -a; source /etc/verigo/verigo.env; set +a; PYTHONPATH=/opt/verigo/current /opt/verigo/.venv/bin/python - <<'PY'
+from app.db.backend_ops import database_write_probe, postgres_enabled
 
-from app.db.sqlite import begin_immediate, connect
-
-with connect(Path('/opt/verigo/data/verigo.db')) as connection:
-    begin_immediate(connection)
-    connection.rollback()
+ok = database_write_probe()
+print("backend=postgres" if postgres_enabled() else "backend=sqlite")
+raise SystemExit(0 if ok else 1)
 PY
 then
     issues+=("database is not writable")

@@ -48,6 +48,53 @@ for source_name in ("verigo.db", "smtp_limiter.db", "name_catalog.db"):
             assert backup_db.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
 PY
 
+# Optional PostgreSQL dump through the local SSH tunnel. Safe while still on
+# SQLite: dumps the shadow/cutover database for recovery rehearsal.
+if [[ -r /etc/verigo/postgres.env ]]; then
+    set -a
+    # shellcheck disable=SC1091
+    source /etc/verigo/postgres.env
+    set +a
+fi
+if [[ -n "${VERIGO_DATABASE_URL:-}" ]]; then
+    if command -v pg_dump >/dev/null 2>&1; then
+        # custom format; credentials come from the URL, never echoed.
+        BACKUP_DIR="$backup_dir" DATABASE_URL="$VERIGO_DATABASE_URL" \
+          "$venv_python" - <<'PY'
+import os
+import subprocess
+from pathlib import Path
+from urllib.parse import urlparse, unquote
+
+url = os.environ["DATABASE_URL"]
+parsed = urlparse(url)
+env = os.environ.copy()
+if parsed.password:
+    env["PGPASSWORD"] = unquote(parsed.password)
+host = parsed.hostname or "127.0.0.1"
+port = str(parsed.port or 5432)
+user = unquote(parsed.username or "verigo")
+dbname = (parsed.path or "/verigo").lstrip("/") or "verigo"
+out = Path(os.environ["BACKUP_DIR"]) / "verigo_postgres.dump"
+cmd = [
+    "pg_dump",
+    "--format=custom",
+    "--no-owner",
+    "--no-acl",
+    "-h", host,
+    "-p", port,
+    "-U", user,
+    "-d", dbname,
+    "-f", str(out),
+]
+subprocess.check_call(cmd, env=env)
+print(f"postgres_dump={out} bytes={out.stat().st_size}")
+PY
+    else
+        echo "pg_dump not installed; skipping PostgreSQL dump" >&2
+    fi
+fi
+
 legacy_file=$(find -L "$app_dir" -maxdepth 1 -type f -name '*8.py' -printf '%f\n' -quit)
 if [[ -z "$legacy_file" ]]; then
     echo "Legacy verifier source was not found" >&2

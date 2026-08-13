@@ -1,31 +1,57 @@
-# Secrets and local configuration
+# Secrets and local configuration — never commit
 .env
 .env.*
 !.env.example
 *.pem
 *.key
+*.p12
+*.pfx
+id_rsa
+id_ed25519
+id_ecdsa
+**/authorized_keys
+1 (1).pem
+verigo.env.live
+verigo.env.server
+postgres.env
 
 # Runtime state and user data
 data/
 *.db
 *.db-shm
 *.db-wal
+*.sqlite
+*.sqlite3
+verigo.postdeploy.db
 domain_type_cache.json
 Name/
 
 # Python and local tooling
 .venv/
 venv/
+env/
+ENV/
 __pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+dist/
+build/
 free_company_dataset.csv
 company_catalog.duckdb
 company_catalog*.duckdb
 .env.local
 .tinyb
-*.py[cod]
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
 
 # JavaScript test artifacts
 node_modules/
@@ -36,10 +62,23 @@ test-results/
 *.log
 *.tar
 *.tar.gz
+*.sha256
 .server-sync/
+.server-staging/
+_upstream_ref/
+postgres-cutover-*/
+**/backups/
+
+# Local tooling binaries dropped into the repo
+grok.exe
+tmp/
 
 # Editor and OS metadata
 .idea/
 .vscode/
+*.swp
+*.swo
+*~
 .DS_Store
 Thumbs.db
+desktop.ini

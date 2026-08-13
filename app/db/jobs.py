@@ -5,8 +5,6 @@ import sqlite3
 import threading
 import time
 import uuid
-import os
-import re
 from contextlib import closing
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -15,9 +13,32 @@ from typing import Any
 
 from app.config import settings
 from app.core.result_retry import is_recipient_mailbox_full, smtp_temporary_status
+from app.db.pg_compat import PgConnection, as_bool, as_datetime, as_json, postgres_active
 from app.db.sqlite import begin_immediate, connect as connect_sqlite
-from app.db.postgresql import connect as connect_postgresql, runtime_enabled
-from app.db.postgres_schema import SCHEMA_SQL
+
+
+def _dt(value: Any) -> datetime | None:
+    """Parse SQLite ISO strings or PostgreSQL datetime values."""
+    return as_datetime(value)
+
+
+def _sql_ts(value: Any) -> Any:
+    """Bind timestamps as datetime on PG, ISO text on SQLite."""
+    if value is None or value == "":
+        return None
+    parsed = value if isinstance(value, datetime) else as_datetime(value)
+    if parsed is None:
+        return value
+    return parsed if postgres_active() else parsed.isoformat()
+
+
+def _json_load(value: Any, default: Any = None) -> Any:
+    """Load JSON from SQLite text or accept PostgreSQL jsonb natives."""
+    if value is None or value == "":
+        return default
+    if isinstance(value, (dict, list)):
+        return value
+    return json.loads(value)
 
 
 def utc_now() -> datetime:
@@ -88,135 +109,6 @@ class WorkspaceOverview:
     settled: int
 
 
-class _PostgresJobConnection:
-    """Translate the small SQLite dialect still used by JobStore."""
-
-    _bool_columns = ("stop_on_deliverable", "deliverability", "is_valid", "is_skipped", "is_catch_all", "retry_updated", "query_fields_ready")
-
-    def __init__(self, connection: Any) -> None:
-        self._connection = connection
-
-    @property
-    def is_postgres(self) -> bool:
-        return True
-
-    @staticmethod
-    def _params(statement: str, parameters: Any) -> Any:
-        if parameters is None:
-            return None
-        values = list(parameters)
-        json_columns = {"emails_json", "results_json", "result_json", "indices_json", "metadata_json"}
-        try:
-            from psycopg.types.json import Jsonb
-        except ImportError:
-            return tuple(values)
-
-        def wrap(index: int) -> None:
-            if index >= len(values) or not isinstance(values[index], str):
-                return
-            try:
-                values[index] = Jsonb(json.loads(values[index]))
-            except (TypeError, json.JSONDecodeError):
-                return
-
-        insert = re.search(
-            r"INSERT\s+INTO\s+\w+\s*\((.*?)\)\s*VALUES\s*\((.*?)\)",
-            statement,
-            flags=re.IGNORECASE | re.DOTALL,
-        )
-        if insert:
-            columns = [column.strip().strip('"') for column in insert.group(1).split(",")]
-            expressions = [expression.strip() for expression in insert.group(2).split(",")]
-            parameter_index = 0
-            for column, expression in zip(columns, expressions):
-                if "%s" not in expression:
-                    continue
-                if column in json_columns:
-                    wrap(parameter_index)
-                parameter_index += expression.count("%s")
-
-        json_pattern = "|".join(sorted(json_columns, key=len, reverse=True))
-        for match in re.finditer(rf"\b(?:{json_pattern})\s*=\s*%s", statement, flags=re.IGNORECASE):
-            wrap(statement[:match.start()].count("%s"))
-        return tuple(values)
-
-    @classmethod
-    def _sql(cls, statement: str) -> str:
-        statement = statement.replace("?", "%s")
-        # psycopg treats every percent sign as client-side placeholder syntax.
-        statement = re.sub(r"%(?![sbt%])", "%%", statement)
-        statement = re.sub(r"\bBEGIN\s+IMMEDIATE\b", "BEGIN", statement, flags=re.IGNORECASE)
-        statement = re.sub(r"\b([A-Za-z_][A-Za-z0-9_]*)\s+LIKE\s+(%s)\s+COLLATE\s+NOCASE", r"\1 ILIKE \2", statement, flags=re.IGNORECASE)
-        statement = re.sub(r"\s+COLLATE\s+NOCASE", "", statement, flags=re.IGNORECASE)
-        statement = statement.replace("lower(substr(email, instr(email, '@') + 1))", "lower(split_part(email, '@', 2))")
-        statement = re.sub(r"lower\(emails_json\)", "lower(emails_json::text)", statement, flags=re.IGNORECASE)
-        statement = re.sub(
-            r"\bemails_json\s+(NOT\s+)?LIKE\b",
-            lambda match: f"emails_json::text {match.group(1) or ''}LIKE",
-            statement,
-            flags=re.IGNORECASE,
-        )
-        for column in cls._bool_columns:
-            statement = re.sub(
-                rf"(\bSET\b[\s\S]*?\b{column}\s*=\s*)1\b",
-                r"\1TRUE",
-                statement,
-                flags=re.IGNORECASE,
-            )
-            statement = re.sub(
-                rf"(\bSET\b[\s\S]*?\b{column}\s*=\s*)0\b",
-                r"\1FALSE",
-                statement,
-                flags=re.IGNORECASE,
-            )
-        for column in cls._bool_columns:
-            statement = re.sub(rf"\b{column}\s*=\s*1\b", f"{column} IS TRUE", statement, flags=re.IGNORECASE)
-            statement = re.sub(rf"\b{column}\s*=\s*0\b", f"{column} IS FALSE", statement, flags=re.IGNORECASE)
-        statement = statement.replace("SUM(deliverability IS TRUE)", "COUNT(*) FILTER (WHERE deliverability IS TRUE)")
-        statement = statement.replace("SUM(deliverability IS FALSE)", "COUNT(*) FILTER (WHERE deliverability IS FALSE)")
-        statement = statement.replace("SUM(deliverability IS NULL AND is_skipped IS FALSE)", "COUNT(*) FILTER (WHERE deliverability IS NULL AND is_skipped IS FALSE)")
-        statement = re.sub(r"SUM\((status|r\.progress_state)='(queued|running|pending|verifying)'\)", r"COUNT(*) FILTER (WHERE \1='\2')", statement, flags=re.IGNORECASE)
-        statement = re.sub(r"SUM\(progress_state NOT IN \(([^)]+)\)\)", r"COUNT(*) FILTER (WHERE progress_state NOT IN (\1))", statement, flags=re.IGNORECASE)
-        for column in ("is_valid", "is_catch_all", "deliverability", "settled", "deliverable"):
-            statement = re.sub(rf"SUM\(({column})\)", rf"COUNT(*) FILTER (WHERE \1 IS TRUE)", statement, flags=re.IGNORECASE)
-        statement = re.sub(r"\bMAX\(retry_updated\)\b", "MAX(retry_updated::int)", statement, flags=re.IGNORECASE)
-        if re.match(r"\s*INSERT\s+OR\s+REPLACE\s+INTO\s+schema_migrations", statement, flags=re.IGNORECASE):
-            statement = re.sub(r"INSERT\s+OR\s+REPLACE", "INSERT", statement, flags=re.IGNORECASE)
-            statement += " ON CONFLICT (name) DO UPDATE SET applied_at=EXCLUDED.applied_at"
-        if "FROM SQLITE_MASTER" in statement.upper():
-            return "SELECT table_name FROM information_schema.tables WHERE table_schema=current_schema() AND table_type='BASE TABLE'"
-        pragma = re.match(r"\s*PRAGMA\s+table_info\(([^)]+)\)", statement, flags=re.IGNORECASE)
-        if pragma:
-            table = pragma.group(1).strip(' \"')
-            return "SELECT ordinal_position - 1, column_name, data_type, CASE WHEN is_nullable='NO' THEN 1 ELSE 0 END, column_default, 0 FROM information_schema.columns WHERE table_schema=current_schema() AND table_name=%s ORDER BY ordinal_position" % repr(table)
-        return statement
-
-    def execute(self, statement: str, parameters=()):
-        normalized = self._sql(statement)
-        adapted = self._params(normalized, parameters)
-        return self._connection.execute(normalized, adapted)
-
-    def executemany(self, statement: str, parameters):
-        normalized = self._sql(statement)
-        with self._connection.cursor() as cursor:
-            return cursor.executemany(
-                normalized,
-                [self._params(normalized, row) for row in parameters],
-            )
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._connection, name)
-
-    def commit(self) -> None:
-        self._connection.commit()
-
-    def rollback(self) -> None:
-        self._connection.rollback()
-
-    def close(self) -> None:
-        self._connection.close()
-
-
 class JobStore:
     """SQLite-backed queue, history store, result cache, and Catch-all archive."""
 
@@ -232,41 +124,11 @@ class JobStore:
         self._keep = keep
         self._lock = threading.RLock()
         self._initialized = False
-        self._initialized_backend: str | None = None
-
-    @staticmethod
-    def _postgres_enabled() -> bool:
-        return runtime_enabled("VERIGO_JOB_POSTGRES_ENABLED")
 
     def _connect(self):
-        if self._postgres_enabled():
-            return _PostgresJobConnection(connect_postgresql(autocommit=True))
-        return connect_sqlite(settings.database_path)
+        from app.db.pg_compat import connect_app
 
-    @staticmethod
-    def _is_postgres(connection: Any) -> bool:
-        return bool(getattr(connection, "is_postgres", False))
-
-    @classmethod
-    def _begin_write(cls, connection: Any) -> None:
-        """Start a write transaction on either backend.
-
-        SQLite needs BEGIN IMMEDIATE to serialize queue claims; PostgreSQL
-        obtains the equivalent protection from row locks on the claim query.
-        """
-        if cls._is_postgres(connection):
-            connection.execute("BEGIN")
-        else:
-            begin_immediate(connection)
-
-    @classmethod
-    def _advisory_xact_lock(cls, connection: Any, key: str) -> None:
-        if cls._is_postgres(connection):
-            connection.execute("SELECT pg_advisory_xact_lock(hashtext(?))", (key,))
-
-    @classmethod
-    def _for_update(cls, connection: Any) -> str:
-        return " FOR UPDATE" if cls._is_postgres(connection) else ""
+        return connect_app()
 
     @classmethod
     def _select_columns(cls) -> str:
@@ -277,41 +139,34 @@ class JobStore:
         row = dict(zip(cls._columns, raw_row))
         return Job(
             id=row["id"],
-            emails=json.loads(row["emails_json"]),
+            emails=list(as_json(row["emails_json"], default=[]) or []),
             worker_count=row["worker_count"],
             status=row["status"],
-            created_at=datetime.fromisoformat(row["created_at"]),
-            started_at=datetime.fromisoformat(row["started_at"]) if row["started_at"] else None,
-            finished_at=datetime.fromisoformat(row["finished_at"]) if row["finished_at"] else None,
+            created_at=as_datetime(row["created_at"]) or utc_now(),
+            started_at=as_datetime(row["started_at"]),
+            finished_at=as_datetime(row["finished_at"]),
             error=row["error"],
-            results=json.loads(row["results_json"]),
+            results=list(as_json(row["results_json"], default=[]) or []),
             csv_path=Path(row["csv_path"]) if row["csv_path"] else None,
             owner_id=row["owner_id"],
             guest_token_hash=row["guest_token_hash"],
             worker_id=row["worker_id"],
-            heartbeat_at=datetime.fromisoformat(row["heartbeat_at"]) if row["heartbeat_at"] else None,
-            stop_on_deliverable=bool(row["stop_on_deliverable"]),
+            heartbeat_at=as_datetime(row["heartbeat_at"]),
+            stop_on_deliverable=as_bool(row["stop_on_deliverable"]),
             execution_target=str(row["execution_target"] or "local"),
             parent_id=row["parent_id"],
             retry_parent_id=row["retry_parent_id"],
-            deferred_retry_at=(
-                datetime.fromisoformat(row["deferred_retry_at"])
-                if row["deferred_retry_at"] else None
-            ),
+            deferred_retry_at=as_datetime(row["deferred_retry_at"]),
             temporary_retry_attempts=int(row["temporary_retry_attempts"] or 0),
             list_name=row["list_name"],
         )
 
     def initialize(self) -> None:
         with self._lock:
-            backend = "postgresql" if self._postgres_enabled() else "sqlite"
-            if self._initialized and self._initialized_backend == backend:
+            if self._initialized:
                 return
-            if self._postgres_enabled():
-                with closing(self._connect()) as connection:
-                    connection.execute(SCHEMA_SQL)
+            if postgres_active():
                 self._initialized = True
-                self._initialized_backend = backend
                 return
             settings.database_path.parent.mkdir(parents=True, exist_ok=True)
             with closing(self._connect()) as connection:
@@ -533,7 +388,6 @@ class JobStore:
                     """
                 )
             self._initialized = True
-            self._initialized_backend = backend
 
     @staticmethod
     def _result_state(result: dict[str, Any]) -> str:
@@ -553,35 +407,65 @@ class JobStore:
     def health_summary(self) -> dict[str, object]:
         """Return inexpensive readiness signals without hydrating task payloads."""
         self.initialize()
-        stale_before = (
-            utc_now() - timedelta(seconds=settings.worker_lease_seconds)
-        ).isoformat()
+        now = utc_now()
+        stale_before_dt = now - timedelta(seconds=settings.worker_lease_seconds)
+        stale_before = stale_before_dt.isoformat()
         with closing(self._connect()) as connection:
             mode_row = connection.execute(
                 "SELECT value FROM service_state WHERE name='verification_mode'"
             ).fetchone()
-            job_counts = connection.execute(
-                """
-                SELECT
-                    COALESCE(SUM(status='queued'), 0),
-                    COALESCE(SUM(status='running'), 0)
-                FROM jobs
-                """
-            ).fetchone()
-            result_counts = connection.execute(
-                """
-                SELECT
-                    COALESCE(SUM(r.progress_state='pending'), 0),
-                    COALESCE(SUM(r.progress_state='verifying'), 0)
-                FROM job_results r
-                JOIN jobs j ON j.id=r.job_id
-                WHERE j.status IN ('queued', 'running')
-                """
-            ).fetchone()
-            stale_leases = connection.execute(
-                "SELECT COUNT(*) FROM job_leases WHERE completed_at IS NULL AND heartbeat_at < ?",
-                (stale_before,),
-            ).fetchone()[0]
+            if postgres_active():
+                job_counts = connection.execute(
+                    """
+                    SELECT
+                        COUNT(*) FILTER (WHERE status = 'queued'),
+                        COUNT(*) FILTER (WHERE status = 'running')
+                    FROM jobs
+                    """
+                ).fetchone()
+                queued_n = int(job_counts[0] or 0)
+                running_n = int(job_counts[1] or 0)
+                # Skip scanning job_results (hundreds of thousands of rows) when idle.
+                if queued_n == 0 and running_n == 0:
+                    result_counts = (0, 0)
+                else:
+                    result_counts = connection.execute(
+                        """
+                        SELECT
+                            COUNT(*) FILTER (WHERE r.progress_state = 'pending'),
+                            COUNT(*) FILTER (WHERE r.progress_state = 'verifying')
+                        FROM jobs j
+                        JOIN job_results r ON r.job_id = j.id
+                        WHERE j.status IN ('queued', 'running')
+                        """
+                    ).fetchone()
+                stale_leases = connection.execute(
+                    "SELECT COUNT(*) FROM job_leases WHERE completed_at IS NULL AND heartbeat_at < %s",
+                    (stale_before_dt,),
+                ).fetchone()[0]
+            else:
+                job_counts = connection.execute(
+                    """
+                    SELECT
+                        COALESCE(SUM(status='queued'), 0),
+                        COALESCE(SUM(status='running'), 0)
+                    FROM jobs
+                    """
+                ).fetchone()
+                result_counts = connection.execute(
+                    """
+                    SELECT
+                        COALESCE(SUM(r.progress_state='pending'), 0),
+                        COALESCE(SUM(r.progress_state='verifying'), 0)
+                    FROM job_results r
+                    JOIN jobs j ON j.id=r.job_id
+                    WHERE j.status IN ('queued', 'running')
+                    """
+                ).fetchone()
+                stale_leases = connection.execute(
+                    "SELECT COUNT(*) FROM job_leases WHERE completed_at IS NULL AND heartbeat_at < ?",
+                    (stale_before,),
+                ).fetchone()[0]
             unhealthy_targets = [
                 str(row[0])
                 for row in connection.execute(
@@ -637,7 +521,11 @@ class JobStore:
 
     @classmethod
     def _result_row(cls, job_id: str, index: int, result: dict[str, Any], now: str) -> tuple[Any, ...]:
-        """Return one durable result row, including fields needed by list queries."""
+        """Return one durable result row, including fields needed by list queries.
+
+        Boolean flags use Python ``bool`` so PostgreSQL ``boolean`` columns accept
+        them; SQLite stores True/False as 1/0 in INTEGER columns.
+        """
         payload = dict(result)
         payload["original_index"] = index
         deliverable = payload.get("deliverable")
@@ -648,12 +536,12 @@ class JobStore:
             cls._result_state(payload),
             json.dumps(payload, ensure_ascii=False, default=str),
             now,
-            deliverable if isinstance(deliverable, bool) else None,
-            payload.get("valid") is True,
-            payload.get("skipped") is True,
-            payload.get("domain_type") == "catch-all",
+            1 if deliverable is True else 0 if deliverable is False else None,
+            bool(payload.get("valid") is True),
+            bool(payload.get("skipped") is True),
+            bool(payload.get("domain_type") == "catch-all"),
             str(payload.get("retry_at") or "") or None,
-            payload.get("retry_updated") is True,
+            bool(payload.get("retry_updated") is True),
             True,
         )
 
@@ -666,7 +554,7 @@ class JobStore:
         updates: list[tuple[Any, ...]] = []
         for job_id, index, payload, updated_at in rows:
             try:
-                result = json.loads(payload)
+                result = _json_load(payload)
             except (TypeError, json.JSONDecodeError):
                 continue
             if not isinstance(result, dict):
@@ -691,7 +579,7 @@ class JobStore:
             "SELECT id, emails_json, results_json FROM jobs"
         ):
             try:
-                emails, results = json.loads(emails_json), json.loads(results_json)
+                emails, results = _json_load(emails_json), _json_load(results_json)
             except json.JSONDecodeError:
                 continue
             indexed = {int(item.get("original_index", index)): item for index, item in enumerate(results) if isinstance(item, dict)}
@@ -714,14 +602,14 @@ class JobStore:
         migrated_rows = 0
         linked_rows = 0
         with self._lock, closing(self._connect()) as connection:
-            self._begin_write(connection)
+            begin_immediate(connection)
             now = utc_now().isoformat()
             for job_id, emails_json, results_json in connection.execute(
                 "SELECT id, emails_json, results_json FROM jobs"
             ):
                 try:
-                    emails = json.loads(emails_json)
-                    results = json.loads(results_json or "[]")
+                    emails = _json_load(emails_json)
+                    results = _json_load(results_json or "[]")
                 except json.JSONDecodeError:
                     continue
                 indexed = {
@@ -750,7 +638,7 @@ class JobStore:
             ).fetchall()
             for parent_id, parent_emails_json in parents:
                 try:
-                    parent_emails = json.loads(parent_emails_json)
+                    parent_emails = _json_load(parent_emails_json)
                 except json.JSONDecodeError:
                     continue
                 positions: dict[str, list[int]] = {}
@@ -762,7 +650,7 @@ class JobStore:
                     "SELECT id, emails_json FROM jobs WHERE parent_id=? ORDER BY created_at, id", (parent_id,)
                 ):
                     try:
-                        child_emails = json.loads(child_emails_json)
+                        child_emails = _json_load(child_emails_json)
                     except json.JSONDecodeError:
                         continue
                     for child_index, email in enumerate(child_emails):
@@ -823,7 +711,7 @@ class JobStore:
             stale = []
             for email, result_json in rows:
                 try:
-                    checks = json.loads(result_json).get("checks") or {}
+                    checks = _json_load(result_json).get("checks") or {}
                 except json.JSONDecodeError:
                     continue
                 if checks.get("domain") is False or checks.get("mx") is False:
@@ -841,21 +729,22 @@ class JobStore:
             json.dumps(job.emails, ensure_ascii=False),
             job.worker_count,
             job.status,
-            job.created_at.isoformat(),
-            job.started_at.isoformat() if job.started_at else None,
-            job.finished_at.isoformat() if job.finished_at else None,
+            _sql_ts(job.created_at),
+            _sql_ts(job.started_at),
+            _sql_ts(job.finished_at),
             job.error,
             "[]",
             str(job.csv_path) if job.csv_path else None,
             job.owner_id,
             job.guest_token_hash,
             job.worker_id,
-            job.heartbeat_at.isoformat() if job.heartbeat_at else None,
+            _sql_ts(job.heartbeat_at),
+            # bool works for SQLite INTEGER and PostgreSQL boolean columns.
             bool(job.stop_on_deliverable),
             job.execution_target,
             job.parent_id,
             job.retry_parent_id,
-            job.deferred_retry_at.isoformat() if job.deferred_retry_at else None,
+            _sql_ts(job.deferred_retry_at),
             job.temporary_retry_attempts,
             job.list_name,
         )
@@ -909,7 +798,7 @@ class JobStore:
     def add(self, job: Job, max_active: int | None = None) -> None:
         self.initialize()
         with self._lock, closing(self._connect()) as connection:
-            self._begin_write(connection)
+            begin_immediate(connection)
             active = connection.execute(
                 """SELECT COUNT(*) FROM jobs
                 WHERE status IN ('queued', 'running')
@@ -928,7 +817,7 @@ class JobStore:
     def persist(self, job: Job) -> None:
         self.initialize()
         with self._lock, closing(self._connect()) as connection:
-            self._begin_write(connection)
+            begin_immediate(connection)
             self._persist_metadata(connection, job)
             if job.results:
                 self._upsert_results(connection, job.id, job.results)
@@ -946,15 +835,15 @@ class JobStore:
         self.initialize()
         now = utc_now()
         with self._lock, closing(self._connect()) as connection:
-            self._begin_write(connection)
+            begin_immediate(connection)
             changed = connection.execute(
                 """
                 UPDATE jobs SET started_at=COALESCE(started_at, ?), heartbeat_at=?
                 WHERE id=? AND status='running' AND worker_id=?
                 """,
                 (
-                    job.started_at.isoformat() if job.started_at else now.isoformat(),
-                    now.isoformat(),
+                    _sql_ts(job.started_at or now),
+                    _sql_ts(now),
                     job.id,
                     worker_id,
                 ),
@@ -971,7 +860,8 @@ class JobStore:
     def clear_worker_runtime(self, job_id: str, worker_id: str) -> bool:
         """Release runtime ownership without changing the job's business state."""
         self.initialize()
-        now = utc_now().isoformat()
+        now = utc_now()
+        heartbeat = now if postgres_active() else _sql_ts(now)
         with self._lock, closing(self._connect()) as connection:
             changed = connection.execute(
                 """
@@ -979,14 +869,14 @@ class JobStore:
                     heartbeat_at=CASE WHEN status='running' THEN ? ELSE NULL END
                 WHERE id=? AND status='running' AND worker_id=?
                 """,
-                (now, job_id, worker_id),
+                (heartbeat, job_id, worker_id),
             ).rowcount
         return bool(changed)
 
     def ensure_result_rows(self, job: Job) -> None:
         """Support legacy callers that created a job before visible waiting rows."""
         with self._lock, closing(self._connect()) as connection:
-            self._begin_write(connection)
+            begin_immediate(connection)
             self._ensure_result_rows(connection, job)
             connection.commit()
 
@@ -1015,7 +905,7 @@ class JobStore:
             ).fetchall()
         results = []
         for state, raw in rows:
-            result = json.loads(raw)
+            result = _json_load(raw)
             result["progress_state"] = state
             results.append(result)
         return results
@@ -1054,7 +944,7 @@ class JobStore:
             ).fetchall()
         results = []
         for state, raw in rows:
-            result = json.loads(raw)
+            result = _json_load(raw)
             result["progress_state"] = state
             results.append(result)
         return available, results
@@ -1069,7 +959,7 @@ class JobStore:
             ).fetchone()
             if row is None:
                 return False
-            result = json.loads(row[0])
+            result = _json_load(row[0])
             if not result.pop("retry_updated", None):
                 return True
             connection.execute(
@@ -1091,7 +981,7 @@ class JobStore:
             updates = []
             for result_index, raw in rows:
                 try:
-                    result = json.loads(raw)
+                    result = _json_load(raw)
                 except (TypeError, json.JSONDecodeError):
                     result = {}
                 result.pop("retry_updated", None)
@@ -1105,25 +995,35 @@ class JobStore:
     def result_overview(self, job_id: str) -> ResultOverview:
         """Return the task counters used by status polling without loading result JSON."""
         self.initialize()
+        if postgres_active():
+            valid_sql = "CASE WHEN is_valid IS TRUE THEN 1 ELSE 0 END"
+            skip_false = "(is_skipped IS NOT TRUE)"
+            catch_sql = "CASE WHEN is_catch_all IS TRUE THEN 1 ELSE 0 END"
+            retry_sql = "CASE WHEN retry_updated IS TRUE THEN 1 ELSE 0 END"
+        else:
+            valid_sql = "CASE WHEN is_valid=1 THEN 1 ELSE 0 END"
+            skip_false = "(COALESCE(is_skipped, 0)=0)"
+            catch_sql = "CASE WHEN is_catch_all=1 THEN 1 ELSE 0 END"
+            retry_sql = "CASE WHEN retry_updated=1 THEN 1 ELSE 0 END"
         with closing(self._connect()) as connection:
             row = connection.execute(
-                """SELECT
+                f"""SELECT
                     COUNT(*),
                     COALESCE(SUM(CASE WHEN progress_state NOT IN ('pending', 'verifying') THEN 1 ELSE 0 END), 0),
-                    COALESCE(SUM(CASE WHEN is_valid THEN 1 ELSE 0 END), 0),
-                    COALESCE(SUM(CASE WHEN deliverability IS TRUE THEN 1 ELSE 0 END), 0),
-                    COALESCE(SUM(CASE WHEN deliverability IS FALSE THEN 1 ELSE 0 END), 0),
-                    COALESCE(SUM(CASE WHEN deliverability IS NULL AND is_skipped IS FALSE THEN 1 ELSE 0 END), 0),
-                    COALESCE(SUM(CASE WHEN is_catch_all THEN 1 ELSE 0 END), 0),
+                    COALESCE(SUM({valid_sql}), 0),
+                    COALESCE(SUM(CASE WHEN deliverability=1 THEN 1 ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN deliverability=0 THEN 1 ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN deliverability IS NULL AND {skip_false} THEN 1 ELSE 0 END), 0),
+                    COALESCE(SUM({catch_sql}), 0),
                     MIN(retry_at),
-                    COALESCE(MAX(CASE WHEN retry_updated THEN 1 ELSE 0 END), 0)
+                    COALESCE(MAX({retry_sql}), 0)
                 FROM job_results WHERE job_id=?""",
                 (job_id,),
             ).fetchone()
         retry_at = None
         if row[7]:
             try:
-                retry_at = datetime.fromisoformat(str(row[7]))
+                retry_at = _dt(str(row[7]))
             except ValueError:
                 pass
         return ResultOverview(
@@ -1140,7 +1040,7 @@ class JobStore:
                 WHERE parent_id=? AND deferred_retry_at IS NOT NULL""",
                 (parent_id,),
             ).fetchone()
-        return datetime.fromisoformat(row[0]) if row and row[0] else None
+        return _dt(row[0]) if row and row[0] else None
 
     def _upsert_results(
         self, connection: sqlite3.Connection, job_id: str, results: list[dict[str, Any]],
@@ -1181,7 +1081,7 @@ class JobStore:
                 if item is None:
                     continue
                 _email, _state, payload = item
-                result = json.loads(payload)
+                result = _json_load(payload)
                 result["original_index"] = int(parent_index)
                 parent_rows.append(self._result_row(parent_id, int(parent_index), result, now))
             connection.executemany("""
@@ -1205,7 +1105,7 @@ class JobStore:
             return
         self.initialize()
         with self._lock, closing(self._connect()) as connection:
-            self._begin_write(connection)
+            begin_immediate(connection)
             self._upsert_results(connection, job_id, results)
             connection.commit()
 
@@ -1222,7 +1122,7 @@ class JobStore:
         results: list[dict[str, Any]] = []
         for index, raw in rows:
             try:
-                result = json.loads(raw)
+                result = _json_load(raw)
             except (TypeError, json.JSONDecodeError):
                 continue
             if not isinstance(result, dict):
@@ -1242,7 +1142,7 @@ class JobStore:
             evidence: list[dict[str, Any]] = []
             for (raw,) in evidence_rows:
                 try:
-                    result = json.loads(raw)
+                    result = _json_load(raw)
                 except (TypeError, json.JSONDecodeError):
                     continue
                 if isinstance(result, dict):
@@ -1279,7 +1179,7 @@ class JobStore:
         """Keep a domain from exposing Catch-all beside contradictory SMTP verdicts."""
         self.initialize()
         with self._lock, closing(self._connect()) as connection:
-            self._begin_write(connection)
+            begin_immediate(connection)
             changed = self._reconcile_catch_all_conflicts_in_connection(connection, job_id)
             connection.commit()
         return changed
@@ -1324,8 +1224,10 @@ class JobStore:
                 clauses.append("status=?")
                 params.append(status)
             if search.strip():
-                email_search = "lower(emails_json::text)" if self._is_postgres(connection) else "lower(emails_json)"
-                clauses.append(f"(lower(COALESCE(list_name, '')) LIKE ? OR {email_search} LIKE ? OR lower(COALESCE(csv_path, '')) LIKE ?)")
+                emails_expr = "lower(emails_json::text)" if postgres_active() else "lower(emails_json)"
+                clauses.append(
+                    f"(lower(COALESCE(list_name, '')) LIKE ? OR {emails_expr} LIKE ? OR lower(COALESCE(csv_path, '')) LIKE ?)"
+                )
                 needle = f"%{search.strip().lower()}%"
                 params.extend([needle, needle, needle])
             where = " AND ".join(clauses)
@@ -1360,7 +1262,7 @@ class JobStore:
                     SELECT
                         job_id,
                         COALESCE(SUM(CASE WHEN progress_state NOT IN ('pending', 'verifying') THEN 1 ELSE 0 END), 0) AS settled,
-                        COALESCE(SUM(CASE WHEN deliverability IS TRUE THEN 1 ELSE 0 END), 0) AS deliverable
+                        COALESCE(SUM(CASE WHEN deliverability=1 THEN 1 ELSE 0 END), 0) AS deliverable
                     FROM job_results
                     GROUP BY job_id
                 ) AS results ON results.job_id = j.id
@@ -1378,11 +1280,12 @@ class JobStore:
     def recent_completed_single_jobs(self, since: datetime) -> list[Job]:
         """Return standalone single-address jobs eligible for a narrow repair pass."""
         self.initialize()
+        emails_like = "emails_json::text" if postgres_active() else "emails_json"
         with closing(self._connect()) as connection:
             rows = connection.execute(
                 f"""SELECT {self._select_columns()} FROM jobs
                 WHERE status='completed' AND parent_id IS NULL AND execution_target != 'aggregate'
-                    AND retry_parent_id IS NULL AND created_at >= ? AND emails_json NOT LIKE '%,%'
+                    AND retry_parent_id IS NULL AND created_at >= ? AND {emails_like} NOT LIKE '%,%'
                 ORDER BY created_at""",
                 (since.isoformat(),),
             ).fetchall()
@@ -1430,12 +1333,12 @@ class JobStore:
         if not children:
             return parent
 
-        started = [datetime.fromisoformat(row[1]) for row in children if row[1]]
+        started = [dt for row in children if row[1] for dt in [_dt(row[1])] if dt is not None]
         parent.started_at = min(started) if started else None
         terminal = {"completed", "failed", "stopped"}
         if all(row[0] in terminal for row in children):
             parent.finished_at = max(
-                (datetime.fromisoformat(row[2]) if row[2] else utc_now() for row in children), default=utc_now()
+                (_dt(row[2]) or utc_now() for row in children), default=utc_now()
             )
             failures = [row[3] for row in children if row[0] == "failed" and row[3]]
             if failures:
@@ -1470,26 +1373,27 @@ class JobStore:
         now = utc_now()
         stale_before = now - timedelta(seconds=settings.worker_lease_seconds)
         with self._lock, closing(self._connect()) as connection:
-            self._begin_write(connection)
-            stale_before_iso = stale_before.isoformat()
-            self._release_orphaned_results(connection, stale_before_iso)
+            begin_immediate(connection)
+            self._release_orphaned_results(connection, _sql_ts(stale_before))
             connection.execute(
                 """
                 UPDATE jobs SET status = 'queued', worker_id = NULL, heartbeat_at = NULL,
                     error = '工作节点已重新领取任务'
                 WHERE status = 'running' AND heartbeat_at IS NOT NULL AND heartbeat_at < ?
                 """,
-                (stale_before_iso,),
+                (_sql_ts(stale_before),),
             )
+            # stop_on_deliverable uses INTEGER 0/1 on SQLite and boolean on PG.
+            # Literal "= 1" / "= 0" are rewritten by pg_compat; avoid binding 0/1
+            # into a boolean comparison.
+            stop_clause = "AND stop_on_deliverable = 1" if stop_on_deliverable_only else ""
             row = connection.execute(
                 f"""SELECT {self._select_columns()} FROM jobs
                 WHERE status = 'queued' AND execution_target = ?
-                    AND (? = 0 OR stop_on_deliverable = 1)
+                    {stop_clause}
                     AND (deferred_retry_at IS NULL OR deferred_retry_at <= ?)
-                ORDER BY created_at LIMIT 1""" + (
-                    " FOR UPDATE SKIP LOCKED" if self._is_postgres(connection) else ""
-                ),
-                (execution_target, int(stop_on_deliverable_only), now.isoformat()),
+                ORDER BY created_at LIMIT 1""",
+                (execution_target, _sql_ts(now)),
             ).fetchone()
             if row is None:
                 connection.commit()
@@ -1519,7 +1423,7 @@ class JobStore:
                 WHERE id = ?
                 """,
                 (
-                    worker_id, job.started_at.isoformat(), now.isoformat(),
+                    worker_id, _sql_ts(job.started_at), _sql_ts(now),
                     job.id,
                 ),
             )
@@ -1535,16 +1439,15 @@ class JobStore:
         now = utc_now()
         stale = now - timedelta(seconds=settings.worker_lease_seconds)
         with self._lock, closing(self._connect()) as connection:
-            self._begin_write(connection)
-            self._advisory_xact_lock(connection, "verigo:remote-scheduler")
-            self._release_orphaned_results(connection, stale.isoformat())
+            begin_immediate(connection)
+            self._release_orphaned_results(connection, _sql_ts(stale))
             expired = connection.execute("""
                 SELECT id, job_id, indices_json FROM job_leases
                 WHERE completed_at IS NULL AND heartbeat_at < ?
-            """, (stale.isoformat(),)).fetchall()
+            """, (_sql_ts(stale),)).fetchall()
             for expired_lease_id, expired_job_id, raw_indices in expired:
                 try:
-                    expired_indices = [int(index) for index in json.loads(raw_indices)]
+                    expired_indices = [int(index) for index in _json_load(raw_indices)]
                 except (TypeError, ValueError, json.JSONDecodeError):
                     expired_indices = []
                 if expired_indices:
@@ -1554,19 +1457,19 @@ class JobStore:
                         f"AND original_index IN ({placeholders}) AND progress_state='verifying'",
                         (expired_job_id, *expired_indices),
                     )
-                connection.execute("UPDATE job_leases SET completed_at=? WHERE id=?", (now.isoformat(), expired_lease_id))
+                connection.execute("UPDATE job_leases SET completed_at=? WHERE id=?", (_sql_ts(now), expired_lease_id))
                 connection.execute("DELETE FROM mx_scheduler_leases WHERE lease_id=?", (expired_lease_id,))
-            connection.execute("DELETE FROM mx_scheduler_leases WHERE expires_at < ?", (now.isoformat(),))
+            connection.execute("DELETE FROM mx_scheduler_leases WHERE expires_at < ?", (_sql_ts(now),))
             connection.execute("""
                 INSERT INTO worker_nodes(target, worker_id, capacity, health, last_seen_at)
                 VALUES (?, ?, ?, 'healthy', ?)
                 ON CONFLICT(target, worker_id) DO UPDATE SET capacity=excluded.capacity,
                     health='healthy', last_seen_at=excluded.last_seen_at
-            """, (execution_target, worker_id, max(1, capacity), now.isoformat()))
+            """, (execution_target, worker_id, max(1, capacity), _sql_ts(now)))
             load = connection.execute("""
                 SELECT COUNT(*) FROM job_leases WHERE worker_id=? AND execution_target=?
                     AND completed_at IS NULL AND heartbeat_at >= ?
-            """, (worker_id, execution_target, stale.isoformat())).fetchone()[0]
+            """, (worker_id, execution_target, _sql_ts(stale))).fetchone()[0]
             if load >= max(1, capacity):
                 connection.commit()
                 return None
@@ -1574,25 +1477,28 @@ class JobStore:
             if allow_local_fallback and execution_target != "local":
                 claim_targets.append("local")
             target_placeholders = ", ".join("?" for _ in claim_targets)
+            epoch = (
+                "TIMESTAMPTZ '1970-01-01 00:00:00+00'"
+                if postgres_active()
+                else "'1970-01-01T00:00:00+00:00'"
+            )
             rows = connection.execute(f"""
                 SELECT {', '.join('j.' + column for column in self._columns)} FROM jobs j
                 LEFT JOIN jobs parent ON parent.id=j.parent_id
                 LEFT JOIN scheduler_owner_turns turn ON turn.target=?
                     AND turn.owner_key=COALESCE(parent.owner_id, j.owner_id, j.id)
                 WHERE j.status IN ('queued', 'running') AND j.execution_target IN ({target_placeholders})
-                    AND j.stop_on_deliverable=0
+                    AND j.stop_on_deliverable = 0
                     AND (j.deferred_retry_at IS NULL OR j.deferred_retry_at <= ?)
                     AND EXISTS (SELECT 1 FROM job_results r WHERE r.job_id=j.id
                         AND r.progress_state='pending')
                 ORDER BY CASE WHEN j.execution_target=? THEN 0 ELSE 1 END,
-                    COALESCE(turn.last_claimed_at, '1970-01-01T00:00:00+00:00'), j.created_at
+                    COALESCE(turn.last_claimed_at, {epoch}), j.created_at
                 LIMIT ?
-            """ + (
-                " FOR UPDATE OF j SKIP LOCKED" if self._is_postgres(connection) else ""
-            ), (
+            """, (
                 execution_target,
                 *claim_targets,
-                now.isoformat(),
+                _sql_ts(now),
                 execution_target,
                 settings.scheduler_claim_scan_limit,
             )).fetchall()
@@ -1602,7 +1508,7 @@ class JobStore:
             active_by_key: dict[str, int] = {}
             for key, slots in connection.execute("""
                 SELECT mx_key, SUM(slots) FROM mx_scheduler_leases WHERE expires_at >= ? GROUP BY mx_key
-            """, (now.isoformat(),)):
+            """, (_sql_ts(now),)):
                 active_by_key[str(key)] = int(slots)
             job: Job | None = None
             owner_key: str | None = None
@@ -1617,9 +1523,9 @@ class JobStore:
                 for (raw_indices,) in connection.execute("""
                     SELECT indices_json FROM job_leases WHERE job_id=? AND completed_at IS NULL
                         AND heartbeat_at >= ?
-                """, (candidate.id, stale.isoformat())):
+                """, (candidate.id, _sql_ts(stale))):
                     try:
-                        leased.update(int(index) for index in json.loads(raw_indices))
+                        leased.update(int(index) for index in _json_load(raw_indices))
                     except (TypeError, ValueError, json.JSONDecodeError):
                         continue
                 candidate_indices: list[int] = []
@@ -1665,19 +1571,19 @@ class JobStore:
             connection.execute("""
                 INSERT INTO scheduler_owner_turns(target, owner_key, last_claimed_at) VALUES (?, ?, ?)
                 ON CONFLICT(target, owner_key) DO UPDATE SET last_claimed_at=excluded.last_claimed_at
-            """, (execution_target, owner_key, now.isoformat()))
+            """, (execution_target, owner_key, _sql_ts(now)))
             lease_id = uuid.uuid4().hex
             connection.execute("""
                 INSERT INTO job_leases(id, job_id, worker_id, execution_target, indices_json, claimed_at, heartbeat_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (lease_id, job.id, worker_id, execution_target, json.dumps(indices), now.isoformat(), now.isoformat()))
+            """, (lease_id, job.id, worker_id, execution_target, json.dumps(indices), _sql_ts(now), _sql_ts(now)))
             placeholders = ", ".join("?" for _ in indices)
             connection.execute(
                 f"UPDATE job_results SET progress_state='verifying' WHERE job_id=? "
                 f"AND original_index IN ({placeholders}) AND progress_state='pending'",
                 (job.id, *indices),
             )
-            expires = (now + timedelta(seconds=settings.worker_lease_seconds)).isoformat()
+            expires = _sql_ts(now + timedelta(seconds=settings.worker_lease_seconds))
             connection.executemany(
                 "INSERT INTO mx_scheduler_leases(lease_id, mx_key, slots, expires_at) VALUES (?, ?, ?, ?)",
                 [(lease_id, key, slots, expires) for key, slots in mx_slots.items()],
@@ -1685,7 +1591,7 @@ class JobStore:
             connection.execute("""
                 UPDATE jobs SET status='running', worker_id=?, started_at=COALESCE(started_at, ?),
                     heartbeat_at=?, deferred_retry_at=NULL, error=NULL WHERE id=?
-            """, (worker_id, now.isoformat(), now.isoformat(), job.id))
+            """, (worker_id, _sql_ts(now), _sql_ts(now), job.id))
             connection.commit()
         job.status, job.worker_id, job.heartbeat_at = "running", worker_id, now
         job.started_at = job.started_at or now
@@ -1743,7 +1649,7 @@ class JobStore:
                     VALUES (?, ?, ?)
                     ON CONFLICT(domain) DO UPDATE SET
                         scheduler_key=excluded.scheduler_key, updated_at=excluded.updated_at
-                """, (self._scheduler_domain(email), scheduler_key, now.isoformat()))
+                """, (self._scheduler_domain(email), scheduler_key, _sql_ts(now)))
                 return scheduler_key
         return self._scheduler_key_for_email(connection, email)
 
@@ -1779,7 +1685,7 @@ class JobStore:
             INSERT INTO scheduler_domain_profiles(
                 scheduler_key, current_limit, success_streak, successes, pressure_events, last_seen_at
             ) VALUES (?, ?, 0, 0, 0, ?)
-        """, (mx_key, initial, now.isoformat()))
+        """, (mx_key, initial, _sql_ts(now)))
         return initial, 0, 0, None
 
     @classmethod
@@ -1804,7 +1710,8 @@ class JobStore:
             return limit
         if cooldown_until:
             try:
-                if datetime.fromisoformat(cooldown_until) > now:
+                cooldown_dt = _dt(cooldown_until)
+                if cooldown_dt is not None and cooldown_dt > now:
                     return limit
             except ValueError:
                 return limit
@@ -1820,7 +1727,7 @@ class JobStore:
             return connection.execute(
                 "SELECT 1 FROM prospecting_runs WHERE verification_job_id=?", (job_id,)
             ).fetchone() is not None
-        except sqlite3.OperationalError:
+        except Exception:
             # Minimal installs and scheduler-only tests do not create the
             # prospecting tables, so they retain the normal verification path.
             return False
@@ -1836,7 +1743,8 @@ class JobStore:
         if row is None or not row[0]:
             return False
         try:
-            return datetime.fromisoformat(str(row[0])) > now
+            parsed = _dt(row[0])
+            return parsed is not None and parsed > now
         except ValueError:
             return False
 
@@ -1878,7 +1786,7 @@ class JobStore:
             (job_id, *indices),
         ):
             try:
-                result = json.loads(raw_result)
+                result = _json_load(raw_result)
             except (TypeError, json.JSONDecodeError):
                 continue
             if not isinstance(result, dict):
@@ -1891,7 +1799,6 @@ class JobStore:
                 outcome["success"] += 1
 
         for mx_key, outcome in grouped.items():
-            self._advisory_xact_lock(connection, f"verigo:scheduler-profile:{mx_key}")
             current, streak, pressure_events, cooldown_until = self._ensure_scheduler_profile(
                 connection, mx_key, now
             )
@@ -1900,7 +1807,8 @@ class JobStore:
             cooldown_active = False
             if cooldown_until:
                 try:
-                    cooldown_active = datetime.fromisoformat(cooldown_until) > now
+                    cd = _dt(cooldown_until)
+                    cooldown_active = cd is not None and cd > now
                 except ValueError:
                     cooldown_active = False
             adjusted_at: str | None = None
@@ -1913,7 +1821,7 @@ class JobStore:
                     next_cooldown = (
                         now + timedelta(seconds=settings.scheduler_cooldown_seconds)
                     ).isoformat()
-                    adjusted_at = now.isoformat()
+                    adjusted_at = _sql_ts(now)
             elif outcome["success"]:
                 if cooldown_active:
                     streak = 0
@@ -1927,7 +1835,7 @@ class JobStore:
                     if streak >= successes_per_step and current < maximum:
                         current = min(maximum, current + step_size)
                         streak = 0
-                        adjusted_at = now.isoformat()
+                        adjusted_at = _sql_ts(now)
             connection.execute("""
                 UPDATE scheduler_domain_profiles SET current_limit=?, success_streak=?,
                     successes=successes+?, pressure_events=?, last_seen_at=?,
@@ -1938,7 +1846,7 @@ class JobStore:
                 streak,
                 outcome["success"],
                 pressure_events,
-                now.isoformat(),
+                _sql_ts(now),
                 adjusted_at,
                 next_cooldown,
                 mx_key,
@@ -1973,22 +1881,25 @@ class JobStore:
         if row is None:
             return False
         try:
-            granted = {int(index) for index in json.loads(row[0])}
+            granted = {int(index) for index in _json_load(row[0])}
         except (TypeError, ValueError, json.JSONDecodeError):
             return False
         return all(index in granted for index in indices)
 
     def heartbeat_lease(self, job_id: str, worker_id: str, lease_id: str) -> bool:
         now = utc_now()
-        stale = (now - timedelta(seconds=settings.worker_lease_seconds)).isoformat()
+        stale = _sql_ts(now - timedelta(seconds=settings.worker_lease_seconds))
         with closing(self._connect()) as connection:
             changed = connection.execute("""
                 UPDATE job_leases SET heartbeat_at=? WHERE id=? AND job_id=? AND worker_id=?
                     AND completed_at IS NULL AND heartbeat_at >= ?
-            """, (now.isoformat(), lease_id, job_id, worker_id, stale)).rowcount
+            """, (_sql_ts(now), lease_id, job_id, worker_id, stale)).rowcount
             if changed:
-                connection.execute("UPDATE mx_scheduler_leases SET expires_at=? WHERE lease_id=?", ((now + timedelta(seconds=settings.worker_lease_seconds)).isoformat(), lease_id))
-                connection.execute("UPDATE jobs SET heartbeat_at=? WHERE id=?", (now.isoformat(), job_id))
+                connection.execute(
+                    "UPDATE mx_scheduler_leases SET expires_at=? WHERE lease_id=?",
+                    (_sql_ts(now + timedelta(seconds=settings.worker_lease_seconds)), lease_id),
+                )
+                connection.execute("UPDATE jobs SET heartbeat_at=? WHERE id=?", (_sql_ts(now), job_id))
         return bool(changed)
 
     def report_lease_results(
@@ -2009,16 +1920,16 @@ class JobStore:
         if execution_target:
             parameters += (execution_target,)
         with self._lock, closing(self._connect()) as connection:
-            self._begin_write(connection)
+            begin_immediate(connection)
             row = connection.execute(f"""
                 SELECT indices_json FROM job_leases WHERE id=? AND job_id=? AND worker_id=?
                     AND completed_at IS NULL AND heartbeat_at >= ?{target_clause}
-            """ + self._for_update(connection), parameters).fetchone()
+            """, parameters).fetchone()
             if row is None:
                 connection.rollback()
                 return False
             try:
-                granted = {int(index) for index in json.loads(row[0])}
+                granted = {int(index) for index in _json_load(row[0])}
                 reported = {int(result["original_index"]) for result in results}
             except (KeyError, TypeError, ValueError, json.JSONDecodeError):
                 connection.rollback()
@@ -2029,13 +1940,13 @@ class JobStore:
             self._upsert_results(connection, job_id, results)
             connection.execute(
                 "UPDATE job_leases SET heartbeat_at=? WHERE id=?",
-                (now.isoformat(), lease_id),
+                (_sql_ts(now), lease_id),
             )
             connection.execute(
                 "UPDATE mx_scheduler_leases SET expires_at=? WHERE lease_id=?",
                 ((now + timedelta(seconds=settings.worker_lease_seconds)).isoformat(), lease_id),
             )
-            connection.execute("UPDATE jobs SET heartbeat_at=? WHERE id=?", (now.isoformat(), job_id))
+            connection.execute("UPDATE jobs SET heartbeat_at=? WHERE id=?", (_sql_ts(now), job_id))
             connection.commit()
         return True
 
@@ -2044,22 +1955,22 @@ class JobStore:
         now = utc_now()
         stale = (now - timedelta(seconds=settings.worker_lease_seconds)).isoformat()
         with self._lock, closing(self._connect()) as connection:
-            self._begin_write(connection)
+            begin_immediate(connection)
             row = connection.execute("""
                 SELECT indices_json FROM job_leases WHERE id=? AND job_id=? AND worker_id=?
                     AND completed_at IS NULL AND heartbeat_at >= ?
-            """ + self._for_update(connection), (lease_id, job_id, worker_id, stale)).fetchone()
+            """, (lease_id, job_id, worker_id, stale)).fetchone()
             if row is None:
                 connection.rollback()
                 return False
             try:
-                indices = [int(index) for index in json.loads(row[0])]
+                indices = [int(index) for index in _json_load(row[0])]
             except (TypeError, ValueError, json.JSONDecodeError):
                 indices = []
             changed = connection.execute("""
                 UPDATE job_leases SET completed_at=? WHERE id=? AND job_id=? AND worker_id=?
                     AND completed_at IS NULL
-            """, (now.isoformat(), lease_id, job_id, worker_id)).rowcount
+            """, (_sql_ts(now), lease_id, job_id, worker_id)).rowcount
             connection.execute("DELETE FROM mx_scheduler_leases WHERE lease_id=?", (lease_id,))
             if changed:
                 self._record_scheduler_outcomes(connection, job_id, indices, now)
@@ -2084,16 +1995,16 @@ class JobStore:
         if execution_target:
             parameters += (execution_target,)
         with self._lock, closing(self._connect()) as connection:
-            self._begin_write(connection)
+            begin_immediate(connection)
             row = connection.execute(f"""
                 SELECT indices_json FROM job_leases WHERE id=? AND job_id=? AND worker_id=?
                     AND completed_at IS NULL AND heartbeat_at >= ?{target_clause}
-            """ + self._for_update(connection), parameters).fetchone()
+            """, parameters).fetchone()
             if row is None:
                 connection.rollback()
                 return False
             try:
-                indices = [int(index) for index in json.loads(row[0])]
+                indices = [int(index) for index in _json_load(row[0])]
                 reported = {int(result["original_index"]) for result in results}
             except (KeyError, TypeError, ValueError, json.JSONDecodeError):
                 connection.rollback()
@@ -2106,7 +2017,7 @@ class JobStore:
             changed = connection.execute("""
                 UPDATE job_leases SET completed_at=? WHERE id=? AND job_id=? AND worker_id=?
                     AND completed_at IS NULL
-            """, (now.isoformat(), lease_id, job_id, worker_id)).rowcount
+            """, (_sql_ts(now), lease_id, job_id, worker_id)).rowcount
             connection.execute("DELETE FROM mx_scheduler_leases WHERE lease_id=?", (lease_id,))
             if changed:
                 self._record_scheduler_outcomes(connection, job_id, indices, now)
@@ -2118,15 +2029,18 @@ class JobStore:
         self.initialize()
         stale = (utc_now() - timedelta(seconds=settings.worker_lease_seconds)).isoformat()
         with self._lock, closing(self._connect()) as connection:
-            self._begin_write(connection)
+            begin_immediate(connection)
             row = connection.execute("""
                 SELECT indices_json FROM job_leases
                 WHERE id=? AND job_id=? AND worker_id=? AND completed_at IS NULL AND heartbeat_at >= ?
-            """ + self._for_update(connection), (lease_id, job_id, worker_id, stale)).fetchone()
+            """, (lease_id, job_id, worker_id, stale)).fetchone()
             if row is None:
                 connection.rollback()
                 return False
-            indices = [int(index) for index in json.loads(row[0])]
+            try:
+                indices = [int(index) for index in (_json_load(row[0]) or [])]
+            except (TypeError, ValueError, json.JSONDecodeError):
+                indices = []
             if indices:
                 placeholders = ", ".join("?" for _ in indices)
                 connection.execute(
@@ -2149,7 +2063,7 @@ class JobStore:
         self.initialize()
         stale = (utc_now() - timedelta(seconds=settings.worker_lease_seconds)).isoformat()
         with self._lock, closing(self._connect()) as connection:
-            self._begin_write(connection)
+            begin_immediate(connection)
             released = self._release_orphaned_results(connection, stale)
             connection.commit()
             return released
@@ -2182,56 +2096,20 @@ class JobStore:
             )
 
     def requeue_stale_jobs(self) -> int:
-        """Reclaim expired leases and make their unfinished rows claimable.
-
-        This is safe to run from the supervisor even when no remote worker is
-        polling.  Without it, a fleet that hangs after claiming work retains
-        both verification rows and MX scheduler slots until another claim.
-        """
+        """Return expired leases to their original execution-target queue."""
         self.initialize()
-        now = utc_now()
-        stale_before = now - timedelta(seconds=settings.worker_lease_seconds)
-        with self._lock, closing(self._connect()) as connection:
-            self._begin_write(connection)
-            self._advisory_xact_lock(connection, "verigo:remote-scheduler")
+        stale_before = utc_now() - timedelta(seconds=settings.worker_lease_seconds)
+        with closing(self._connect()) as connection:
+            begin_immediate(connection)
             stale_before_iso = stale_before.isoformat()
-            expired = connection.execute("""
-                SELECT id, job_id, indices_json FROM job_leases
-                WHERE completed_at IS NULL AND heartbeat_at < ?
-            """ + self._for_update(connection), (stale_before_iso,)).fetchall()
-            for lease_id, job_id, raw_indices in expired:
-                try:
-                    indices = [int(index) for index in json.loads(raw_indices)]
-                except (TypeError, ValueError, json.JSONDecodeError):
-                    indices = []
-                closed = connection.execute("""
-                    UPDATE job_leases SET completed_at=?
-                    WHERE id=? AND completed_at IS NULL AND heartbeat_at < ?
-                """, (now.isoformat(), lease_id, stale_before_iso)).rowcount
-                if not closed:
-                    continue
-                if indices:
-                    placeholders = ", ".join("?" for _ in indices)
-                    connection.execute(
-                        f"UPDATE job_results SET progress_state='pending' WHERE job_id=? "
-                        f"AND original_index IN ({placeholders}) AND progress_state='verifying'",
-                        (job_id, *indices),
-                    )
-                connection.execute("DELETE FROM mx_scheduler_leases WHERE lease_id=?", (lease_id,))
-            connection.execute("DELETE FROM mx_scheduler_leases WHERE expires_at < ?", (now.isoformat(),))
             self._release_orphaned_results(connection, stale_before_iso)
             requeued = connection.execute(
                 """
                 UPDATE jobs SET status='queued', worker_id=NULL, heartbeat_at=NULL,
                     error='工作节点已重新领取任务'
                 WHERE status='running' AND heartbeat_at IS NOT NULL AND heartbeat_at < ?
-                  AND NOT EXISTS (
-                      SELECT 1 FROM job_leases lease
-                      WHERE lease.job_id=jobs.id AND lease.completed_at IS NULL
-                        AND lease.heartbeat_at >= ?
-                  )
                 """,
-                (stale_before_iso, stale_before_iso),
+                (stale_before_iso,),
             ).rowcount
             connection.commit()
             return requeued
@@ -2268,8 +2146,8 @@ class JobStore:
             ).fetchall()
             parents = [row[1] for row in queued if row[1] is not None]
             for job_id, _parent_id, emails_json, results_json in queued:
-                emails = json.loads(emails_json)
-                results = json.loads(results_json)
+                emails = _json_load(emails_json)
+                results = _json_load(results_json)
                 by_email = {
                     str(result.get("email", "")).lower(): result
                     for result in results
@@ -2382,13 +2260,13 @@ class JobStore:
         return WorkerRuntime(
             target=target,
             worker_id=row[0],
-            last_seen_at=datetime.fromisoformat(row[1]) if row[1] else None,
-            wake_requested_at=datetime.fromisoformat(row[2]) if row[2] else None,
-            wake_deadline_at=datetime.fromisoformat(row[3]) if row[3] else None,
+            last_seen_at=_dt(row[1]) if row[1] else None,
+            wake_requested_at=_dt(row[2]) if row[2] else None,
+            wake_deadline_at=_dt(row[3]) if row[3] else None,
             wake_attempts=int(row[4]),
             last_wake_error=row[5],
-            idle_since=datetime.fromisoformat(row[6]) if row[6] else None,
-            stop_requested_at=datetime.fromisoformat(row[7]) if row[7] else None,
+            idle_since=_dt(row[6]) if row[6] else None,
+            stop_requested_at=_dt(row[7]) if row[7] else None,
             last_stop_error=row[8],
         )
 
@@ -2459,7 +2337,7 @@ class JobStore:
         offline_seconds = max(settings.node_stale_seconds + 1, settings.node_offline_seconds)
         offline_before = (now - timedelta(seconds=offline_seconds)).isoformat()
         with self._lock, closing(self._connect()) as connection:
-            self._begin_write(connection)
+            begin_immediate(connection)
             offline = connection.execute(
                 "UPDATE worker_nodes SET health='offline' WHERE health!='offline' AND last_seen_at < ?",
                 (offline_before,),
@@ -2482,10 +2360,12 @@ class JobStore:
                 """,
                 (target,),
             ).fetchall()
-        return {
-            str(worker_id): datetime.fromisoformat(last_seen_at)
-            for worker_id, last_seen_at in rows
-        }
+        result: dict[str, datetime] = {}
+        for worker_id, last_seen_at in rows:
+            parsed = _dt(last_seen_at)
+            if parsed is not None:
+                result[str(worker_id)] = parsed
+        return result
 
     def record_wake_attempt(
         self, target: str, deadline: datetime | None, error: str | None
@@ -2574,7 +2454,7 @@ class JobStore:
         """Move unclaimed remote work to an available execution target."""
         self.initialize()
         with self._lock, closing(self._connect()) as connection:
-            self._begin_write(connection)
+            begin_immediate(connection)
             try:
                 cursor = connection.execute(
                     """
@@ -2597,7 +2477,7 @@ class JobStore:
         self.initialize()
         cutoff = utc_now() - timedelta(seconds=max(1, older_than_seconds))
         with self._lock, closing(self._connect()) as connection:
-            self._begin_write(connection)
+            begin_immediate(connection)
             try:
                 cursor = connection.execute(
                     """
@@ -2617,7 +2497,7 @@ class JobStore:
         """Stop a queued or running job without discarding completed results."""
         self.initialize()
         with self._lock, closing(self._connect()) as connection:
-            self._begin_write(connection)
+            begin_immediate(connection)
             row = connection.execute(
                 f"SELECT {self._select_columns()} FROM jobs WHERE id=?", (job_id,)
             ).fetchone()
@@ -2666,7 +2546,7 @@ class JobStore:
         """Stop a job because a receiver explicitly rejected further probing."""
         self.initialize()
         with self._lock, closing(self._connect()) as connection:
-            self._begin_write(connection)
+            begin_immediate(connection)
             row = connection.execute(
                 f"SELECT {self._select_columns()} FROM jobs WHERE id=?", (job_id,)
             ).fetchone()
@@ -2704,7 +2584,7 @@ class JobStore:
         """Release pending work until a receiver's cooling period ends."""
         self.initialize()
         with self._lock, closing(self._connect()) as connection:
-            self._begin_write(connection)
+            begin_immediate(connection)
             changed = connection.execute(
                 """UPDATE jobs SET status='queued', worker_id=NULL, heartbeat_at=NULL,
                     deferred_retry_at=?, error=? WHERE id=? AND status IN ('queued', 'running')""",
@@ -2731,7 +2611,7 @@ class JobStore:
         """Resume a stopped task in place and return work that was re-queued."""
         self.initialize()
         with self._lock, closing(self._connect()) as connection:
-            self._begin_write(connection)
+            begin_immediate(connection)
             row = connection.execute(
                 f"SELECT {self._select_columns()} FROM jobs WHERE id=?", (job_id,)
             ).fetchone()
@@ -2801,7 +2681,7 @@ class JobStore:
                     (now, *batch),
                 ).fetchall()
                 for email, result_json in rows:
-                    result = json.loads(result_json)
+                    result = _json_load(result_json)
                     result["cache_hit"] = True
                     found[email] = result
             cutoff = (utc_now() - timedelta(days=settings.verified_email_recheck_days)).isoformat()
@@ -2816,7 +2696,7 @@ class JobStore:
                     (cutoff, *batch),
                 ).fetchall()
                 for email, result_json in rows:
-                    result = json.loads(result_json)
+                    result = _json_load(result_json)
                     result["cache_hit"] = True
                     result["verified_record"] = True
                     found[email] = result
@@ -2841,15 +2721,15 @@ class JobStore:
                         str(result["email"]).lower(),
                         json.dumps(result, ensure_ascii=False, default=str),
                         (now + timedelta(hours=settings.verification_cache_hours)).isoformat(),
-                        now.isoformat(),
+                        _sql_ts(now),
                     )
                 )
             if result.get("deliverable") is True and result.get("email"):
                 verified_rows.append(
                     (
                         str(result["email"]).lower(),
-                        now.isoformat(),
-                        now.isoformat(),
+                        _sql_ts(now),
+                        _sql_ts(now),
                         json.dumps(result, ensure_ascii=False, default=str),
                     )
                 )

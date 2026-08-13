@@ -62,71 +62,48 @@ rollback() {
     exit "$status"
 }
 
+# Load production env so drain/active helpers follow the live backend after cutover.
+load_runtime_env() {
+    if [[ -r /etc/verigo/verigo.env ]]; then
+        set -a
+        # shellcheck disable=SC1091
+        source /etc/verigo/verigo.env
+        set +a
+    fi
+}
+
 set_service_mode() {
     local mode=$1
+    load_runtime_env
     MODE="$mode" PYTHONPATH="$release_dir" "$state_dir/.venv/bin/python" - <<'PY'
 import os
-from datetime import datetime, timezone
-from pathlib import Path
-
-from app.db.sqlite import begin_immediate, connect
-
-with connect(Path('/opt/verigo/data/verigo.db')) as connection:
-    begin_immediate(connection)
-    connection.execute('''CREATE TABLE IF NOT EXISTS service_state (
-        name TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL)''')
-    connection.execute('''INSERT INTO service_state(name, value, updated_at)
-        VALUES ('verification_mode', ?, ?)
-        ON CONFLICT(name) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at''',
-        (os.environ['MODE'], datetime.now(timezone.utc).isoformat()))
+from app.db.backend_ops import set_service_mode
+print(set_service_mode(os.environ["MODE"]))
 PY
 }
 
 active_job_count() {
+    load_runtime_env
     PYTHONPATH="$release_dir" "$state_dir/.venv/bin/python" - <<'PY'
-from pathlib import Path
-
-from app.db.sqlite import connect
-
-connection = connect(Path('/opt/verigo/data/verigo.db'))
-print(connection.execute("SELECT COUNT(*) FROM jobs WHERE status IN ('queued', 'running')").fetchone()[0])
+from app.db.backend_ops import active_job_count
+print(active_job_count())
 PY
 }
 
 active_targets() {
+    load_runtime_env
     PYTHONPATH="$release_dir" "$state_dir/.venv/bin/python" - <<'PY'
-from pathlib import Path
-
-from app.db.sqlite import connect
-
-connection = connect(Path('/opt/verigo/data/verigo.db'))
-for (target,) in connection.execute("""
-    SELECT DISTINCT execution_target FROM jobs
-    WHERE status IN ('queued', 'running') AND execution_target != 'aggregate'
-    ORDER BY execution_target
-"""):
+from app.db.backend_ops import active_targets
+for target in active_targets():
     print(target)
 PY
 }
 
 drain_progress_marker() {
+    load_runtime_env
     PYTHONPATH="$release_dir" "$state_dir/.venv/bin/python" - <<'PY'
-from pathlib import Path
-
-from app.db.sqlite import connect
-
-connection = connect(Path('/opt/verigo/data/verigo.db'))
-rows = connection.execute("""
-    SELECT j.status, j.execution_target, COUNT(*) AS jobs,
-           COALESCE(MAX(j.heartbeat_at), ''),
-           COALESCE(MAX(r.updated_at), '')
-    FROM jobs j
-    LEFT JOIN job_results r ON r.job_id = j.id
-    WHERE j.status IN ('queued', 'running')
-    GROUP BY j.status, j.execution_target
-    ORDER BY j.status, j.execution_target
-""").fetchall()
-print('|'.join(':'.join(str(value) for value in row) for row in rows))
+from app.db.backend_ops import drain_progress_marker
+print(drain_progress_marker())
 PY
 }
 

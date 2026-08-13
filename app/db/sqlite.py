@@ -24,7 +24,11 @@ def connect(database_path: Path, *, timeout_seconds: float = 30.0) -> sqlite3.Co
 
 
 def begin_immediate(connection: sqlite3.Connection) -> None:
-    """Acquire SQLite's write lock with bounded retry for transient contention."""
+    """Acquire a write transaction with backend-appropriate locking."""
+    # PostgreSQL path: plain BEGIN through the compatibility adapter.
+    if connection.__class__.__name__ == "PgConnection":
+        connection.execute("BEGIN")
+        return
     attempts = settings.sqlite_write_retry_attempts
     for attempt in range(attempts):
         try:

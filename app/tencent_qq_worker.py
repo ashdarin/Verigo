@@ -282,20 +282,8 @@ def verify_job(job: dict[str, object]) -> None:
     control: dict[str, object] = {"checked_at": 0.0, "stopped": False, "lease_id": lease_id}
     done = threading.Event()
 
-    # Confirm ownership before expensive verifier initialization.  In
-    # constrained remote workspaces imports or DNS setup can take longer than
-    # the first SMTP operation, so waiting for the periodic thread would make
-    # an otherwise live worker indistinguishable from a hung lease.
-    initial_status = request_json(
-        f"/api/workers/{WORKER_TARGET}/jobs/{job_id}/heartbeat?lease_id={lease_id}"
-    )
-    control["checked_at"] = time.monotonic()
-    control["stopped"] = bool(initial_status.get("stop_requested"))
-    if control["stopped"]:
-        return
-
     def heartbeat() -> None:
-        while not done.wait(10):
+        while not done.wait(20):
             try:
                 status = request_json(
                     f"/api/workers/{WORKER_TARGET}/jobs/{job_id}/heartbeat?lease_id={lease_id}"

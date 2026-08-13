@@ -17,6 +17,7 @@ from app.core.prospecting_protection import (
     is_confirmed_smtp_sample,
     is_suspicious_recipient_rejection,
 )
+from app.db.pg_compat import as_datetime, as_json
 from app.db.sqlite import begin_immediate, connect
 
 
@@ -43,12 +44,19 @@ class ProspectingStore:
         self._lock = threading.RLock()
         self._initialized = False
 
-    def _connect(self) -> sqlite3.Connection:
-        return connect(settings.database_path)
+    def _connect(self):
+        from app.db.pg_compat import connect_app
+
+        return connect_app()
 
     def initialize(self) -> None:
         with self._lock:
             if self._initialized:
+                return
+            from app.db.pg_compat import postgres_active
+
+            if postgres_active():
+                self._initialized = True
                 return
             with closing(self._connect()) as connection:
                 connection.execute("""
@@ -216,11 +224,14 @@ class ProspectingStore:
 
     @staticmethod
     def _run_from_row(row: tuple[Any, ...]) -> ProspectingRun:
+        created = as_datetime(row[7]) or utc_now()
+        recorded = as_datetime(row[9]) if row[9] else None
+        patterns = as_json(row[8], default=[]) or []
         return ProspectingRun(
             id=row[0], owner_id=row[1], domain=row[2], country=row[3], requested_pattern=row[4],
-            verification_job_id=row[5], candidate_count=int(row[6]), created_at=datetime.fromisoformat(row[7]),
-            profile_patterns=tuple(json.loads(row[8])),
-            profiles_recorded_at=datetime.fromisoformat(row[9]) if row[9] else None,
+            verification_job_id=row[5], candidate_count=int(row[6]), created_at=created,
+            profile_patterns=tuple(patterns),
+            profiles_recorded_at=recorded,
         )
 
     def create_run(
@@ -431,13 +442,16 @@ class ProspectingStore:
 
     def result_count(self, run_id: str) -> int:
         self.initialize()
+        from app.db.pg_compat import postgres_active
+
+        catch_all = "result.is_catch_all IS TRUE" if postgres_active() else "result.is_catch_all=1"
         with closing(self._connect()) as connection:
-            return int(connection.execute("""
+            return int(connection.execute(f"""
                 SELECT COUNT(*) FROM prospecting_candidates AS candidate
                 JOIN prospecting_runs AS run ON run.id=candidate.run_id
                 JOIN job_results AS result ON result.job_id=run.verification_job_id
                     AND result.original_index=candidate.original_index
-                WHERE candidate.run_id=? AND (result.deliverability=1 OR result.is_catch_all=1)
+                WHERE candidate.run_id=? AND (result.deliverability=1 OR {catch_all})
             """, (run_id,)).fetchone()[0])
 
     def result_page(
@@ -445,19 +459,22 @@ class ProspectingStore:
     ) -> tuple[int, list[dict[str, Any]]]:
         """Return only user-visible confirmations, without hydrating every candidate."""
         total = self.result_count(run.id)
+        from app.db.pg_compat import postgres_active
+
+        catch_all = "result.is_catch_all IS TRUE" if postgres_active() else "result.is_catch_all=1"
         with closing(self._connect()) as connection:
-            rows = connection.execute("""
+            rows = connection.execute(f"""
                 SELECT candidate.original_index, candidate.email, candidate.category, candidate.pattern,
                        candidate.rank, candidate.source, result.result_json
                 FROM prospecting_candidates AS candidate
                 JOIN job_results AS result ON result.job_id=?
                     AND result.original_index=candidate.original_index
-                WHERE candidate.run_id=? AND (result.deliverability=1 OR result.is_catch_all=1)
+                WHERE candidate.run_id=? AND (result.deliverability=1 OR {catch_all})
                 ORDER BY candidate.rank LIMIT ? OFFSET ?
             """, (run.verification_job_id, run.id, limit, offset)).fetchall()
         items = []
         for row in rows:
-            raw = json.loads(row[6])
+            raw = as_json(row[6], default={}) or {}
             items.append({
                 "original_index": int(row[0]), "email": row[1], "category": row[2],
                 "pattern": row[3], "rank": int(row[4]), "source": row[5],
@@ -648,8 +665,8 @@ class ProspectingStore:
             """, (domain,)).fetchone()
         if row is None:
             return {"state": "clear", "resume_at": None, "message": None}
-        cooldown_until = datetime.fromisoformat(row[2]) if row[2] else None
-        stop_until = datetime.fromisoformat(row[3]) if row[3] else None
+        cooldown_until = as_datetime(row[2]) if row[2] else None
+        stop_until = as_datetime(row[3]) if row[3] else None
         if stop_until and stop_until > now:
             return {
                 "state": "stopped", "resume_at": stop_until.isoformat(), "message": row[4],
@@ -816,7 +833,7 @@ class ProspectingStore:
             "source": row[4], "run_id": row[5], "saved_at": row[6],
             "last_verified_at": row[7], "verification_method": row[8],
             "verification_detail": row[9], "confidence": int(row[10] or 0),
-            "favorite": bool(row[11]), "tags": json.loads(row[12] or "[]"),
+            "favorite": bool(row[11]), "tags": as_json(row[12], default=[]) or [],
         }
 
     def update_saved_contact(

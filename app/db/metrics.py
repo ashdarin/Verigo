@@ -11,8 +11,16 @@ from datetime import timedelta
 from zoneinfo import ZoneInfo
 
 from app.config import settings
+from app.db.pg_compat import PgConnection, postgres_active
 from app.db.sqlite import begin_immediate, connect as connect_sqlite
 from app.db.jobs import utc_now
+
+
+def _seconds_between(start_col: str, end_col: str) -> str:
+    """SQLite julianday vs PostgreSQL EXTRACT(EPOCH FROM interval)."""
+    if postgres_active():
+        return f"EXTRACT(EPOCH FROM ({end_col} - {start_col}))"
+    return f"(julianday({end_col}) - julianday({start_col})) * 86400"
 
 
 BOT_USER_AGENT = re.compile(
@@ -26,8 +34,10 @@ class MetricsStore:
         self._lock = threading.RLock()
         self._initialized = False
 
-    def _connect(self) -> sqlite3.Connection:
-        return connect_sqlite(settings.database_path)
+    def _connect(self):
+        from app.db.pg_compat import connect_app
+
+        return connect_app()
 
     @staticmethod
     def _day() -> str:
@@ -36,6 +46,9 @@ class MetricsStore:
     def initialize(self) -> None:
         with self._lock:
             if self._initialized:
+                return
+            if postgres_active():
+                self._initialized = True
                 return
             with closing(self._connect()) as connection:
                 connection.execute(
@@ -147,15 +160,21 @@ class MetricsStore:
     def record_engagement(self, session_id: str, seconds: int = 0) -> None:
         self.initialize()
         seconds = max(0, min(seconds, 1800))
-        now = utc_now().isoformat()
+        now = utc_now()
+        now_bind = now if postgres_active() else now.isoformat()
+        greatest = (
+            "GREATEST(engagement_seconds, ?)"
+            if postgres_active()
+            else "MAX(engagement_seconds, ?)"
+        )
         with closing(self._connect()) as connection:
             connection.execute(
-                """
+                f"""
                 UPDATE traffic_sessions SET engaged_at=COALESCE(engaged_at, ?),
-                    engagement_seconds=MAX(engagement_seconds, ?), last_seen=?
+                    engagement_seconds={greatest}, last_seen=?
                 WHERE session_id=?
                 """,
-                (now, seconds, now, session_id),
+                (now_bind, seconds, now_bind, session_id),
             )
 
     def record_conversion(self, session_id: str | None, kind: str) -> None:
@@ -229,9 +248,11 @@ class MetricsStore:
                 "SELECT COUNT(*) FROM credit_ledger WHERE kind='email_verified' AND created_at >= ?",
                 (today_start,),
             ).fetchone()[0]
-            verified_users = connection.execute(
-                "SELECT COUNT(*) FROM users WHERE email_verified=1"
-            ).fetchone()[0]
+            if postgres_active():
+                verified_sql = "SELECT COUNT(*) FROM users WHERE email_verified IS TRUE"
+            else:
+                verified_sql = "SELECT COUNT(*) FROM users WHERE email_verified=1"
+            verified_users = connection.execute(verified_sql).fetchone()[0]
             visible_job_filter = "parent_id IS NULL AND retry_parent_id IS NULL"
             jobs_total = connection.execute(
                 f"SELECT COUNT(*) FROM jobs WHERE {visible_job_filter}"
@@ -243,29 +264,38 @@ class MetricsStore:
             job_statuses = dict(connection.execute(
                 f"SELECT status, COUNT(*) FROM jobs WHERE {visible_job_filter} GROUP BY status"
             ).fetchall())
+            duration_finished = _seconds_between("started_at", "finished_at")
+            duration_queue = _seconds_between("created_at", "started_at")
             today_job_health = connection.execute(
                 f"""
                 SELECT COUNT(*),
                     COALESCE(SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END), 0),
                     COALESCE(SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END), 0),
                     COALESCE(AVG(CASE WHEN status='completed' AND started_at IS NOT NULL AND finished_at IS NOT NULL
-                        THEN (julianday(finished_at)-julianday(started_at))*86400 END), 0)
+                        THEN {duration_finished} END), 0)
                     ,COALESCE(AVG(CASE WHEN status='completed' AND started_at IS NOT NULL
-                        THEN (julianday(started_at)-julianday(created_at))*86400 END), 0)
+                        THEN {duration_queue} END), 0)
                 FROM jobs WHERE created_at >= ? AND {visible_job_filter}
                 """,
                 (today_start,),
             ).fetchone()
             retry_wait_seconds = connection.execute(
-                """
+                f"""
                 SELECT COALESCE(AVG(CASE WHEN status='completed' AND started_at IS NOT NULL
-                    THEN (julianday(started_at)-julianday(created_at))*86400 END), 0)
+                    THEN {duration_queue} END), 0)
                 FROM jobs WHERE created_at >= ? AND retry_parent_id IS NOT NULL
                 """,
                 (today_start,),
             ).fetchone()[0]
+            if postgres_active():
+                # deliverability is stored as integer 0/1 (not boolean) in job_results.
+                deliverable_sum = (
+                    "COALESCE(SUM(CASE WHEN result.deliverability = 1 THEN 1 ELSE 0 END), 0)"
+                )
+            else:
+                deliverable_sum = "COALESCE(SUM(result.deliverability=1), 0)"
             result_totals = connection.execute(
-                """SELECT COUNT(*), COALESCE(SUM(result.deliverability=1), 0)
+                f"""SELECT COUNT(*), {deliverable_sum}
                 FROM job_results AS result
                 JOIN jobs AS job ON job.id=result.job_id
                 WHERE job.status='completed' AND job.finished_at >= ?
@@ -290,16 +320,24 @@ class MetricsStore:
                 "SELECT day, page_views, unique_visitors FROM page_view_days WHERE day >= ?",
                 (days[0],),
             ).fetchall()
+            if postgres_active():
+                bot_true = "suspected_bot IS TRUE"
+                bot_false = "suspected_bot IS NOT TRUE"
+                day_expr = "day"
+            else:
+                bot_true = "suspected_bot=1"
+                bot_false = "suspected_bot=0"
+                day_expr = "day"
             traffic_rows = connection.execute(
-                """
+                f"""
                 SELECT day, COUNT(*),
-                    COALESCE(SUM(suspected_bot), 0),
-                    COALESCE(SUM(CASE WHEN suspected_bot=0 AND engaged_at IS NOT NULL THEN 1 ELSE 0 END), 0),
-                    COALESCE(SUM(CASE WHEN suspected_bot=0 AND engaged_at IS NULL AND first_seen <= ? THEN 1 ELSE 0 END), 0),
-                    COALESCE(SUM(CASE WHEN suspected_bot=0 AND (engaged_at IS NOT NULL OR first_seen <= ?) THEN 1 ELSE 0 END), 0),
-                    COALESCE(SUM(CASE WHEN suspected_bot=0 THEN engagement_seconds ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN {bot_true} THEN 1 ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN {bot_false} AND engaged_at IS NOT NULL THEN 1 ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN {bot_false} AND engaged_at IS NULL AND first_seen <= ? THEN 1 ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN {bot_false} AND (engaged_at IS NOT NULL OR first_seen <= ?) THEN 1 ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN {bot_false} THEN engagement_seconds ELSE 0 END), 0),
                     COALESCE(SUM(free_submissions), 0), COALESCE(SUM(batch_submissions), 0)
-                FROM traffic_sessions WHERE day >= ? GROUP BY day
+                FROM traffic_sessions WHERE {day_expr} >= ? GROUP BY day
                 """,
                 (bounce_cutoff, bounce_cutoff, days[0]),
             ).fetchall()
@@ -376,7 +414,28 @@ class MetricsStore:
         self.initialize()
         days = [(utc_now() - timedelta(days=offset)).astimezone(ZoneInfo("Asia/Shanghai")).date().isoformat() for offset in range(13, -1, -1)]
         with closing(self._connect()) as connection:
-            rows = connection.execute("""SELECT substr(created_at,1,10), SUM(CASE WHEN stop_on_deliverable=1 THEN 1 ELSE 0 END), SUM(CASE WHEN stop_on_deliverable=0 AND emails_json NOT LIKE '%,%' THEN 1 ELSE 0 END), SUM(CASE WHEN stop_on_deliverable=0 AND emails_json LIKE '%,%' THEN 1 ELSE 0 END) FROM jobs WHERE parent_id IS NULL AND execution_target != 'aggregate' AND created_at >= ? GROUP BY substr(created_at,1,10)""", (days[0],)).fetchall()
+            if postgres_active():
+                day_bucket = "to_char(created_at AT TIME ZONE 'Asia/Shanghai', 'YYYY-MM-DD')"
+                stop_true = "stop_on_deliverable IS TRUE"
+                stop_false = "stop_on_deliverable IS NOT TRUE"
+                emails_text = "emails_json::text"
+            else:
+                day_bucket = "substr(created_at,1,10)"
+                stop_true = "stop_on_deliverable=1"
+                stop_false = "stop_on_deliverable=0"
+                emails_text = "emails_json"
+            rows = connection.execute(
+                f"""
+                SELECT {day_bucket},
+                    SUM(CASE WHEN {stop_true} THEN 1 ELSE 0 END),
+                    SUM(CASE WHEN {stop_false} AND {emails_text} NOT LIKE '%,%' THEN 1 ELSE 0 END),
+                    SUM(CASE WHEN {stop_false} AND {emails_text} LIKE '%,%' THEN 1 ELSE 0 END)
+                FROM jobs
+                WHERE parent_id IS NULL AND execution_target != 'aggregate' AND created_at >= ?
+                GROUP BY {day_bucket}
+                """,
+                (days[0],),
+            ).fetchall()
         by_day={str(day):{"single":int(single),"batch":int(batch),"discovery":int(discovery)} for day,discovery,single,batch in rows}
         daily=[{"day":day,**by_day.get(day,{"single":0,"batch":0,"discovery":0})} for day in days]
         totals={key:sum(item[key] for item in daily) for key in ("single","batch","discovery")}

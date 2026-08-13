@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 
 from app.config import settings
 from app.core.security import hash_password, new_token, token_hash, verify_password
+from app.db.pg_compat import IntegrityError, PgConnection, as_bool, as_iso, postgres_active
 from app.db.sqlite import begin_immediate, connect as connect_sqlite
 from app.db.jobs import utc_now
 
@@ -53,12 +54,35 @@ class AuthStore:
         self._lock = threading.RLock()
         self._initialized = False
 
-    def _connect(self) -> sqlite3.Connection:
-        return connect_sqlite(settings.database_path)
+    def _connect(self):
+        from app.db.pg_compat import connect_app
+
+        return connect_app()
+
+    @staticmethod
+    def _insert_credit_ledger(connection, user_id: str, delta: int, kind: str, reference: str, created_at: str) -> None:
+        """Insert a ledger row; PostgreSQL serial id has no implicit DEFAULT in some restores."""
+        if postgres_active():
+            # id is GENERATED ALWAYS AS IDENTITY — do not insert it.
+            connection.execute(
+                """
+                INSERT INTO credit_ledger(user_id, delta, kind, reference, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (user_id, delta, kind, reference, created_at),
+            )
+        else:
+            connection.execute(
+                """
+                INSERT INTO credit_ledger(user_id, delta, kind, reference, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (user_id, delta, kind, reference, created_at),
+            )
 
     @staticmethod
     def _insert_notification(
-        connection: sqlite3.Connection,
+        connection,
         user_id: str,
         kind: str,
         title: str,
@@ -84,6 +108,10 @@ class AuthStore:
     def initialize(self) -> None:
         with self._lock:
             if self._initialized:
+                return
+            if postgres_active():
+                # Schema is owned by cutover migration tooling / postgres_schema.
+                self._initialized = True
                 return
             settings.database_path.parent.mkdir(parents=True, exist_ok=True)
             with closing(self._connect()) as connection:
@@ -412,7 +440,7 @@ class AuthStore:
         ).fetchone()
         return int(row[0]), row[1]
 
-    def _user_from_row(self, connection: sqlite3.Connection, row: tuple[object, ...]) -> User:
+    def _user_from_row(self, connection, row: tuple[object, ...]) -> User:
         trial_credits, trial_expires_at = self._trial_credit_summary(connection, str(row[0]))
         activation = connection.execute(
             "SELECT activation_job_id, activation_completed_at, onboarding_required FROM users WHERE id=?", (str(row[0]),)
@@ -422,15 +450,15 @@ class AuthStore:
             id=str(row[0]),
             username=str(row[1]),
             email=str(row[2]) if row[2] is not None else None,
-            email_verified=bool(row[3]),
+            email_verified=as_bool(row[3]),
             credits=paid_credits + trial_credits,
             paid_credits=paid_credits,
             trial_credits=trial_credits,
-            trial_credit_expires_at=trial_expires_at,
+            trial_credit_expires_at=as_iso(trial_expires_at) if trial_expires_at else trial_expires_at,
             activation_job_id=str(activation[0]) if activation and activation[0] else None,
-            activation_completed_at=str(activation[1]) if activation and activation[1] else None,
-            onboarding_required=bool(activation[2]) if activation else False,
-            created_at=str(row[5]),
+            activation_completed_at=as_iso(activation[1]) if activation and activation[1] else None,
+            onboarding_required=as_bool(activation[2]) if activation else False,
+            created_at=as_iso(row[5]) or str(row[5]),
         )
 
     def record_activation_job(self, user_id: str, job_id: str) -> User:
@@ -495,7 +523,7 @@ class AuthStore:
                     "INSERT INTO users (id, username, email, password_hash, created_at, onboarding_required) VALUES (?, ?, ?, ?, ?, 1)",
                     (user.id, user.username, user.email, hash_password(password), user.created_at),
                 )
-        except sqlite3.IntegrityError as exc:
+        except IntegrityError as exc:
             raise ValueError("账号或邮箱已被注册") from exc
         return user
 
@@ -590,7 +618,7 @@ class AuthStore:
                         now.isoformat(),
                     ),
                 )
-            except sqlite3.IntegrityError as exc:
+            except IntegrityError as exc:
                 connection.rollback()
                 raise ValueError("该邮箱正在被其他账号绑定") from exc
             connection.commit()
@@ -635,7 +663,7 @@ class AuthStore:
                     "UPDATE users SET email=?, email_verified=1 WHERE id=?",
                     (binding[0], user_id),
                 )
-            except sqlite3.IntegrityError as exc:
+            except IntegrityError as exc:
                 connection.rollback()
                 raise ValueError("该邮箱已被注册") from exc
             connection.execute("DELETE FROM email_bindings WHERE user_id=?", (user_id,))
@@ -702,12 +730,13 @@ class AuthStore:
                     ),
                 ).rowcount
                 if inserted:
-                    connection.execute(
-                        """
-                        INSERT INTO credit_ledger(user_id, delta, kind, reference, created_at)
-                        VALUES (?, ?, 'email_verified_trial', ?, ?)
-                        """,
-                        (user_id, settings.email_verification_trial_credits, reference, now_value),
+                    self._insert_credit_ledger(
+                        connection,
+                        user_id,
+                        settings.email_verification_trial_credits,
+                        "email_verified_trial",
+                        reference,
+                        now_value,
                     )
             connection.execute("DELETE FROM email_verifications WHERE user_id=?", (user_id,))
             row = connection.execute(
@@ -760,9 +789,8 @@ class AuthStore:
             if paid_debit:
                 connection.execute("UPDATE users SET credits=credits-? WHERE id=?", (paid_debit, user_id))
             promo_debit = amount - paid_debit
-            connection.execute(
-                "INSERT INTO credit_ledger(user_id, delta, kind, reference, created_at) VALUES (?, ?, 'verification', ?, ?)",
-                (user_id, -amount, reference, now),
+            self._insert_credit_ledger(
+                connection, user_id, -amount, "verification", reference, now
             )
             connection.execute(
                 """
@@ -813,18 +841,13 @@ class AuthStore:
             connection.execute(
                 "UPDATE users SET credits=credits+? WHERE id=?", (delta, row[0])
             )
-            connection.execute(
-                """
-                INSERT INTO credit_ledger(user_id, delta, kind, reference, created_at)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                (
-                    row[0],
-                    delta,
-                    "admin_credit_grant" if delta > 0 else "admin_credit_deduction",
-                    reference,
-                    now,
-                ),
+            self._insert_credit_ledger(
+                connection,
+                str(row[0]),
+                delta,
+                "admin_credit_grant" if delta > 0 else "admin_credit_deduction",
+                reference,
+                now,
             )
             connection.execute(
                 """
@@ -869,10 +892,15 @@ class AuthStore:
             if row is None:
                 raise ValueError("账户不存在")
             user = self._user_from_row(connection, row)
+            day_expr = (
+                "to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD')"
+                if postgres_active()
+                else "substr(created_at, 1, 10)"
+            )
             usage_rows = connection.execute(
-                """SELECT substr(created_at, 1, 10), COALESCE(SUM(-delta), 0)
+                f"""SELECT {day_expr}, COALESCE(SUM(-delta), 0)
                    FROM credit_ledger WHERE user_id=? AND kind='verification'
-                   GROUP BY substr(created_at, 1, 10) ORDER BY 1 DESC LIMIT 14""", (user_id,)
+                   GROUP BY {day_expr} ORDER BY 1 DESC LIMIT 14""", (user_id,)
             ).fetchall()
             usage_total = int(connection.execute(
                 "SELECT COALESCE(SUM(-delta), 0) FROM credit_ledger WHERE user_id=? AND kind='verification'", (user_id,)
@@ -1006,10 +1034,8 @@ class AuthStore:
                 "UPDATE users SET credits=credits+? WHERE id=?", (int(row[2]), user_id)
             )
             reference = f"redemption:{row[0]}"
-            connection.execute(
-                """INSERT INTO credit_ledger(user_id, delta, kind, reference, created_at)
-                   VALUES (?, ?, 'redemption', ?, ?)""",
-                (user_id, int(row[2]), reference, redeemed_at),
+            self._insert_credit_ledger(
+                connection, user_id, int(row[2]), "redemption", reference, redeemed_at
             )
             self._insert_notification(
                 connection, user_id, "credit_grant", "兑换额度已到账",
@@ -1163,13 +1189,18 @@ class AuthStore:
             refund_reference = f"refund:{reference}"
             inserted = 0
             if charged:
-                inserted = connection.execute(
-                    """
-                    INSERT OR IGNORE INTO credit_ledger(user_id, delta, kind, reference, created_at)
-                    VALUES (?, ?, 'verification_refund', ?, ?)
-                    """,
-                    (user_id, amount, refund_reference, now),
-                ).rowcount
+                try:
+                    self._insert_credit_ledger(
+                        connection,
+                        user_id,
+                        amount,
+                        "verification_refund",
+                        refund_reference,
+                        now,
+                    )
+                    inserted = 1
+                except IntegrityError:
+                    inserted = 0
             if inserted and debit and debit[2] is None:
                 if debit[0]:
                     connection.execute(
@@ -1280,9 +1311,8 @@ class AuthStore:
             connection.execute(
                 "UPDATE users SET credits=credits+? WHERE id=?", (int(order[1]), order[0])
             )
-            connection.execute(
-                "INSERT INTO credit_ledger(user_id, delta, kind, reference, created_at) VALUES (?, ?, 'payment', ?, ?)",
-                (order[0], int(order[1]), f"payment:{order_id}", now),
+            self._insert_credit_ledger(
+                connection, str(order[0]), int(order[1]), "payment", f"payment:{order_id}", now
             )
             self._insert_notification(
                 connection, str(order[0]), "payment", "充值到账",

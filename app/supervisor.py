@@ -23,9 +23,6 @@ def main() -> None:
     next_node_reconcile = 0.0
     while not stop_event.wait(1):
         if time.monotonic() >= next_node_reconcile:
-            # A disabled or failed lifecycle must not leave a fully-hung
-            # remote fleet holding verification rows or MX scheduler slots.
-            job_store.requeue_stale_jobs()
             job_store.reconcile_worker_nodes()
             for target, label in (
                 (GMAIL_TARGET, "Cloud Shell"),

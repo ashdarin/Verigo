@@ -1,7 +1,10 @@
 [Unit]
 Description=Verigo email verification web service
-After=network-online.target
+After=network-online.target verigo-postgres-tunnel.service
 Wants=network-online.target
+# Soft dependency: tunnel is required only when VERIGO_POSTGRES_ENABLED=true.
+# Keep Wants (not Requires) so SQLite mode still boots if the tunnel unit is stopped.
+Wants=verigo-postgres-tunnel.service
 
 [Service]
 Type=simple

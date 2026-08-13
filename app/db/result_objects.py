@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.config import settings
+from app.db.pg_compat import PgConnection, as_iso, as_json, postgres_active
 from app.db.sqlite import connect as connect_sqlite
 
 
@@ -18,12 +19,14 @@ def now_iso() -> str:
 class ResultObjectStore:
     """Account-owned saved result objects and reusable email lists."""
 
-    def _connect(self) -> sqlite3.Connection:
-        connection = connect_sqlite(settings.database_path)
-        connection.row_factory = sqlite3.Row
-        return connection
+    def _connect(self):
+        from app.db.pg_compat import connect_app
+
+        return connect_app()
 
     def initialize(self) -> None:
+        if postgres_active():
+            return
         with closing(self._connect()) as connection:
             connection.execute("CREATE TABLE IF NOT EXISTS result_objects (id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, task_id TEXT NOT NULL, result_index INTEGER NOT NULL, email TEXT NOT NULL, status TEXT NOT NULL, verification_method TEXT, server_response TEXT, confidence TEXT NOT NULL DEFAULT 'unknown', source TEXT NOT NULL, created_at TEXT NOT NULL, supersedes_result_id TEXT, metadata_json TEXT NOT NULL DEFAULT '{}', UNIQUE(owner_id, task_id, result_index))")
             connection.execute("CREATE INDEX IF NOT EXISTS idx_result_objects_owner ON result_objects(owner_id, created_at DESC)")
@@ -47,13 +50,14 @@ class ResultObjectStore:
         return "unknown"
 
     @classmethod
-    def _row(cls, row: sqlite3.Row, list_ids: list[str] | None = None) -> dict[str, Any]:
-        metadata = json.loads(row["metadata_json"] or "{}")
+    def _row(cls, row, list_ids: list[str] | None = None) -> dict[str, Any]:
+        metadata = as_json(row["metadata_json"], default={}) or {}
+        created = row["created_at"]
         return {
             "id": row["id"], "email": row["email"], "status": row["status"],
             "verification_method": row["verification_method"], "server_response": row["server_response"],
             "confidence": row["confidence"], "source": row["source"], "task_id": row["task_id"],
-            "created_at": row["created_at"], "list_ids": list_ids or [],
+            "created_at": as_iso(created) or created, "list_ids": list_ids or [],
             "supersedes_result_id": row["supersedes_result_id"], "metadata": metadata,
         }
 
@@ -150,7 +154,7 @@ class ResultObjectStore:
                 (timestamp, timestamp, list_id, owner_id),
             )
 
-    def get_list(self, owner_id: str, list_id: str, *, connection: sqlite3.Connection | None = None) -> dict[str, Any] | None:
+    def get_list(self, owner_id: str, list_id: str, *, connection=None) -> dict[str, Any] | None:
         own = connection is None
         connection = connection or self._connect()
         try:

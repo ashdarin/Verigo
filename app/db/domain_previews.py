@@ -58,13 +58,18 @@ class DomainPreviewStore:
         self._lock = threading.RLock()
         self._ready = False
 
-    def _connect(self) -> sqlite3.Connection:
-        connection = connect_sqlite(settings.database_path)
-        connection.row_factory = sqlite3.Row
-        return connection
+    def _connect(self):
+        from app.db.pg_compat import connect_app
+
+        return connect_app()
 
     def _ensure_schema(self) -> None:
         if self._ready:
+            return
+        from app.db.pg_compat import postgres_active
+
+        if postgres_active():
+            self._ready = True
             return
         with self._lock, closing(self._connect()) as connection:
             connection.execute(
@@ -169,8 +174,10 @@ class DomainPreviewStore:
         if row is None:
             return None
         try:
-            payload = json.loads(row[0])
-        except (TypeError, json.JSONDecodeError):
+            from app.db.pg_compat import as_json
+
+            payload = as_json(row[0], default=None)
+        except (TypeError, json.JSONDecodeError, ValueError):
             return None
         if not isinstance(payload, dict) or payload.get("cache_version") != CACHE_SCHEMA_VERSION:
             return None
@@ -203,11 +210,11 @@ class DomainPreviewStore:
                 """
                 SELECT domain, title, legal_name, url, logo_url, evidence
                 FROM domain_suggestion_index
-                WHERE verified = 1 AND stem LIKE ? || '%'
+                WHERE verified = 1 AND stem LIKE ?
                 ORDER BY rank ASC, domain ASC
                 LIMIT 6
                 """,
-                (prefix,),
+                (prefix + "%",),
             ).fetchall()
         return [
             {

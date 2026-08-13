@@ -212,6 +212,32 @@ class Settings:
     database_path: Path = Path(
         os.getenv("VERIGO_DATABASE_PATH", str(BASE_DIR / "data" / "verigo.db"))
     )
+    # Application stores are PostgreSQL-only when a DSN is present.
+    # SQLite is no longer a runtime backend for shared tables.
+    postgres_enabled: bool = env_bool("VERIGO_POSTGRES_ENABLED", False)
+    database_url: str = os.getenv("VERIGO_DATABASE_URL", "").strip()
+    # Optional per-store overrides. Unset means "follow postgres_enabled".
+    # Explicit false while the global switch is true is a configuration error.
+    auth_postgres_enabled: bool | None = (
+        env_bool("VERIGO_AUTH_POSTGRES_ENABLED")
+        if os.getenv("VERIGO_AUTH_POSTGRES_ENABLED") is not None
+        else None
+    )
+    metrics_postgres_enabled: bool | None = (
+        env_bool("VERIGO_METRICS_POSTGRES_ENABLED")
+        if os.getenv("VERIGO_METRICS_POSTGRES_ENABLED") is not None
+        else None
+    )
+    prospecting_postgres_enabled: bool | None = (
+        env_bool("VERIGO_PROSPECTING_POSTGRES_ENABLED")
+        if os.getenv("VERIGO_PROSPECTING_POSTGRES_ENABLED") is not None
+        else None
+    )
+    job_postgres_enabled: bool | None = (
+        env_bool("VERIGO_JOB_POSTGRES_ENABLED")
+        if os.getenv("VERIGO_JOB_POSTGRES_ENABLED") is not None
+        else None
+    )
     # A separately deployable, read-only dictionary. It deliberately remains
     # outside the transactional application database.
     name_catalog_path: Path = Path(
@@ -446,4 +472,36 @@ class Settings:
         return SimpleNamespace(**mapped)
 
 
+def _validate_postgres_settings(cfg: Settings) -> None:
+    """Fail fast on cutover configuration conflicts."""
+    store_flags = {
+        "VERIGO_AUTH_POSTGRES_ENABLED": cfg.auth_postgres_enabled,
+        "VERIGO_METRICS_POSTGRES_ENABLED": cfg.metrics_postgres_enabled,
+        "VERIGO_PROSPECTING_POSTGRES_ENABLED": cfg.prospecting_postgres_enabled,
+        "VERIGO_JOB_POSTGRES_ENABLED": cfg.job_postgres_enabled,
+    }
+    # A configured DSN means the process is PostgreSQL-only for app data.
+    if cfg.database_url and not cfg.postgres_enabled:
+        # Do not silently keep a SQLite fallback next to a live DSN.
+        object.__setattr__(cfg, "postgres_enabled", True)
+    if cfg.postgres_enabled:
+        if not cfg.database_url:
+            raise RuntimeError(
+                "VERIGO_POSTGRES_ENABLED=true requires VERIGO_DATABASE_URL"
+            )
+        for name, value in store_flags.items():
+            if value is False:
+                raise RuntimeError(
+                    f"{name}=false conflicts with VERIGO_POSTGRES_ENABLED=true; "
+                    "unset the per-store flag or disable the global switch"
+                )
+    else:
+        for name, value in store_flags.items():
+            if value is True:
+                raise RuntimeError(
+                    f"{name}=true requires VERIGO_POSTGRES_ENABLED=true"
+                )
+
+
 settings = Settings()
+_validate_postgres_settings(settings)

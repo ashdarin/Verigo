@@ -31,28 +31,54 @@ if [ ! -f .venv/.verigo-worker-deps ] || ! cmp -s requirements.txt .venv/.verigo
   .venv/bin/python -m pip install --disable-pip-version-check -q -r requirements.txt >/tmp/verigo-qq-pip.log 2>&1
   cp requirements.txt .venv/.verigo-worker-deps
 fi
-for pid_file in /tmp/verigo-qq-worker-*.pid /tmp/verigo-qq-worker-watchdog.pid /tmp/verigo-qq-worker-watchdog-*.pid; do
+cat >/tmp/verigo-qq-worker-watchdog.sh <<'VERIGO_WATCHDOG'
+#!/bin/sh
+set -u
+cd /workspace/Verigo
+slot="${{1:?worker slot is required}}"
+base_worker_id="${{VERIGO_TENCENT_QQ_WORKER_ID}}"
+if [ "${{VERIGO_CLOUDSTUDIO_WORKER_PROCESSES:-1}}" -gt 1 ]; then
+  export VERIGO_TENCENT_QQ_WORKER_ID="${{base_worker_id}}-${{slot}}"
+fi
+while true; do
+  .venv/bin/python -m app.tencent_qq_worker >>/tmp/verigo-qq-worker.log 2>&1 || true
+  sleep 5
+done
+VERIGO_WATCHDOG
+chmod 700 /tmp/verigo-qq-worker-watchdog.sh
+layout="${{VERIGO_REMOTE_WORKER_TARGET}}:${{VERIGO_TENCENT_QQ_WORKER_ID}}:{processes}:$release_version"
+layout_file=/tmp/verigo-qq-worker-layout
+layout_ready=true
+if [ ! -s "$layout_file" ] || [ "$(cat "$layout_file")" != "$layout" ]; then
+  layout_ready=false
+fi
+for slot in {slots}; do
+  pid_file="/tmp/verigo-qq-worker-watchdog-${{slot}}.pid"
+  if [ ! -s "$pid_file" ]; then
+    layout_ready=false
+    continue
+  fi
+  pid="$(cat "$pid_file")"
+  if ! kill -0 "$pid" 2>/dev/null || \
+      ! ps -p "$pid" -o args= 2>/dev/null | grep -Fq "/tmp/verigo-qq-worker-watchdog.sh $slot"; then
+    layout_ready=false
+  fi
+done
+if [ "$layout_ready" = true ]; then
+  exit 0
+fi
+for pid_file in /tmp/verigo-qq-worker-watchdog.pid /tmp/verigo-qq-worker-watchdog-*.pid; do
   [ -s "$pid_file" ] || continue
   pid="$(cat "$pid_file")"
   kill -TERM -- "-${{pid}}" 2>/dev/null || kill "$pid" 2>/dev/null || true
 done
 sleep 2
-rm -f /tmp/verigo-qq-worker-*.pid /tmp/verigo-qq-worker-watchdog.pid /tmp/verigo-qq-worker-watchdog-*.pid
-: >/tmp/verigo-qq-worker.log
+rm -f /tmp/verigo-qq-worker-watchdog.pid /tmp/verigo-qq-worker-watchdog-*.pid
+echo "$layout" >"$layout_file"
 for slot in {slots}; do
-  pid_file="/tmp/verigo-qq-worker-${{slot}}.pid"
-  worker_id="${{VERIGO_TENCENT_QQ_WORKER_ID}}"
-  if [ "{processes}" -gt 1 ]; then
-    worker_id="${{worker_id}}-${{slot}}"
-  fi
-  nohup setsid env VERIGO_TENCENT_QQ_WORKER_ID="$worker_id" \
-    .venv/bin/python -m app.tencent_qq_worker >>/tmp/verigo-qq-worker.log 2>&1 </dev/null &
+  pid_file="/tmp/verigo-qq-worker-watchdog-${{slot}}.pid"
+  nohup setsid /tmp/verigo-qq-worker-watchdog.sh "$slot" >>/tmp/verigo-qq-watchdog.log 2>&1 </dev/null &
   echo $! >"$pid_file"
-done
-sleep 2
-for slot in {slots}; do
-  pid="$(cat "/tmp/verigo-qq-worker-${{slot}}.pid")"
-  kill -0 "$pid"
 done
 """
 

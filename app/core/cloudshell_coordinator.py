@@ -39,13 +39,19 @@ class CloudShellCoordinator:
         self._pool_refreshed_at = 0.0
 
     def _connect(self):
-        return connect(self._database_path)
+        from app.db.pg_compat import connect_app
+
+        return connect_app()
 
     @property
     def enabled(self) -> bool:
         return bool(getattr(settings, "cloudshell_coordinator_enabled", True))
 
     def initialize(self) -> None:
+        from app.db.pg_compat import postgres_active
+
+        if postgres_active():
+            return
         with self._lock, closing(self._connect()) as db:
             db.execute(
                 """CREATE TABLE IF NOT EXISTS cloudshell_account_usage (
@@ -135,6 +141,7 @@ class CloudShellCoordinator:
                 if not worker_id:
                     continue
                 account_id = str(item.get("account_id") or item.get("id") or worker_id).strip()
+                enabled = bool(item.get("enabled", True))
                 db.execute(
                     """INSERT INTO cloudshell_account_usage
                         (worker_id, usage_date, account_id, enabled, soft_quota_units)
@@ -147,7 +154,7 @@ class CloudShellCoordinator:
                         worker_id,
                         today,
                         account_id,
-                        int(bool(item.get("enabled", True))),
+                        enabled,
                         max(0, int(item.get("soft_quota_units", settings.cloudshell_soft_quota_units) or 0)),
                     ),
                 )

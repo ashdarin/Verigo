@@ -1,7 +1,7 @@
 [Unit]
 Description=Verigo remote verification node supervisor
-After=network-online.target verigo.service
-Wants=network-online.target
+After=network-online.target verigo.service verigo-postgres-tunnel.service
+Wants=network-online.target verigo-postgres-tunnel.service
 
 [Service]
 Type=simple

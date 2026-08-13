@@ -1,0 +1,20 @@
+[Unit]
+Description=Verigo PostgreSQL SSH tunnel
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=verigo
+Group=verigo
+ExecStart=/usr/bin/ssh -NT -i /opt/verigo/.ssh/postgres_tunnel_ed25519 -o BatchMode=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/opt/verigo/.ssh/postgres_known_hosts -L 127.0.0.1:15432:127.0.0.1:5432 verigo@101.34.212.199
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/opt/verigo/.ssh
+
+[Install]
+WantedBy=multi-user.target

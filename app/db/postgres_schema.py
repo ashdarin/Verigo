@@ -1,0 +1,1223 @@
+"""Explicit PostgreSQL schema metadata for Verigo cutover (P0.1).
+
+Generated from production SQLite PRAGMA introspection (2026-08-12).
+Migration/preflight code must only touch tables registered here;
+unknown tables are a hard failure in production mode.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any
+
+
+@dataclass(frozen=True)
+class ColumnDef:
+    name: str
+    type: str
+    nullable: bool = True
+    default: str | None = None
+
+
+@dataclass(frozen=True)
+class UniqueDef:
+    name: str
+    columns: tuple[str, ...]
+    partial: bool = False
+
+
+@dataclass(frozen=True)
+class IndexDef:
+    name: str
+    columns: tuple[str, ...]
+    partial: bool = False
+
+
+@dataclass(frozen=True)
+class ForeignKeyDef:
+    columns: tuple[str, ...]
+    ref_table: str
+    ref_columns: tuple[str, ...]
+    on_delete: str = "NO ACTION"
+    on_update: str = "NO ACTION"
+
+
+@dataclass(frozen=True)
+class TableDef:
+    name: str
+    columns: tuple[ColumnDef, ...]
+    primary_key: tuple[str, ...] = ()
+    uniques: tuple[UniqueDef, ...] = ()
+    indexes: tuple[IndexDef, ...] = ()
+    foreign_keys: tuple[ForeignKeyDef, ...] = ()
+    no_primary_key: bool = False
+    # For tables without PK, preflight/migrate use all columns as the row key.
+    row_key_strategy: str = "primary_key"  # or "all_columns"
+
+
+def _c(name: str, type: str, nullable: bool = True, default: str | None = None) -> ColumnDef:
+    return ColumnDef(name=name, type=type, nullable=nullable, default=default)
+
+
+TABLES: dict[str, TableDef] = {}
+
+TABLES["admin_credit_adjustments"] = TableDef(
+    name="admin_credit_adjustments",
+    columns=(
+        _c("id", "text", False),
+        _c("user_id", "text", False),
+        _c("adjusted_by_user_id", "text", False),
+        _c("delta", "bigint", False),
+        _c("note", "text", False, "''"),
+        _c("reference", "text", False),
+        _c("created_at", "timestamptz", False),
+        _c("amount_fen", "bigint", True),
+    ),
+    primary_key=("id",),
+    uniques=(
+        UniqueDef("uq_admin_credit_adjustments_reference", ("reference",), partial=False),
+    ),
+    indexes=(
+        IndexDef("idx_admin_credit_adjustments_user", ("user_id", "created_at",), partial=False),
+    ),
+    foreign_keys=(
+        ForeignKeyDef(("adjusted_by_user_id",), "users", ("id",), on_delete="CASCADE", on_update="NO ACTION"),
+        ForeignKeyDef(("user_id",), "users", ("id",), on_delete="CASCADE", on_update="NO ACTION"),
+    ),
+)
+
+TABLES["admin_credit_grants"] = TableDef(
+    name="admin_credit_grants",
+    columns=(
+        _c("id", "text", False),
+        _c("user_id", "text", False),
+        _c("granted_by_user_id", "text", False),
+        _c("credits", "bigint", False),
+        _c("note", "text", False, "''"),
+        _c("reference", "text", False),
+        _c("created_at", "timestamptz", False),
+    ),
+    primary_key=("id",),
+    uniques=(
+        UniqueDef("uq_admin_credit_grants_reference", ("reference",), partial=False),
+    ),
+    indexes=(
+        IndexDef("idx_admin_credit_grants_user", ("user_id", "created_at",), partial=False),
+    ),
+    foreign_keys=(
+        ForeignKeyDef(("granted_by_user_id",), "users", ("id",), on_delete="CASCADE", on_update="NO ACTION"),
+        ForeignKeyDef(("user_id",), "users", ("id",), on_delete="CASCADE", on_update="NO ACTION"),
+    ),
+)
+
+TABLES["anonymous_free_usage"] = TableDef(
+    name="anonymous_free_usage",
+    columns=(
+        _c("network_hash", "text", False),
+        _c("period", "text", False),
+        _c("count", "bigint", False, "0"),
+        _c("updated_at", "timestamptz", False),
+    ),
+    primary_key=("network_hash", "period",),
+)
+
+TABLES["api_keys"] = TableDef(
+    name="api_keys",
+    columns=(
+        _c("id", "text", False),
+        _c("user_id", "text", False),
+        _c("name", "text", False),
+        _c("token_hash", "text", False),
+        _c("prefix", "text", False),
+        _c("created_at", "timestamptz", False),
+        _c("last_used_at", "timestamptz", True),
+        _c("revoked_at", "timestamptz", True),
+    ),
+    primary_key=("id",),
+    uniques=(
+        UniqueDef("uq_api_keys_token_hash", ("token_hash",), partial=False),
+    ),
+    indexes=(
+        IndexDef("idx_api_keys_user", ("user_id", "created_at",), partial=False),
+    ),
+    foreign_keys=(
+        ForeignKeyDef(("user_id",), "users", ("id",), on_delete="CASCADE", on_update="NO ACTION"),
+    ),
+)
+
+TABLES["auth_rate_limit_events"] = TableDef(
+    name="auth_rate_limit_events",
+    columns=(
+        _c("key_hash", "text", False),
+        _c("occurred_at", "timestamptz", False),
+    ),
+    primary_key=(),
+    indexes=(
+        IndexDef("idx_auth_rate_limit_events_key", ("key_hash", "occurred_at",), partial=False),
+    ),
+    no_primary_key=True,
+    row_key_strategy="all_columns",
+)
+
+TABLES["catch_all_emails"] = TableDef(
+    name="catch_all_emails",
+    columns=(
+        _c("id", "bigint", False),
+        _c("job_id", "text", False),
+        _c("email", "text", False),
+        _c("domain", "text", False),
+        _c("verified_at", "timestamptz", False),
+        _c("result_json", "jsonb", False),
+    ),
+    primary_key=("id",),
+    uniques=(
+        UniqueDef("uq_catch_all_emails_job_id_email", ("job_id", "email",), partial=False),
+    ),
+    indexes=(
+        IndexDef("idx_catch_all_domain", ("domain", "verified_at",), partial=False),
+    ),
+)
+
+TABLES["cloudshell_account_usage"] = TableDef(
+    name="cloudshell_account_usage",
+    columns=(
+        _c("worker_id", "text", False),
+        _c("usage_date", "text", False),
+        _c("account_id", "text", False),
+        _c("enabled", "boolean", False, "true"),
+        _c("claimed_units", "bigint", False, "0"),
+        _c("claimed_tasks", "bigint", False, "0"),
+        _c("failure_count", "bigint", False, "0"),
+        _c("cooldown_until", "timestamptz", True),
+        _c("last_claimed_at", "timestamptz", True),
+        _c("last_failure_at", "timestamptz", True),
+        _c("active", "boolean", False, "true"),
+        _c("soft_quota_units", "bigint", False, "0"),
+        _c("runtime_minutes", "bigint", False, "0"),
+    ),
+    primary_key=("worker_id", "usage_date",),
+    indexes=(
+        IndexDef("idx_cloudshell_usage_day", ("usage_date", "enabled", "claimed_units",), partial=False),
+    ),
+)
+
+TABLES["cloudshell_claim_reservations"] = TableDef(
+    name="cloudshell_claim_reservations",
+    columns=(
+        _c("token", "text", False),
+        _c("worker_id", "text", False),
+        _c("usage_date", "text", False),
+        _c("reserved_units", "bigint", False),
+        _c("created_at", "timestamptz", False),
+    ),
+    primary_key=("token",),
+)
+
+TABLES["credit_debit_grants"] = TableDef(
+    name="credit_debit_grants",
+    columns=(
+        _c("reference", "text", False),
+        _c("grant_id", "text", False),
+        _c("credits", "bigint", False),
+    ),
+    primary_key=("reference", "grant_id",),
+    foreign_keys=(
+        ForeignKeyDef(("grant_id",), "promo_credit_grants", ("id",), on_delete="CASCADE", on_update="NO ACTION"),
+        ForeignKeyDef(("reference",), "credit_debits", ("reference",), on_delete="CASCADE", on_update="NO ACTION"),
+    ),
+)
+
+TABLES["credit_debits"] = TableDef(
+    name="credit_debits",
+    columns=(
+        _c("reference", "text", False),
+        _c("user_id", "text", False),
+        _c("paid_credits", "bigint", False),
+        _c("promo_credits", "bigint", False),
+        _c("created_at", "timestamptz", False),
+        _c("refunded_at", "timestamptz", True),
+    ),
+    primary_key=("reference",),
+    foreign_keys=(
+        ForeignKeyDef(("user_id",), "users", ("id",), on_delete="CASCADE", on_update="NO ACTION"),
+    ),
+)
+
+TABLES["credit_ledger"] = TableDef(
+    name="credit_ledger",
+    columns=(
+        _c("id", "bigint", False),
+        _c("user_id", "text", False),
+        _c("delta", "bigint", False),
+        _c("kind", "text", False),
+        _c("reference", "text", False),
+        _c("created_at", "timestamptz", False),
+    ),
+    primary_key=("id",),
+    uniques=(
+        UniqueDef("uq_credit_ledger_reference", ("reference",), partial=False),
+    ),
+)
+
+TABLES["daily_visitors"] = TableDef(
+    name="daily_visitors",
+    columns=(
+        _c("day", "text", False),
+        _c("visitor_hash", "text", False),
+    ),
+    primary_key=("day", "visitor_hash",),
+)
+
+TABLES["domain_relation_cache"] = TableDef(
+    name="domain_relation_cache",
+    columns=(
+        _c("domain", "text", False),
+        _c("payload_json", "jsonb", False),
+        _c("discovered_at", "timestamptz", False),
+        _c("updated_at", "timestamptz", False),
+    ),
+    primary_key=("domain",),
+    indexes=(
+        IndexDef("idx_domain_relation_cache_updated", ("updated_at",), partial=False),
+    ),
+)
+
+TABLES["domain_suggestion_index"] = TableDef(
+    name="domain_suggestion_index",
+    columns=(
+        _c("domain", "text", False),
+        _c("stem", "text", False),
+        _c("title", "text", True),
+        _c("legal_name", "text", True),
+        _c("url", "text", False),
+        _c("logo_url", "text", True),
+        _c("verified", "bigint", False, "1"),
+        _c("evidence", "text", False, "'cache'"),
+        _c("rank", "bigint", False, "1000"),
+        _c("updated_at", "timestamptz", False),
+    ),
+    primary_key=("domain",),
+    indexes=(
+        IndexDef("idx_domain_suggestion_stem", ("stem", "rank", "domain",), partial=False),
+    ),
+)
+
+TABLES["email_bindings"] = TableDef(
+    name="email_bindings",
+    columns=(
+        _c("user_id", "text", False),
+        _c("email", "text", False),
+        _c("code_hash", "text", False),
+        _c("expires_at", "timestamptz", False),
+        _c("attempts", "bigint", False, "0"),
+        _c("created_at", "timestamptz", False),
+    ),
+    primary_key=("user_id",),
+    uniques=(
+        UniqueDef("uq_email_bindings_email", ("email",), partial=False),
+    ),
+    foreign_keys=(
+        ForeignKeyDef(("user_id",), "users", ("id",), on_delete="CASCADE", on_update="NO ACTION"),
+    ),
+)
+
+TABLES["email_verifications"] = TableDef(
+    name="email_verifications",
+    columns=(
+        _c("user_id", "text", False),
+        _c("code_hash", "text", False),
+        _c("expires_at", "timestamptz", False),
+        _c("attempts", "bigint", False, "0"),
+        _c("created_at", "timestamptz", False),
+    ),
+    primary_key=("user_id",),
+)
+
+TABLES["free_usage"] = TableDef(
+    name="free_usage",
+    columns=(
+        _c("user_id", "text", False),
+        _c("kind", "text", False),
+        _c("period", "text", False),
+        _c("count", "bigint", False, "0"),
+        _c("updated_at", "timestamptz", False),
+    ),
+    primary_key=("user_id", "kind", "period",),
+    foreign_keys=(
+        ForeignKeyDef(("user_id",), "users", ("id",), on_delete="CASCADE", on_update="NO ACTION"),
+    ),
+)
+
+TABLES["job_leases"] = TableDef(
+    name="job_leases",
+    columns=(
+        _c("id", "text", False),
+        _c("job_id", "text", False),
+        _c("worker_id", "text", False),
+        _c("execution_target", "text", False),
+        _c("indices_json", "jsonb", False),
+        _c("claimed_at", "timestamptz", False),
+        _c("heartbeat_at", "timestamptz", False),
+        _c("completed_at", "timestamptz", True),
+    ),
+    primary_key=("id",),
+    indexes=(
+        IndexDef("idx_job_leases_active", ("job_id", "completed_at", "heartbeat_at",), partial=False),
+    ),
+)
+
+TABLES["job_result_links"] = TableDef(
+    name="job_result_links",
+    columns=(
+        _c("child_job_id", "text", False),
+        _c("child_index", "bigint", False),
+        _c("parent_job_id", "text", False),
+        _c("parent_index", "bigint", False),
+    ),
+    primary_key=("child_job_id", "child_index",),
+    uniques=(
+        UniqueDef("uq_job_result_links_parent_job_id_parent_index", ("parent_job_id", "parent_index",), partial=False),
+    ),
+    indexes=(
+        IndexDef("idx_job_result_links_parent", ("parent_job_id", "parent_index",), partial=False),
+    ),
+)
+
+TABLES["job_results"] = TableDef(
+    name="job_results",
+    columns=(
+        _c("job_id", "text", False),
+        _c("original_index", "bigint", False),
+        _c("email", "text", False),
+        _c("progress_state", "text", False, "'pending'"),
+        _c("result_json", "jsonb", False),
+        _c("updated_at", "timestamptz", False),
+        _c("deliverability", "bigint", True),
+        _c("is_valid", "boolean", False, "false"),
+        _c("is_skipped", "boolean", False, "false"),
+        _c("is_catch_all", "boolean", False, "false"),
+        _c("retry_at", "timestamptz", True),
+        _c("retry_updated", "boolean", False, "false"),
+        _c("query_fields_ready", "boolean", False, "false"),
+    ),
+    primary_key=("job_id", "original_index",),
+    indexes=(
+        IndexDef("idx_job_results_email", ("job_id", "email", "original_index",), partial=False),
+        IndexDef("idx_job_results_filter", ("job_id", "deliverability", "is_skipped", "original_index",), partial=False),
+        IndexDef("idx_job_results_pending", ("job_id", "progress_state", "original_index",), partial=False),
+    ),
+)
+
+TABLES["jobs"] = TableDef(
+    name="jobs",
+    columns=(
+        _c("id", "text", False),
+        _c("emails_json", "jsonb", False),
+        _c("worker_count", "bigint", False),
+        _c("status", "text", False),
+        _c("created_at", "timestamptz", False),
+        _c("started_at", "timestamptz", True),
+        _c("finished_at", "timestamptz", True),
+        _c("error", "text", True),
+        _c("results_json", "jsonb", False, "'[]'::jsonb"),
+        _c("csv_path", "text", True),
+        _c("owner_id", "text", True),
+        _c("guest_token_hash", "text", True),
+        _c("worker_id", "text", True),
+        _c("heartbeat_at", "timestamptz", True),
+        _c("stop_on_deliverable", "boolean", False, "false"),
+        _c("execution_target", "text", False, "'local'"),
+        _c("parent_id", "text", True),
+        _c("deferred_retry_at", "timestamptz", True),
+        _c("temporary_retry_attempts", "bigint", False, "0"),
+        _c("retry_parent_id", "text", True),
+        _c("enrich_profiles", "bigint", False, "0"),
+        _c("list_name", "text", True),
+    ),
+    primary_key=("id",),
+    indexes=(
+        IndexDef("idx_jobs_retry_parent", ("retry_parent_id", "created_at",), partial=False),
+        IndexDef("idx_jobs_parent", ("parent_id", "created_at",), partial=False),
+        IndexDef("idx_jobs_queue", ("status", "created_at",), partial=False),
+    ),
+)
+
+TABLES["list_items"] = TableDef(
+    name="list_items",
+    columns=(
+        _c("list_id", "text", False),
+        _c("result_id", "text", False),
+        _c("added_at", "timestamptz", False),
+        _c("added_from", "text", False),
+    ),
+    primary_key=("list_id", "result_id",),
+    indexes=(
+        IndexDef("idx_list_items_result", ("result_id",), partial=False),
+    ),
+    foreign_keys=(
+        ForeignKeyDef(("result_id",), "result_objects", ("id",), on_delete="CASCADE", on_update="NO ACTION"),
+        ForeignKeyDef(("list_id",), "lists", ("id",), on_delete="CASCADE", on_update="NO ACTION"),
+    ),
+)
+
+TABLES["lists"] = TableDef(
+    name="lists",
+    columns=(
+        _c("id", "text", False),
+        _c("owner_id", "text", False),
+        _c("name", "text", False),
+        _c("description", "text", False, "''"),
+        _c("created_at", "timestamptz", False),
+        _c("updated_at", "timestamptz", False),
+        _c("archived_at", "timestamptz", True),
+    ),
+    primary_key=("id",),
+    indexes=(
+        IndexDef("idx_lists_owner", ("owner_id", "archived_at", "updated_at",), partial=False),
+    ),
+)
+
+TABLES["mx_scheduler_leases"] = TableDef(
+    name="mx_scheduler_leases",
+    columns=(
+        _c("lease_id", "text", False),
+        _c("mx_key", "text", False),
+        _c("expires_at", "timestamptz", False),
+        _c("slots", "bigint", False, "1"),
+    ),
+    primary_key=("lease_id", "mx_key",),
+)
+
+TABLES["mx_scheduler_slot_leases"] = TableDef(
+    name="mx_scheduler_slot_leases",
+    columns=(
+        _c("lease_id", "text", False),
+        _c("original_index", "bigint", False),
+        _c("mx_key", "text", False),
+        _c("expires_at", "timestamptz", False),
+    ),
+    primary_key=("lease_id", "original_index",),
+    indexes=(
+        IndexDef("idx_mx_scheduler_slot_active", ("mx_key", "expires_at",), partial=False),
+    ),
+)
+
+TABLES["notifications"] = TableDef(
+    name="notifications",
+    columns=(
+        _c("id", "text", False),
+        _c("user_id", "text", False),
+        _c("kind", "text", False),
+        _c("title", "text", False),
+        _c("body", "text", False),
+        _c("created_at", "timestamptz", False),
+        _c("read_at", "timestamptz", True),
+        _c("target_job_id", "text", True),
+        _c("target_email", "text", True),
+        _c("target_result_index", "bigint", True),
+    ),
+    primary_key=("id",),
+    indexes=(
+        IndexDef("idx_notifications_user", ("user_id", "read_at", "created_at",), partial=False),
+    ),
+    foreign_keys=(
+        ForeignKeyDef(("user_id",), "users", ("id",), on_delete="CASCADE", on_update="NO ACTION"),
+    ),
+)
+
+TABLES["page_view_days"] = TableDef(
+    name="page_view_days",
+    columns=(
+        _c("day", "text", False),
+        _c("page_views", "bigint", False, "0"),
+        _c("unique_visitors", "bigint", False, "0"),
+    ),
+    primary_key=("day",),
+)
+
+TABLES["password_resets"] = TableDef(
+    name="password_resets",
+    columns=(
+        _c("user_id", "text", False),
+        _c("code_hash", "text", False),
+        _c("expires_at", "timestamptz", False),
+        _c("attempts", "bigint", False, "0"),
+        _c("created_at", "timestamptz", False),
+    ),
+    primary_key=("user_id",),
+    foreign_keys=(
+        ForeignKeyDef(("user_id",), "users", ("id",), on_delete="CASCADE", on_update="NO ACTION"),
+    ),
+)
+
+TABLES["payment_orders"] = TableDef(
+    name="payment_orders",
+    columns=(
+        _c("id", "text", False),
+        _c("user_id", "text", False),
+        _c("credits", "bigint", False),
+        _c("amount_fen", "bigint", False),
+        _c("status", "text", False),
+        _c("created_at", "timestamptz", False),
+        _c("paid_at", "timestamptz", True),
+    ),
+    primary_key=("id",),
+)
+
+TABLES["promo_credit_grants"] = TableDef(
+    name="promo_credit_grants",
+    columns=(
+        _c("id", "text", False),
+        _c("user_id", "text", False),
+        _c("reference", "text", False),
+        _c("initial_credits", "bigint", False),
+        _c("remaining_credits", "bigint", False),
+        _c("expires_at", "timestamptz", False),
+        _c("created_at", "timestamptz", False),
+    ),
+    primary_key=("id",),
+    uniques=(
+        UniqueDef("uq_promo_credit_grants_reference", ("reference",), partial=False),
+    ),
+    foreign_keys=(
+        ForeignKeyDef(("user_id",), "users", ("id",), on_delete="CASCADE", on_update="NO ACTION"),
+    ),
+)
+
+TABLES["prospecting_candidate_claims"] = TableDef(
+    name="prospecting_candidate_claims",
+    columns=(
+        _c("claim_token", "text", False),
+        _c("domain", "text", False),
+        _c("email", "text", False),
+        _c("name_key", "text", True),
+        _c("claimed_at", "timestamptz", False),
+    ),
+    primary_key=("claim_token", "email",),
+    uniques=(
+        UniqueDef("idx_prospecting_claim_name", ("domain", "name_key",), partial=True),
+        UniqueDef("idx_prospecting_claim_email", ("domain", "email",), partial=False),
+    ),
+)
+
+TABLES["prospecting_candidates"] = TableDef(
+    name="prospecting_candidates",
+    columns=(
+        _c("run_id", "text", False),
+        _c("original_index", "bigint", False),
+        _c("email", "text", False),
+        _c("category", "text", False),
+        _c("pattern", "text", False),
+        _c("rank", "bigint", False),
+        _c("source", "text", False),
+        _c("name_key", "text", True),
+    ),
+    primary_key=("run_id", "original_index",),
+    indexes=(
+        IndexDef("idx_prospecting_candidates_name_key", ("name_key",), partial=False),
+        IndexDef("idx_prospecting_candidates_run", ("run_id", "original_index",), partial=False),
+    ),
+    foreign_keys=(
+        ForeignKeyDef(("run_id",), "prospecting_runs", ("id",), on_delete="CASCADE", on_update="NO ACTION"),
+    ),
+)
+
+TABLES["prospecting_companies"] = TableDef(
+    name="prospecting_companies",
+    columns=(
+        _c("id", "text", False),
+        _c("owner_id", "text", False),
+        _c("import_id", "text", False),
+        _c("name", "text", False),
+        _c("domain", "text", True),
+        _c("country", "text", True),
+        _c("industry", "text", True),
+        _c("source_row", "bigint", False),
+        _c("selected", "bigint", False, "0"),
+        _c("discovery_run_id", "text", True),
+        _c("created_at", "timestamptz", False),
+        _c("updated_at", "timestamptz", False),
+    ),
+    primary_key=("id",),
+    uniques=(
+        UniqueDef("uq_prospecting_companies_owner_id_import_id_name_domain", ("owner_id", "import_id", "name", "domain",), partial=False),
+    ),
+    indexes=(
+        IndexDef("idx_prospecting_companies_owner_import", ("owner_id", "import_id", "id",), partial=False),
+        IndexDef("idx_prospecting_companies_owner", ("owner_id", "created_at",), partial=False),
+    ),
+)
+
+TABLES["prospecting_contact_events"] = TableDef(
+    name="prospecting_contact_events",
+    columns=(
+        _c("owner_id", "text", False),
+        _c("email", "text", False),
+        _c("run_id", "text", False),
+        _c("verified_at", "timestamptz", False),
+        _c("verification_method", "text", True),
+        _c("verification_detail", "text", True),
+        _c("confidence", "bigint", False),
+        _c("source", "text", False),
+    ),
+    primary_key=("owner_id", "email", "run_id",),
+)
+
+TABLES["prospecting_control_samples"] = TableDef(
+    name="prospecting_control_samples",
+    columns=(
+        _c("owner_id", "text", False),
+        _c("domain", "text", False),
+        _c("email", "text", False),
+        _c("verified_at", "timestamptz", False),
+        _c("smtp_detail", "text", False),
+    ),
+    primary_key=("owner_id", "domain",),
+)
+
+TABLES["prospecting_domain_profiles"] = TableDef(
+    name="prospecting_domain_profiles",
+    columns=(
+        _c("domain", "text", False),
+        _c("pattern", "text", False),
+        _c("confirmed_count", "bigint", False, "0"),
+        _c("last_confirmed_at", "timestamptz", False),
+    ),
+    primary_key=("domain", "pattern",),
+)
+
+TABLES["prospecting_domain_protection"] = TableDef(
+    name="prospecting_domain_protection",
+    columns=(
+        _c("domain", "text", False),
+        _c("pressure_events", "bigint", False, "0"),
+        _c("strong_events", "bigint", False, "0"),
+        _c("cooldown_until", "timestamptz", True),
+        _c("stop_until", "timestamptz", True),
+        _c("last_reason", "text", True),
+        _c("updated_at", "timestamptz", False),
+    ),
+    primary_key=("domain",),
+)
+
+TABLES["prospecting_owner_domain_profiles"] = TableDef(
+    name="prospecting_owner_domain_profiles",
+    columns=(
+        _c("owner_id", "text", False),
+        _c("domain", "text", False),
+        _c("pattern", "text", False),
+        _c("confirmed_count", "bigint", False, "0"),
+        _c("last_confirmed_at", "timestamptz", False),
+    ),
+    primary_key=("owner_id", "domain", "pattern",),
+)
+
+TABLES["prospecting_protection_events"] = TableDef(
+    name="prospecting_protection_events",
+    columns=(
+        _c("run_id", "text", False),
+        _c("original_index", "bigint", False),
+        _c("signal", "text", False),
+        _c("created_at", "timestamptz", False),
+    ),
+    primary_key=("run_id", "original_index",),
+    foreign_keys=(
+        ForeignKeyDef(("run_id",), "prospecting_runs", ("id",), on_delete="CASCADE", on_update="NO ACTION"),
+    ),
+)
+
+TABLES["prospecting_runs"] = TableDef(
+    name="prospecting_runs",
+    columns=(
+        _c("id", "text", False),
+        _c("owner_id", "text", False),
+        _c("domain", "text", False),
+        _c("verification_job_id", "text", False),
+        _c("candidate_count", "bigint", False),
+        _c("profile_patterns_json", "jsonb", False),
+        _c("created_at", "timestamptz", False),
+        _c("profiles_recorded_at", "timestamptz", True),
+        _c("country", "text", False, "'US'"),
+        _c("requested_pattern", "text", True),
+    ),
+    primary_key=("id",),
+    uniques=(
+        UniqueDef("uq_prospecting_runs_verification_job_id", ("verification_job_id",), partial=False),
+    ),
+    indexes=(
+        IndexDef("idx_prospecting_runs_owner_domain", ("owner_id", "domain",), partial=False),
+        IndexDef("idx_prospecting_runs_owner", ("owner_id", "created_at",), partial=False),
+    ),
+)
+
+TABLES["prospecting_saved_contacts"] = TableDef(
+    name="prospecting_saved_contacts",
+    columns=(
+        _c("owner_id", "text", False),
+        _c("email", "text", False),
+        _c("domain", "text", False),
+        _c("category", "text", False),
+        _c("pattern", "text", False),
+        _c("source", "text", False),
+        _c("run_id", "text", False),
+        _c("saved_at", "timestamptz", False),
+        _c("last_verified_at", "timestamptz", True),
+        _c("verification_method", "text", True),
+        _c("verification_detail", "text", True),
+        _c("confidence", "bigint", False, "0"),
+        _c("favorite", "bigint", False, "0"),
+        _c("tags_json", "jsonb", False, "'[]'::jsonb"),
+        _c("profile_name", "text", True),
+        _c("profile_title", "text", True),
+        _c("profile_department", "text", True),
+        _c("profile_linkedin_url", "text", True),
+    ),
+    primary_key=("owner_id", "email",),
+    indexes=(
+        IndexDef("idx_prospecting_saved_contacts_owner_domain", ("owner_id", "domain", "saved_at",), partial=False),
+        IndexDef("idx_prospecting_saved_contacts_owner", ("owner_id", "saved_at",), partial=False),
+    ),
+    foreign_keys=(
+        ForeignKeyDef(("run_id",), "prospecting_runs", ("id",), on_delete="CASCADE", on_update="NO ACTION"),
+    ),
+)
+
+TABLES["prospecting_verified_contacts"] = TableDef(
+    name="prospecting_verified_contacts",
+    columns=(
+        _c("email", "text", False),
+        _c("domain", "text", False),
+        _c("category", "text", False),
+        _c("pattern", "text", False),
+        _c("last_verified_at", "timestamptz", False),
+        _c("verification_method", "text", True),
+        _c("verification_detail", "text", True),
+        _c("confidence", "bigint", False),
+    ),
+    primary_key=("email",),
+    indexes=(
+        IndexDef("idx_prospecting_verified_contacts_domain", ("domain", "last_verified_at",), partial=False),
+    ),
+)
+
+TABLES["redemption_codes"] = TableDef(
+    name="redemption_codes",
+    columns=(
+        _c("id", "text", False),
+        _c("code_hash", "text", False),
+        _c("code_suffix", "text", False),
+        _c("amount_fen", "bigint", False),
+        _c("credits", "bigint", False),
+        _c("created_by_user_id", "text", False),
+        _c("created_at", "timestamptz", False),
+        _c("redeemed_by_user_id", "text", True),
+        _c("redeemed_at", "timestamptz", True),
+    ),
+    primary_key=("id",),
+    uniques=(
+        UniqueDef("uq_redemption_codes_code_hash", ("code_hash",), partial=False),
+    ),
+    indexes=(
+        IndexDef("idx_redemption_codes_redeemed", ("redeemed_by_user_id", "redeemed_at",), partial=False),
+    ),
+)
+
+TABLES["result_objects"] = TableDef(
+    name="result_objects",
+    columns=(
+        _c("id", "text", False),
+        _c("owner_id", "text", False),
+        _c("task_id", "text", False),
+        _c("result_index", "bigint", False),
+        _c("email", "text", False),
+        _c("status", "text", False),
+        _c("verification_method", "text", True),
+        _c("server_response", "text", True),
+        _c("confidence", "text", False, "'unknown'"),
+        _c("source", "text", False),
+        _c("created_at", "timestamptz", False),
+        _c("supersedes_result_id", "text", True),
+        _c("metadata_json", "jsonb", False, "'{}'::jsonb"),
+    ),
+    primary_key=("id",),
+    uniques=(
+        UniqueDef("uq_result_objects_owner_id_task_id_result_index", ("owner_id", "task_id", "result_index",), partial=False),
+    ),
+    indexes=(
+        IndexDef("idx_result_objects_email", ("owner_id", "email",), partial=False),
+        IndexDef("idx_result_objects_owner", ("owner_id", "created_at",), partial=False),
+    ),
+)
+
+TABLES["scheduler_domain_profiles"] = TableDef(
+    name="scheduler_domain_profiles",
+    columns=(
+        _c("scheduler_key", "text", False),
+        _c("current_limit", "bigint", False),
+        _c("success_streak", "bigint", False, "0"),
+        _c("successes", "bigint", False, "0"),
+        _c("pressure_events", "bigint", False, "0"),
+        _c("last_seen_at", "timestamptz", False),
+        _c("last_adjusted_at", "timestamptz", True),
+        _c("cooldown_until", "timestamptz", True),
+    ),
+    primary_key=("scheduler_key",),
+)
+
+TABLES["scheduler_domain_routes"] = TableDef(
+    name="scheduler_domain_routes",
+    columns=(
+        _c("domain", "text", False),
+        _c("scheduler_key", "text", False),
+        _c("updated_at", "timestamptz", False),
+    ),
+    primary_key=("domain",),
+)
+
+TABLES["scheduler_owner_turns"] = TableDef(
+    name="scheduler_owner_turns",
+    columns=(
+        _c("target", "text", False),
+        _c("owner_key", "text", False),
+        _c("last_claimed_at", "timestamptz", False),
+    ),
+    primary_key=("target", "owner_key",),
+)
+
+TABLES["schema_migrations"] = TableDef(
+    name="schema_migrations",
+    columns=(
+        _c("name", "text", False),
+        _c("applied_at", "timestamptz", False),
+    ),
+    primary_key=("name",),
+)
+
+TABLES["service_state"] = TableDef(
+    name="service_state",
+    columns=(
+        _c("name", "text", False),
+        _c("value", "text", False),
+        _c("updated_at", "timestamptz", False),
+    ),
+    primary_key=("name",),
+)
+
+TABLES["sessions"] = TableDef(
+    name="sessions",
+    columns=(
+        _c("token_hash", "text", False),
+        _c("user_id", "text", False),
+        _c("created_at", "timestamptz", False),
+        _c("expires_at", "timestamptz", False),
+    ),
+    primary_key=("token_hash",),
+    indexes=(
+        IndexDef("sessions_user_id", ("user_id",), partial=False),
+    ),
+    foreign_keys=(
+        ForeignKeyDef(("user_id",), "users", ("id",), on_delete="CASCADE", on_update="NO ACTION"),
+    ),
+)
+
+TABLES["tavily_enrichment_usage"] = TableDef(
+    name="tavily_enrichment_usage",
+    columns=(
+        _c("usage_day", "text", False),
+        _c("request_count", "bigint", False, "0"),
+    ),
+    primary_key=("usage_day",),
+)
+
+TABLES["traffic_sessions"] = TableDef(
+    name="traffic_sessions",
+    columns=(
+        _c("session_id", "text", False),
+        _c("day", "text", False),
+        _c("first_seen", "timestamptz", False),
+        _c("last_seen", "timestamptz", False),
+        _c("page_views", "bigint", False, "0"),
+        _c("suspected_bot", "boolean", False, "false"),
+        _c("engaged_at", "timestamptz", True),
+        _c("engagement_seconds", "bigint", False, "0"),
+        _c("free_submissions", "bigint", False, "0"),
+        _c("batch_submissions", "bigint", False, "0"),
+    ),
+    primary_key=("session_id",),
+    indexes=(
+        IndexDef("idx_traffic_sessions_day", ("day",), partial=False),
+    ),
+)
+
+TABLES["trial_network_grants"] = TableDef(
+    name="trial_network_grants",
+    columns=(
+        _c("user_id", "text", False),
+        _c("network_hash", "text", False),
+        _c("created_at", "timestamptz", False),
+    ),
+    primary_key=("user_id",),
+    indexes=(
+        IndexDef("idx_trial_network_grants", ("network_hash", "created_at",), partial=False),
+    ),
+    foreign_keys=(
+        ForeignKeyDef(("user_id",), "users", ("id",), on_delete="CASCADE", on_update="NO ACTION"),
+    ),
+)
+
+TABLES["users"] = TableDef(
+    name="users",
+    columns=(
+        _c("id", "text", False),
+        _c("username", "text", False),
+        _c("password_hash", "text", False),
+        _c("created_at", "timestamptz", False),
+        _c("email", "text", True),
+        _c("email_verified", "boolean", False, "false"),
+        _c("credits", "bigint", False, "0"),
+        _c("activation_job_id", "text", True),
+        _c("activation_completed_at", "timestamptz", True),
+        _c("onboarding_required", "boolean", False, "false"),
+    ),
+    primary_key=("id",),
+    uniques=(
+        UniqueDef("idx_users_email", ("email",), partial=True),
+        UniqueDef("uq_users_username", ("username",), partial=False),
+    ),
+)
+
+TABLES["verification_cache"] = TableDef(
+    name="verification_cache",
+    columns=(
+        _c("email", "text", False),
+        _c("result_json", "jsonb", False),
+        _c("expires_at", "timestamptz", False),
+        _c("updated_at", "timestamptz", False),
+    ),
+    primary_key=("email",),
+)
+
+TABLES["verified_emails"] = TableDef(
+    name="verified_emails",
+    columns=(
+        _c("email", "text", False),
+        _c("first_confirmed_at", "timestamptz", False),
+        _c("last_confirmed_at", "timestamptz", False),
+        _c("result_json", "jsonb", False),
+    ),
+    primary_key=("email",),
+)
+
+TABLES["worker_heartbeats"] = TableDef(
+    name="worker_heartbeats",
+    columns=(
+        _c("target", "text", False),
+        _c("worker_id", "text", False),
+        _c("last_seen_at", "timestamptz", False),
+    ),
+    primary_key=("target", "worker_id",),
+)
+
+TABLES["worker_nodes"] = TableDef(
+    name="worker_nodes",
+    columns=(
+        _c("target", "text", False),
+        _c("worker_id", "text", False),
+        _c("capacity", "bigint", False, "1"),
+        _c("health", "text", False, "'healthy'"),
+        _c("last_seen_at", "timestamptz", False),
+    ),
+    primary_key=("target", "worker_id",),
+)
+
+TABLES["worker_runtime"] = TableDef(
+    name="worker_runtime",
+    columns=(
+        _c("target", "text", False),
+        _c("worker_id", "text", True),
+        _c("last_seen_at", "timestamptz", True),
+        _c("wake_requested_at", "timestamptz", True),
+        _c("wake_deadline_at", "timestamptz", True),
+        _c("wake_attempts", "bigint", False, "0"),
+        _c("last_wake_error", "text", True),
+        _c("idle_since", "timestamptz", True),
+        _c("stop_requested_at", "timestamptz", True),
+        _c("last_stop_error", "text", True),
+    ),
+    primary_key=("target",),
+)
+
+
+CORE_JOBSTORE_TABLES: tuple[str, ...] = (
+    "jobs",
+    "job_results",
+    "job_result_links",
+    "job_leases",
+    "result_objects",
+    "lists",
+    "list_items",
+    "service_state",
+    "schema_migrations",
+    "worker_nodes",
+    "worker_runtime",
+    "worker_heartbeats",
+    "mx_scheduler_leases",
+    "mx_scheduler_slot_leases",
+    "scheduler_owner_turns",
+    "scheduler_domain_profiles",
+    "scheduler_domain_routes",
+    "verification_cache",
+    "verified_emails",
+    "catch_all_emails",
+    "cloudshell_account_usage",
+    "cloudshell_claim_reservations",
+)
+
+AUTH_TABLES: tuple[str, ...] = (
+    "users",
+    "sessions",
+    "api_keys",
+    "email_verifications",
+    "email_bindings",
+    "password_resets",
+    "credit_ledger",
+    "credit_debits",
+    "credit_debit_grants",
+    "payment_orders",
+    "redemption_codes",
+    "promo_credit_grants",
+    "admin_credit_grants",
+    "admin_credit_adjustments",
+    "free_usage",
+    "auth_rate_limit_events",
+    "trial_network_grants",
+    "notifications",
+)
+
+METRICS_TABLES: tuple[str, ...] = (
+    "page_view_days",
+    "traffic_sessions",
+    "anonymous_free_usage",
+    "daily_visitors",
+)
+
+PROSPECTING_TABLES: tuple[str, ...] = (
+    "prospecting_runs",
+    "prospecting_candidates",
+    "prospecting_candidate_claims",
+    "prospecting_domain_profiles",
+    "prospecting_owner_domain_profiles",
+    "prospecting_saved_contacts",
+    "prospecting_contact_events",
+    "prospecting_verified_contacts",
+    "prospecting_companies",
+    "prospecting_control_samples",
+    "prospecting_domain_protection",
+    "prospecting_protection_events",
+)
+
+DOMAIN_PREVIEW_TABLES: tuple[str, ...] = (
+    "domain_relation_cache",
+    "domain_suggestion_index",
+)
+
+MISC_TABLES: tuple[str, ...] = (
+    "tavily_enrichment_usage",
+)
+
+
+def all_registered_tables() -> tuple[str, ...]:
+    return tuple(sorted(TABLES.keys()))
+
+
+def require_registered(table: str) -> TableDef:
+    try:
+        return TABLES[table]
+    except KeyError as exc:
+        raise KeyError(f"table {table!r} is not registered in postgres_schema") from exc
+
+
+def create_table_sql(table: TableDef) -> str:
+    """Render CREATE TABLE DDL for an empty PostgreSQL schema."""
+    col_sql = []
+    for col in table.columns:
+        piece = f'"{col.name}" {col.type}'
+        if not col.nullable:
+            piece += " NOT NULL"
+        if col.default is not None:
+            piece += f" DEFAULT {col.default}"
+        col_sql.append(piece)
+    if table.primary_key:
+        pk = ", ".join(f'"{c}"' for c in table.primary_key)
+        col_sql.append(f"PRIMARY KEY ({pk})")
+    for uq in table.uniques:
+        # Partial unique indexes are emitted as CREATE UNIQUE INDEX.
+        if uq.partial:
+            continue
+        cols = ", ".join(f'"{c}"' for c in uq.columns)
+        col_sql.append(f'CONSTRAINT "{uq.name}" UNIQUE ({cols})')
+    for fk in table.foreign_keys:
+        cols = ", ".join(f'"{c}"' for c in fk.columns)
+        rcols = ", ".join(f'"{c}"' for c in fk.ref_columns)
+        col_sql.append(
+            f'FOREIGN KEY ({cols}) REFERENCES "{fk.ref_table}" ({rcols}) '
+            f"ON DELETE {fk.on_delete} ON UPDATE {fk.on_update}"
+        )
+    body = ",\n  ".join(col_sql)
+    return f'CREATE TABLE IF NOT EXISTS "{table.name}" (\n  {body}\n)'
+
+
+def create_indexes_sql(table: TableDef) -> list[str]:
+    stmts: list[str] = []
+    for uq in table.uniques:
+        if not uq.partial:
+            continue
+        cols = ", ".join(f'"{c}"' for c in uq.columns)
+        # Users email unique-where-not-null is the main partial case.
+        where = ""
+        if table.name == "users" and uq.columns == ("email",):
+            where = " WHERE email IS NOT NULL"
+        stmts.append(f'CREATE UNIQUE INDEX IF NOT EXISTS "{uq.name}" ON "{table.name}" ({cols}){where}')
+    for ix in table.indexes:
+        cols = ", ".join(f'"{c}"' for c in ix.columns)
+        stmts.append(f'CREATE INDEX IF NOT EXISTS "{ix.name}" ON "{table.name}" ({cols})')
+    return stmts
+
+
+def render_full_schema_sql() -> str:
+    """Order tables so FK parents are created first (best-effort)."""
+    remaining = set(TABLES)
+    ordered: list[str] = []
+    while remaining:
+        progress = False
+        for name in sorted(remaining):
+            deps = {fk.ref_table for fk in TABLES[name].foreign_keys if fk.ref_table in TABLES}
+            if deps.issubset(set(ordered)):
+                ordered.append(name)
+                remaining.remove(name)
+                progress = True
+        if not progress:
+            # cyclic / self-ref leftover
+            ordered.extend(sorted(remaining))
+            break
+    parts: list[str] = []
+    for name in ordered:
+        t = TABLES[name]
+        parts.append(create_table_sql(t) + ";")
+        parts.extend(s + ";" for s in create_indexes_sql(t))
+    return "\n\n".join(parts)
+
+
+def schema_summary() -> dict[str, Any]:
+    return {
+        "table_count": len(TABLES),
+        "tables": all_registered_tables(),
+        "groups": {
+            "jobstore": CORE_JOBSTORE_TABLES,
+            "auth": AUTH_TABLES,
+            "metrics": METRICS_TABLES,
+            "prospecting": PROSPECTING_TABLES,
+            "domain_preview": DOMAIN_PREVIEW_TABLES,
+            "misc": MISC_TABLES,
+        },
+    }
+
