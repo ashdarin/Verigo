@@ -30,6 +30,21 @@ def _day(now: datetime | None = None) -> str:
     return (now or _now()).date().isoformat()
 
 
+def _ts_expired(value: Any, now: datetime) -> bool:
+    """True if a timestamptz/ISO cooldown is missing or already in the past."""
+    if value is None or value == "":
+        return True
+    if isinstance(value, datetime):
+        return value <= now
+    try:
+        text = str(value).replace("Z", "+00:00")
+        if "T" not in text and " " in text:
+            text = text.replace(" ", "T", 1)
+        return datetime.fromisoformat(text) <= now
+    except (TypeError, ValueError):
+        return True
+
+
 class CloudShellCoordinator:
     """Coordinate Cloud Shell claims without storing credentials or tokens."""
 
@@ -241,14 +256,14 @@ class CloudShellCoordinator:
                 desired = min(settings.cloudshell_active_max_accounts, desired)
                 rows = db.execute(
                     """SELECT worker_id, enabled, claimed_units, claimed_tasks,
-                              COALESCE(cooldown_until, ''), soft_quota_units, active
+                              cooldown_until, soft_quota_units, active
                        FROM cloudshell_account_usage WHERE usage_date=?""",
                     (today,),
                 ).fetchall()
                 eligible = [
                     row for row in rows
-                    if int(row[1])
-                    and (not row[4] or row[4] <= now.isoformat())
+                    if bool(row[1])
+                    and _ts_expired(row[4], now)
                     and (not int(row[5]) or int(row[2]) < int(row[5]))
                 ]
                 # If every account reached its configured soft budget, keep
@@ -256,7 +271,7 @@ class CloudShellCoordinator:
                 if not eligible:
                     eligible = [
                         row for row in rows
-                        if int(row[1]) and (not row[4] or row[4] <= now.isoformat())
+                        if bool(row[1]) and _ts_expired(row[4], now)
                     ]
                 # Prefer accounts that already have a fresh worker heartbeat.
                 # Otherwise a previously active but now-offline account can keep
@@ -303,22 +318,19 @@ class CloudShellCoordinator:
         today = _day()
         with closing(self._connect()) as db:
             row = db.execute(
-                """SELECT active, enabled, COALESCE(cooldown_until, ''), claimed_units,
+                """SELECT active, enabled, cooldown_until, claimed_units,
                           soft_quota_units
                    FROM cloudshell_account_usage WHERE usage_date=? AND account_id=?""",
                 (today, account_id),
             ).fetchone()
         if not row:
             return False
-        return bool(
-            int(row[0]) and int(row[1])
-            and (not row[2] or row[2] <= _now().isoformat())
-        )
+        return bool(row[0]) and bool(row[1]) and _ts_expired(row[2], _now())
 
     def worker_is_healthy(self, worker_id: str) -> bool:
         """Return whether one account already has a live polling process."""
         self.initialize()
-        cutoff = (_now() - timedelta(seconds=settings.node_stale_seconds)).isoformat()
+        cutoff = _now() - timedelta(seconds=settings.node_stale_seconds)
         with closing(self._connect()) as db:
             row = db.execute(
                 """SELECT 1 FROM worker_nodes
@@ -352,14 +364,14 @@ class CloudShellCoordinator:
                 ((now - timedelta(minutes=10)).isoformat(),),
             )
             worker = db.execute(
-                """SELECT enabled, COALESCE(cooldown_until, ''), claimed_units
+                """SELECT enabled, cooldown_until, claimed_units
                    FROM cloudshell_account_usage WHERE worker_id=? AND usage_date=?""",
                 (worker_id, today),
             ).fetchone()
-            if not worker or not int(worker[0]):
+            if not worker or not bool(worker[0]):
                 db.commit()
                 return None
-            if worker[1] and worker[1] > now.isoformat():
+            if not _ts_expired(worker[1], now):
                 db.commit()
                 return None
             online_rows = db.execute(
@@ -488,7 +500,7 @@ class CloudShellCoordinator:
         for row in rows:
             account_id, worker_id = str(row[0]), str(row[1])
             cooldown_until = row[8]
-            cooling = bool(cooldown_until and str(cooldown_until) > now.isoformat())
+            cooling = bool(cooldown_until) and not _ts_expired(cooldown_until, now)
             health_rows = node_map.get(worker_id, [])
             health = "healthy" if any(
                 value[0] == "healthy" and value[1] >= stale_before for value in health_rows

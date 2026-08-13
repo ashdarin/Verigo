@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.config import settings
-from app.db.pg_compat import PgConnection, as_iso, as_json, postgres_active
+from app.db.pg_compat import IntegrityError, PgConnection, as_iso, as_json, postgres_active
 from app.db.sqlite import connect as connect_sqlite
 
 
@@ -93,19 +93,25 @@ class ResultObjectStore:
                 "SELECT id FROM result_objects WHERE owner_id=? AND lower(email)=lower(?) ORDER BY created_at DESC LIMIT 1",
                 (owner_id, email),
             ).fetchone()
-            connection.execute(
-                """INSERT INTO result_objects(
-                    id,owner_id,task_id,result_index,email,status,verification_method,
-                    server_response,confidence,source,created_at,supersedes_result_id,metadata_json
-                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                (result_id, owner_id, task_id, result_index, email, self._status(result),
-                 result.get("verification_method") or result.get("strategy"),
-                 result.get("smtp_result") or result.get("message"),
-                 result.get("confidence") or "unknown", source, created_at,
-                result.get("supersedes_result_id") or (previous["id"] if previous else None),
-                json.dumps({k: result[k] for k in ("domain_type", "original_index", "first_name", "last_name", "domain") if k in result}, ensure_ascii=False)),
-            )
-            row = connection.execute("SELECT * FROM result_objects WHERE id=?", (result_id,)).fetchone()
+            try:
+                connection.execute(
+                    """INSERT INTO result_objects(
+                        id,owner_id,task_id,result_index,email,status,verification_method,
+                        server_response,confidence,source,created_at,supersedes_result_id,metadata_json
+                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (result_id, owner_id, task_id, result_index, email, self._status(result),
+                     result.get("verification_method") or result.get("strategy"),
+                     result.get("smtp_result") or result.get("message"),
+                     result.get("confidence") or "unknown", source, created_at,
+                    result.get("supersedes_result_id") or (previous["id"] if previous else None),
+                    json.dumps({k: result[k] for k in ("domain_type", "original_index", "first_name", "last_name", "domain") if k in result}, ensure_ascii=False)),
+                )
+                row = connection.execute("SELECT * FROM result_objects WHERE id=?", (result_id,)).fetchone()
+            except IntegrityError:
+                row = connection.execute(
+                    "SELECT * FROM result_objects WHERE owner_id=? AND task_id=? AND result_index=?",
+                    (owner_id, task_id, result_index),
+                ).fetchone()
             return self._row(row)
 
     @staticmethod
