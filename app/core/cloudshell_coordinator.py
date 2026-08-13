@@ -65,14 +65,18 @@ class CloudShellCoordinator:
         return connect_app()
 
     @staticmethod
-    def _begin_write(db: Any) -> None:
-        """Serialize rotation writes across API processes on PostgreSQL."""
+    def _begin_write(db: Any) -> bool:
+        """Begin a serialized coordinator write without blocking worker claims."""
         begin_immediate(db)
         if postgres_active():
             # The in-process lock is insufficient when worker-api is scaled.
-            # A transaction advisory lock keeps pool refreshes and reservations
-            # in one ordering, eliminating the observed row-update deadlocks.
-            db.execute("SELECT pg_advisory_xact_lock(?)", (613942781,))
+            # Do not wait for another request's transaction, though: the remote
+            # worker uses short polling and can retry its claim shortly.
+            return bool(
+                db.execute("SELECT pg_try_advisory_xact_lock(?)", (613942781,))
+                .fetchone()[0]
+            )
+        return True
 
     @property
     def enabled(self) -> bool:
@@ -166,7 +170,9 @@ class CloudShellCoordinator:
         records = builtins + [dict(item) for item in accounts]
         today = _day()
         with self._lock, closing(self._connect()) as db:
-            self._begin_write(db)
+            if not self._begin_write(db):
+                db.rollback()
+                return
             for item in records:
                 worker_id = str(item.get("worker_id") or "").strip()
                 if not worker_id:
@@ -257,7 +263,9 @@ class CloudShellCoordinator:
             today = _day()
             now = _now()
             with closing(self._connect()) as db:
-                self._begin_write(db)
+                if not self._begin_write(db):
+                    db.rollback()
+                    return
                 queue_depth = int(db.execute(
                     """SELECT COUNT(*) FROM jobs
                        WHERE execution_target='gmail' AND status IN ('queued', 'running')
@@ -370,7 +378,9 @@ class CloudShellCoordinator:
         today = _day()
         reserved_units = max(1, int(reserved_units))
         with self._lock, closing(self._connect()) as db:
-            self._begin_write(db)
+            if not self._begin_write(db):
+                db.rollback()
+                return None
             worker_id = self._canonical_worker_id(db, worker_id, today)
             self._ensure_worker(db, worker_id, today)
             now = _now()
@@ -430,7 +440,9 @@ class CloudShellCoordinator:
         self.initialize()
         now = _now()
         with self._lock, closing(self._connect()) as db:
-            self._begin_write(db)
+            if not self._begin_write(db):
+                db.rollback()
+                return False
             row = db.execute(
                 "SELECT worker_id, usage_date FROM cloudshell_claim_reservations WHERE token=?",
                 (token,),
@@ -466,7 +478,9 @@ class CloudShellCoordinator:
         now = _now()
         cooldown = now + timedelta(seconds=settings.cloudshell_quota_cooldown_seconds)
         with self._lock, closing(self._connect()) as db:
-            self._begin_write(db)
+            if not self._begin_write(db):
+                db.rollback()
+                return
             today = _day(now)
             worker_id = self._canonical_worker_id(db, worker_id, today)
             self._ensure_worker(db, worker_id, today)
