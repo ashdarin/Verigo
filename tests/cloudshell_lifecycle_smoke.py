@@ -4,6 +4,7 @@ from pathlib import Path
 import json
 import tempfile
 import sys
+import subprocess
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -80,8 +81,12 @@ def fake_run(command: list[str], **kwargs: object) -> SimpleNamespace:
 
 
 with patch.object(bootstrap, "_token", return_value="token"), patch.object(
-    bootstrap, "_start_environment", return_value={"sshHost": "host", "sshPort": 2222}
-), patch.object(bootstrap, "_add_public_key"), patch(
+    bootstrap, "_public_key", return_value="ssh-rsa key"
+), patch.object(
+    bootstrap,
+    "_start_environment",
+    return_value={"state": "RUNNING", "sshHost": "host", "sshPort": 2222, "sshUsername": "user"},
+), patch(
     "app.core.cloudshell_lifecycle.subprocess.run", side_effect=fake_run
 ), patch("app.core.cloudshell_lifecycle.Path.read_text", return_value="release-123\n"):
     bootstrap._start()
@@ -97,6 +102,36 @@ assert "VERIGO_TENCENT_QQ_WORKER_ID=cloudshell-test-2" in uploaded_environments[
 assert all("VERIGO_REMOTE_WORKER_CAPACITY=1" in value for value in uploaded_environments)
 assert any(".gmail-worker-1.pid" in part for command, _ in bootstrap_calls for part in command)
 assert any(".gmail-worker-2.pid" in part for command, _ in bootstrap_calls for part in command)
+
+timeout_bootstrap = CloudShellLifecycle(worker_id="cloudshell-timeout")
+assert timeout_bootstrap._lock.acquire(blocking=False)
+probe_calls = [0]
+
+
+def timeout_then_succeed(command: list[str], **kwargs: object) -> SimpleNamespace:
+    if command[0] == "tar":
+        return SimpleNamespace(returncode=0, stdout=b"archive", stderr=b"")
+    if command[-1] == "true":
+        probe_calls[0] += 1
+        if probe_calls[0] == 1:
+            raise subprocess.TimeoutExpired(command, 15)
+    return SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
+
+
+with patch.object(timeout_bootstrap, "_token", return_value="token"), patch.object(
+    timeout_bootstrap, "_public_key", return_value="ssh-rsa key"
+), patch.object(
+    timeout_bootstrap,
+    "_start_environment",
+    return_value={"state": "RUNNING", "sshHost": "host", "sshPort": 2222, "sshUsername": "user"},
+), patch(
+    "app.core.cloudshell_lifecycle.subprocess.run", side_effect=timeout_then_succeed
+), patch("app.core.cloudshell_lifecycle.Path.read_text", return_value="release-123\n"), patch(
+    "app.core.cloudshell_lifecycle.time.sleep"
+):
+    timeout_bootstrap._start()
+assert probe_calls[0] == 2
+assert not timeout_bootstrap._lock.locked()
 
 environment = CloudShellLifecycle._operation_environment({
     "done": True,

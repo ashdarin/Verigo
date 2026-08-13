@@ -201,29 +201,19 @@ class CloudShellLifecycle:
         environment = response.get("environment")
         return environment if isinstance(environment, dict) else None
 
-    def _start_environment(self, token: str) -> dict[str, object]:
-        user = urllib.parse.quote(self._user, safe="")
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-            "X-Goog-User-Project": self._quota_project,
-        }
-        request = urllib.request.Request(
-            f"https://cloudshell.googleapis.com/v1/users/{user}/environments/default:start",
-            data=json.dumps({"accessToken": token}).encode(),
-            headers=headers,
-            method="POST",
-        )
-        with urllib.request.urlopen(request, timeout=60) as response:
-            operation = json.load(response)
-
+    def _wait_operation(
+        self, operation: dict[str, object], headers: dict[str, str], *, label: str
+    ) -> dict[str, object]:
+        """Wait for a Cloud Shell long-running operation to finish."""
         for _ in range(30):
-            environment = self._operation_environment(operation)
-            if environment is not None:
-                return environment
+            error = operation.get("error")
+            if isinstance(error, dict):
+                raise RuntimeError(str(error.get("message") or f"Cloud Shell {label} failed"))
+            if operation.get("done"):
+                return operation
             operation_name = str(operation.get("name") or "")
             if not operation_name:
-                raise RuntimeError("Cloud Shell start returned no operation name")
+                raise RuntimeError(f"Cloud Shell {label} returned no operation name")
             time.sleep(2)
             poll = urllib.request.Request(
                 f"https://cloudshell.googleapis.com/v1/{operation_name}",
@@ -232,7 +222,36 @@ class CloudShellLifecycle:
             )
             with urllib.request.urlopen(poll, timeout=30) as response:
                 operation = json.load(response)
-        raise RuntimeError("Cloud Shell environment start timed out")
+        raise RuntimeError(f"Cloud Shell {label} timed out")
+
+    def _start_environment(
+        self, token: str, public_key: str | None = None
+    ) -> dict[str, object]:
+        user = urllib.parse.quote(self._user, safe="")
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+            "X-Goog-User-Project": self._quota_project,
+        }
+        payload: dict[str, object] = {"accessToken": token}
+        if public_key:
+            # StartEnvironmentRequest accepts publicKeys. Supplying it here
+            # avoids racing SSH against a separate addPublicKey operation.
+            payload["publicKeys"] = [public_key]
+        request = urllib.request.Request(
+            f"https://cloudshell.googleapis.com/v1/users/{user}/environments/default:start",
+            data=json.dumps(payload).encode(),
+            headers=headers,
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=60) as response:
+            operation = json.load(response)
+        environment = self._operation_environment(
+            self._wait_operation(operation, headers, label="environment start")
+        )
+        if environment is None:
+            raise RuntimeError("Cloud Shell start completed without an environment")
+        return environment
 
     @staticmethod
     def _cloudshell_public_key(value: str) -> str:
@@ -247,16 +266,28 @@ class CloudShellLifecycle:
             raise RuntimeError("Cloud Shell public key must use RSA or ECDSA")
         return " ".join(parts[:2])
 
-    def _add_public_key(self, token: str) -> None:
+    def _public_key(self) -> str | None:
         if not self._register_ssh_public_key:
-            return
+            return None
         public_key = subprocess.run(
             ["ssh-keygen", "-y", "-f", str(self._ssh_key_path)],
             check=True,
             capture_output=True,
             text=True,
         ).stdout
-        data = json.dumps({"key": self._cloudshell_public_key(public_key)}).encode()
+        return self._cloudshell_public_key(public_key)
+
+    def _add_public_key(self, token: str) -> None:
+        """Compatibility path for an already-running environment.
+
+        Normal bootstraps attach the key through ``StartEnvironmentRequest``.
+        Keep this method for explicit callers, but wait for the API operation
+        before allowing an SSH connection attempt.
+        """
+        public_key = self._public_key()
+        if not public_key:
+            return
+        data = json.dumps({"key": public_key}).encode()
         user = urllib.parse.quote(self._user, safe="")
         request = urllib.request.Request(
             f"https://cloudshell.googleapis.com/v1/users/{user}/environments/default:addPublicKey",
@@ -268,9 +299,16 @@ class CloudShellLifecycle:
             },
             method="POST",
         )
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+            "X-Goog-User-Project": self._quota_project,
+        }
+        request.headers.update(headers)
         try:
-            with urllib.request.urlopen(request, timeout=30):
-                pass
+            with urllib.request.urlopen(request, timeout=30) as response:
+                operation = json.load(response)
+            self._wait_operation(operation, headers, label="public key registration")
         except urllib.error.HTTPError as exc:
             if exc.code != 409:
                 raise
@@ -332,22 +370,31 @@ class CloudShellLifecycle:
     def _start(self) -> None:
         try:
             token = self._token()
-            environment = self._start_environment(token)
-            self._add_public_key(token)
-            host, port = environment["sshHost"], str(environment["sshPort"])
-            ssh_user = self._user.split("@", 1)[0]
+            environment = self._start_environment(token, self._public_key())
+            if environment.get("state") != "RUNNING":
+                raise RuntimeError(
+                    f"Cloud Shell environment is not ready: {environment.get('state')!r}"
+                )
+            host = str(environment.get("sshHost") or "").strip()
+            port = str(environment.get("sshPort") or "").strip()
+            ssh_user = str(environment.get("sshUsername") or "").strip()
+            if not host or not port or not ssh_user:
+                raise RuntimeError("Cloud Shell environment omitted SSH connection details")
             remote = f"{ssh_user}@{host}"
             base = ["ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new", "-o", f"UserKnownHostsFile={self._ssh_known_hosts_path}", "-i", str(self._ssh_key_path), "-p", port, remote]
             # The Cloud Shell start operation can finish before its SSH tunnel
             # accepts connections. Wait for the actual worker transport instead
             # of treating the first refused connection as a node failure.
             for attempt in range(18):
-                probe = subprocess.run(
-                    base + ["true"], check=False, capture_output=True, timeout=15
-                )
-                if probe.returncode == 0:
-                    break
-                detail = probe.stderr.decode(errors="replace")
+                try:
+                    probe = subprocess.run(
+                        base + ["true"], check=False, capture_output=True, timeout=15
+                    )
+                    if probe.returncode == 0:
+                        break
+                    detail = probe.stderr.decode(errors="replace")
+                except subprocess.TimeoutExpired:
+                    detail = "Cloud Shell SSH connection probe timed out"
                 if "REMOTE HOST IDENTIFICATION HAS CHANGED" in detail:
                     self._refresh_host_key(host, port)
                     continue
@@ -409,7 +456,8 @@ class CloudShellLifecycle:
                 "Gmail 验证节点启动失败，正在重试",
             )
         finally:
-            self._lock.release()
+            if self._lock.locked():
+                self._lock.release()
 
 
 def _load_cloudshell_account_specs(path: Path) -> list[dict[str, Any]]:
@@ -458,7 +506,7 @@ def _load_cloudshell_account_specs(path: Path) -> list[dict[str, Any]]:
     return specs
 
 
-cloudshell_lifecycle = CloudShellLifecycle()
+cloudshell_lifecycle = CloudShellLifecycle(register_ssh_public_key=True)
 cloudshell_secondary_lifecycle = CloudShellLifecycle(
     enabled=settings.google_cloudshell_secondary_enabled,
     user=settings.google_cloudshell_secondary_user,
