@@ -289,22 +289,17 @@ class CloudShellLifecycle:
             return
         data = json.dumps({"key": public_key}).encode()
         user = urllib.parse.quote(self._user, safe="")
-        request = urllib.request.Request(
-            f"https://cloudshell.googleapis.com/v1/users/{user}/environments/default:addPublicKey",
-            data=data,
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json",
-                "X-Goog-User-Project": self._quota_project,
-            },
-            method="POST",
-        )
         headers = {
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
             "X-Goog-User-Project": self._quota_project,
         }
-        request.headers.update(headers)
+        request = urllib.request.Request(
+            f"https://cloudshell.googleapis.com/v1/users/{user}/environments/default:addPublicKey",
+            data=data,
+            headers=headers,
+            method="POST",
+        )
         try:
             with urllib.request.urlopen(request, timeout=30) as response:
                 operation = json.load(response)

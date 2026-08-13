@@ -102,6 +102,7 @@ assert "VERIGO_TENCENT_QQ_WORKER_ID=cloudshell-test-2" in uploaded_environments[
 assert all("VERIGO_REMOTE_WORKER_CAPACITY=1" in value for value in uploaded_environments)
 assert any(".gmail-worker-1.pid" in part for command, _ in bootstrap_calls for part in command)
 assert any(".gmail-worker-2.pid" in part for command, _ in bootstrap_calls for part in command)
+assert any(command[-2] == "user@host" for command, _ in bootstrap_calls if command[0] == "ssh")
 
 timeout_bootstrap = CloudShellLifecycle(worker_id="cloudshell-timeout")
 assert timeout_bootstrap._lock.acquire(blocking=False)
@@ -145,5 +146,46 @@ except RuntimeError as exc:
     assert str(exc) == "denied"
 else:
     raise AssertionError("Cloud Shell operation errors must be surfaced")
+
+
+class _Response:
+    def __init__(self, payload: dict[str, object]) -> None:
+        self._payload = payload
+
+    def __enter__(self) -> "_Response":
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        return None
+
+    def read(self, *_: object) -> bytes:
+        return json.dumps(self._payload).encode()
+
+
+requests: list[object] = []
+
+
+def fake_urlopen(request: object, **_: object) -> _Response:
+    requests.append(request)
+    if len(requests) == 1:
+        return _Response({"name": "operations/start", "done": False})
+    return _Response({
+        "name": "operations/start", "done": True,
+        "response": {"environment": {
+            "state": "RUNNING", "sshHost": "host", "sshPort": 2222, "sshUsername": "api-user",
+        }},
+    })
+
+
+with patch("app.core.cloudshell_lifecycle.urllib.request.urlopen", side_effect=fake_urlopen), patch(
+    "app.core.cloudshell_lifecycle.time.sleep"
+):
+    started = CloudShellLifecycle(user="user@example.invalid", quota_project="project")._start_environment(
+        "token", "ssh-rsa payload"
+    )
+
+assert started["sshUsername"] == "api-user"
+assert json.loads(requests[0].data.decode())["publicKeys"] == ["ssh-rsa payload"]
+assert requests[1].full_url.endswith("/v1/operations/start")
 
 print("cloudshell lifecycle smoke: ok")
