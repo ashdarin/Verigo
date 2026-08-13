@@ -303,12 +303,6 @@ systemctl enable --now verigo-backup.timer verigo-monitor.timer verigo-retention
 # Keep release backup independent from a remote provider's latency.
 systemctl start --no-block verigo-backup.service
 
-set -a
-. /etc/verigo/verigo.env
-set +a
-PYTHONPATH="$release_path" runuser -u verigo --preserve-environment -- \
-    "$state_dir/.venv/bin/python" -m app.maintenance migrate-results
-
 activate_release "$release_path"
 systemctl restart verigo
 # Uvicorn may need over 20 seconds to initialize two workers after a cold

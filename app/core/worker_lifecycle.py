@@ -394,9 +394,10 @@ class WorkerLifecycleCoordinator:
                         # failing SSH key exchange in that interval.
                         if retry_at and now < retry_at:
                             return
-                        self._activate_workspace_session(
-                            runtime, now, force=True
-                        )
+                        # A running workspace may still need the IDE loader, but
+                        # activation is an expensive Playwright operation. Respect
+                        # the retry window instead of launching it every poll.
+                        self._activate_workspace_session(runtime, now, force=False)
                         return
                     bootstrapped = self._bootstrap_worker(runtime, now)
                     if not bootstrapped:
