@@ -55,7 +55,7 @@ elif [[ -n "$asset_marker" ]] && ! grep -Fq "$asset_marker" <<<"$verify_page"; t
 fi
 
 auth_status=$(curl -sS --max-time 12 -o /dev/null -w '%{http_code}' "${public_base_url}/api/auth/me" || true)
-if [[ "$auth_status" != "401" ]]; then
+if [[ "$auth_status" != "200" ]]; then
     issues+=("anonymous session endpoint returned HTTP ${auth_status:-000}")
 fi
 result_status=$(curl -sS --max-time 12 -o /dev/null -w '%{http_code}' \
