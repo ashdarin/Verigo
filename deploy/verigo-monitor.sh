@@ -113,14 +113,18 @@ fi
 
 if [[ ! -r "$database_env_file" ]]; then
     issues+=("database environment file is unavailable")
-elif ! set -a; source "$database_env_file"; set +a; PYTHONPATH=/opt/verigo/current /opt/verigo/.venv/bin/python - <<'PY'
+elif ! (
+    set -a
+    source "$database_env_file"
+    set +a
+    PYTHONPATH=/opt/verigo/current /opt/verigo/.venv/bin/python - <<'PY'
 from app.db.backend_ops import database_write_probe, postgres_enabled
 
 ok = database_write_probe()
 print("backend=postgres" if postgres_enabled() else "backend=sqlite")
 raise SystemExit(0 if ok else 1)
 PY
-then
+); then
     issues+=("database is not writable")
 fi
 
