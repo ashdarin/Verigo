@@ -30,7 +30,9 @@ class FakeConnection:
             ("2026-08-10", "gmail", 100, 8, 80),
             ("2026-08-11", "gmail", 100, 9, 110),
             ("2026-08-12", "gmail", 100, 11, 90),
-            ("2026-08-13", "gmail", 49, 49, 999),
+            ("2026-08-13", "gmail", 100, 10, 100),
+            ("2026-08-14", "gmail", 100, 10, 100),
+            ("2026-08-13", "microsoft", 49, 49, 999),
             ("2026-08-14", "qq", 80, 4, 60),
         ]
 
@@ -48,12 +50,13 @@ def main() -> int:
     gmail = providers["gmail"]
     assert baseline["window_days"] == 7
     assert baseline["minimum_daily_sample"] == 50
-    assert gmail["usable_days"] == 5 and gmail["ready"] is True
+    assert gmail["usable_days"] == 7 and gmail["ready"] is True
     assert gmail["baseline_unconfirmed_rate"] == 10.0
     assert gmail["baseline_p95_seconds"] == 100
     assert gmail["suggested_unconfirmed_percent"] == 15.0
     assert gmail["suggested_p95_seconds"] == 150
     assert providers["qq"]["usable_days"] == 1 and providers["qq"]["ready"] is False
+    assert providers["microsoft"]["usable_days"] == 0
     assert providers["microsoft"]["suggested_unconfirmed_percent"] is None
     assert "result.updated_at >= ? AND result.updated_at < ?" in connection.sql
     assert "GROUP BY day, provider" in connection.sql

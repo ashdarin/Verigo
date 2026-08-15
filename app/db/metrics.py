@@ -473,7 +473,7 @@ class MetricsStore:
                 "provider": key,
                 "usable_days": len(samples),
                 "days": QUALITY_BASELINE_DAYS,
-                "ready": len(samples) >= 5,
+                "ready": len(samples) >= QUALITY_BASELINE_DAYS,
                 "baseline_unconfirmed_rate": rate_baseline,
                 "baseline_p95_seconds": duration_baseline,
                 "suggested_unconfirmed_percent": (
