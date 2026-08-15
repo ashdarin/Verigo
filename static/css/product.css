@@ -122,6 +122,21 @@ body.product-surface { min-width: 320px; margin: 0; color: var(--product-ink); b
 .product-surface .report-scorecards { border-color: var(--product-line); border-radius: 7px; }
 .product-surface .workspace-metrics article,
 .product-surface .report-scorecard { min-height: 98px; }
+.product-surface .quality-dashboard { margin-top: 18px; padding: 20px; border-color: var(--product-line); }
+.product-surface .quality-dashboard .report-card-heading { margin-bottom: 16px; }
+.product-surface .quality-dashboard-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: 1px solid var(--product-line); border-radius: 6px; overflow: hidden; background: #fbfcfb; }
+.product-surface .quality-dashboard-metric { min-width: 0; min-height: 78px; display: flex; flex-direction: column; justify-content: center; gap: 5px; padding: 13px 15px; border-right: 1px solid var(--product-line); }
+.product-surface .quality-dashboard-metric:last-child { border-right: 0; }
+.product-surface .quality-dashboard-metric span,
+.product-surface .quality-attention p { color: var(--product-muted); font-size: 11px; }
+.product-surface .quality-dashboard-metric strong { overflow: hidden; color: var(--product-ink); font-size: 22px; font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }
+.product-surface .quality-attention { display: grid; grid-template-columns: minmax(150px, .42fr) minmax(0, 1fr); gap: 18px; align-items: start; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--product-line); }
+.product-surface .quality-attention h3 { margin: 0; font-size: 13px; }
+.product-surface .quality-attention p { margin: 5px 0 0; }
+.product-surface .quality-attention ul { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 0; padding: 0; list-style: none; }
+.product-surface .quality-attention li { min-width: 0; display: flex; justify-content: space-between; gap: 8px; padding: 10px; border: 1px solid var(--product-line); border-radius: 5px; background: #fff; color: var(--product-muted); font-size: 11px; }
+.product-surface .quality-attention li strong { color: var(--product-ink); font-variant-numeric: tabular-nums; }
+.product-surface .quality-attention li.quality-attention-empty { grid-column: 1 / -1; justify-content: flex-start; }
 .product-surface .quick-start-grid button { border-color: var(--product-line); border-radius: 6px; background: #fff; }
 .product-surface .quick-start-grid button:hover { border-color: #9bc5ae; background: var(--product-green-pale); }
 .product-surface .report-heading { margin-bottom: 24px; }
@@ -248,6 +263,11 @@ body.product-surface { min-width: 320px; margin: 0; color: var(--product-ink); b
   .product-surface .workspace-welcome { align-items: flex-start; flex-direction: column; }
   .product-surface .workspace-metrics,
   .product-surface .report-scorecards { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .product-surface .quality-dashboard-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .product-surface .quality-dashboard-metric:nth-child(2) { border-right: 0; }
+  .product-surface .quality-dashboard-metric:nth-child(n+3) { border-top: 1px solid var(--product-line); }
+  .product-surface .quality-attention { grid-template-columns: 1fr; gap: 11px; }
+  .product-surface .quality-attention ul { grid-template-columns: 1fr; }
   .product-surface .quick-start-grid { grid-template-columns: 1fr; }
   .product-surface .account-menu { position: fixed; top: 56px; right: 10px; width: min(280px,calc(100vw - 20px)); }
   .product-surface .notification-menu { position: fixed; z-index: 60; top: 60px; right: 0; bottom: auto; left: 0; width: 100%; height: calc(100vh - 124px); height: calc(100dvh - 124px); max-height: none; border-right: 0; border-left: 0; border-radius: 0; }

@@ -18,7 +18,7 @@
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" referrerpolicy="no-referrer">
   <link rel="stylesheet" href="/static/css/app.css?v=admin-grid-flow-v3">
-  <link rel="stylesheet" href="/static/css/product.css?v=risk-signals-v3">
+  <link rel="stylesheet" href="/static/css/product.css?v=admin-quality-v1">
 </head>
 <body class="product-surface">
   <header class="topbar">
@@ -319,6 +319,22 @@
       <article class="report-scorecard"><span>互动会话</span><strong id="metric-report-engaged">0</strong><small id="metric-report-engagement-rate">互动率 0%</small></article>
       <article class="report-scorecard"><span>验证提交</span><strong id="metric-report-submissions">0</strong><small id="metric-report-submission-rate">会话转化 0%</small></article>
       <article class="report-scorecard"><span>平均互动时长</span><strong id="metric-report-engagement-time">0 秒</strong><small>已互动会话</small></article>
+    </section>
+
+    <section id="quality-dashboard" class="report-card quality-dashboard" aria-labelledby="quality-dashboard-title">
+      <div class="report-card-heading">
+        <div><h2 id="quality-dashboard-title">验证质量概览</h2><p id="quality-summary-copy">正在加载质量数据</p></div>
+      </div>
+      <div class="quality-dashboard-grid">
+        <div class="quality-dashboard-metric"><span>已完成验证</span><strong id="quality-verification-total">—</strong></div>
+        <div class="quality-dashboard-metric"><span>可投递率</span><strong id="quality-deliverable-rate">—</strong></div>
+        <div class="quality-dashboard-metric"><span>无法确认</span><strong id="quality-unknown-rate">—</strong></div>
+        <div class="quality-dashboard-metric"><span>复核更新</span><strong id="quality-reviewed-count">—</strong></div>
+      </div>
+      <div class="quality-attention">
+        <div><h3>需要关注</h3><p>按近期记录汇总</p></div>
+        <ul id="quality-attention-list" aria-live="polite"><li class="quality-attention-empty">暂无足够数据</li></ul>
+      </div>
     </section>
 
     <section id="cloudshell-crm" class="cloudshell-crm" aria-labelledby="cloudshell-crm-title">

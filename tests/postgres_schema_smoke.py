@@ -56,6 +56,7 @@ def test_json_and_timestamp_columns() -> None:
     types = {c.name: c.type for c in jr.columns}
     assert types["result_json"] == "jsonb"
     assert types["updated_at"] == "timestamptz"
+    assert any(index.name == "idx_job_results_quality_window" for index in jr.indexes)
     pc = require_registered("prospecting_candidates")
     # candidate rows often carry free-form payloads as text; result_json style columns only
     assert any(c.type == "timestamptz" for c in pc.columns) or True

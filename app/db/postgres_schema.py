@@ -405,6 +405,7 @@ TABLES["job_results"] = TableDef(
         IndexDef("idx_job_results_filter", ("job_id", "deliverability", "is_skipped", "original_index",), partial=False),
         IndexDef("idx_job_results_pending", ("job_id", "progress_state", "original_index",), partial=False),
         IndexDef("idx_job_results_updated", ("updated_at",), partial=False),
+        IndexDef("idx_job_results_quality_window", ("updated_at", "progress_state",), partial=False),
     ),
 )
 

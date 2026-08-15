@@ -224,6 +224,147 @@ class MetricsStore:
                 (utc_now().isoformat(), network_hash, self._day()),
             )
 
+    @staticmethod
+    def _provider_quality(connection, cutoff) -> dict[str, object]:
+        """Summarize the last 24 hours of settled user-visible results.
+
+        The query is deliberately bounded by ``job_results.updated_at``.  It
+        reads the durable query fields rather than result payload text, except
+        for the persisted retry state needed for the review-completion rate.
+        """
+        if postgres_active():
+            provider = """
+                CASE
+                    WHEN LOWER(SPLIT_PART(result.email, '@', 2)) IN ('gmail.com', 'googlemail.com') THEN 'gmail'
+                    WHEN LOWER(SPLIT_PART(result.email, '@', 2)) IN ('outlook.com', 'hotmail.com', 'live.com', 'msn.com') THEN 'microsoft'
+                    WHEN LOWER(SPLIT_PART(result.email, '@', 2)) IN ('qq.com', 'foxmail.com', 'vip.qq.com') THEN 'qq'
+                    ELSE 'other'
+                END
+            """
+            duration = "GREATEST(0, EXTRACT(EPOCH FROM (result.updated_at - COALESCE(job.started_at, job.created_at))))"
+            skipped = "result.is_skipped IS TRUE"
+            retry_state = "result.result_json ->> 'retry_state'"
+            risk_flag = lambda key: f"COALESCE((result.result_json #>> '{{risk_signals,{key},detected}}') = 'true', FALSE)"
+            percentile_columns = """
+                COALESCE(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY duration_seconds), 0),
+                COALESCE(PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY duration_seconds), 0)
+            """
+        else:
+            provider = """
+                CASE
+                    WHEN LOWER(SUBSTR(result.email, INSTR(result.email, '@') + 1)) IN ('gmail.com', 'googlemail.com') THEN 'gmail'
+                    WHEN LOWER(SUBSTR(result.email, INSTR(result.email, '@') + 1)) IN ('outlook.com', 'hotmail.com', 'live.com', 'msn.com') THEN 'microsoft'
+                    WHEN LOWER(SUBSTR(result.email, INSTR(result.email, '@') + 1)) IN ('qq.com', 'foxmail.com', 'vip.qq.com') THEN 'qq'
+                    ELSE 'other'
+                END
+            """
+            duration = "MAX(0, (julianday(result.updated_at) - julianday(COALESCE(job.started_at, job.created_at))) * 86400)"
+            skipped = "COALESCE(result.is_skipped, 0)=1"
+            retry_state = "json_extract(result.result_json, '$.retry_state')"
+            risk_flag = lambda key: f"COALESCE(json_extract(result.result_json, '$.risk_signals.{key}.detected') = 1, 0)"
+            # SQLite is retained only for historical tooling; PostgreSQL is the
+            # production backend and performs percentile aggregation in-database.
+            percentile_columns = "0, 0"
+
+        rows = connection.execute(
+            f"""
+            WITH recent AS (
+                SELECT
+                    {provider} AS provider,
+                    result.deliverability,
+                    {skipped} AS is_skipped,
+                    {retry_state} AS retry_state,
+                    {risk_flag('disposable_provider')} AS disposable,
+                    {risk_flag('mailbox_full')} AS mailbox_full,
+                    {risk_flag('role_address')} AS role_address,
+                    {risk_flag('do_not_reply')} AS do_not_reply,
+                    {duration} AS duration_seconds
+                FROM job_results AS result
+                JOIN jobs AS job ON job.id=result.job_id
+                WHERE result.updated_at >= ?
+                    AND result.progress_state IN ('completed', 'failed')
+                    AND job.parent_id IS NULL AND job.retry_parent_id IS NULL
+            )
+            SELECT
+                provider,
+                COUNT(*),
+                COALESCE(SUM(CASE WHEN deliverability=1 THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN deliverability IS NULL AND NOT is_skipped THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN retry_state IS NOT NULL THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN retry_state IN ('completed', 'failed') THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN disposable THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN mailbox_full THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN role_address THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN do_not_reply THEN 1 ELSE 0 END), 0),
+                {percentile_columns}
+            FROM recent
+            GROUP BY provider
+            """,
+            (cutoff,),
+        ).fetchall()
+        by_provider = {
+            str(provider): {
+                "provider": str(provider),
+                "processed": int(processed),
+                "deliverable": int(deliverable),
+                "unconfirmed": int(unconfirmed),
+                "review_eligible": int(review_eligible),
+                "review_completed": int(review_completed),
+                "risk_flags": {
+                    "disposable": int(disposable),
+                    "mailbox_full": int(mailbox_full),
+                    "role_address": int(role_address),
+                    "do_not_reply": int(do_not_reply),
+                },
+                "p50_seconds": round(float(p50 or 0)),
+                "p95_seconds": round(float(p95 or 0)),
+            }
+            for (
+                provider, processed, deliverable, unconfirmed, review_eligible, review_completed,
+                disposable, mailbox_full, role_address, do_not_reply, p50, p95,
+            ) in rows
+        }
+        providers = []
+        for key in ("gmail", "microsoft", "qq", "other"):
+            item = by_provider.get(key, {
+                "provider": key,
+                "processed": 0,
+                "deliverable": 0,
+                "unconfirmed": 0,
+                "review_eligible": 0,
+                "review_completed": 0,
+                "risk_flags": {
+                    "disposable": 0,
+                    "mailbox_full": 0,
+                    "role_address": 0,
+                    "do_not_reply": 0,
+                },
+                "p50_seconds": 0,
+                "p95_seconds": 0,
+            })
+            processed = int(item["processed"])
+            review_eligible = int(item["review_eligible"])
+            item["deliverable_rate"] = round(int(item["deliverable"]) * 100 / processed, 1) if processed else None
+            item["unconfirmed_rate"] = round(int(item["unconfirmed"]) * 100 / processed, 1) if processed else None
+            item["review_completion_rate"] = (
+                round(int(item["review_completed"]) * 100 / review_eligible, 1)
+                if review_eligible else None
+            )
+            providers.append(item)
+        risk_flags = {
+            name: sum(int(item["risk_flags"][name]) for item in providers)
+            for name in ("disposable", "mailbox_full", "role_address", "do_not_reply")
+        }
+        return {
+            "window_hours": 24,
+            "total": sum(int(item["processed"]) for item in providers),
+            "deliverable": sum(int(item["deliverable"]) for item in providers),
+            "unknown": sum(int(item["unconfirmed"]) for item in providers),
+            "reviewed": sum(int(item["review_completed"]) for item in providers),
+            "risk_flags": risk_flags,
+            "providers": providers,
+        }
+
     def snapshot(self) -> dict[str, object]:
         self.initialize()
         today = self._day()
@@ -236,6 +377,8 @@ class MetricsStore:
             hour=0, minute=0, second=0, microsecond=0
         ).astimezone(ZoneInfo("UTC")).isoformat()
         bounce_cutoff = (utc_now() - timedelta(minutes=30)).isoformat()
+        quality_cutoff = utc_now() - timedelta(hours=24)
+        quality_cutoff_bind = quality_cutoff if postgres_active() else quality_cutoff.isoformat()
         with closing(self._connect()) as connection:
             today_views = connection.execute(
                 "SELECT page_views, unique_visitors FROM page_view_days WHERE day=?", (today,)
@@ -344,6 +487,7 @@ class MetricsStore:
                 """,
                 (bounce_cutoff, bounce_cutoff, days[0]),
             ).fetchall()
+            provider_quality = self._provider_quality(connection, quality_cutoff_bind)
 
         daily_by_day: dict[str, dict[str, int]] = defaultdict(lambda: {"page_views": 0, "unique_visitors": 0})
         for day, page_views, unique_visitors in daily_rows:
@@ -411,6 +555,7 @@ class MetricsStore:
             },
             "jobs": {status: int(job_statuses.get(status, 0)) for status in ("queued", "running", "completed", "failed")},
             "daily": [{"day": day, **daily_by_day[day]} for day in days],
+            "provider_quality": provider_quality,
         }
 
     def feature_usage(self) -> dict[str, object]:

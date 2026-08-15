@@ -288,6 +288,63 @@ function setMetric(id, value) {
   el(id).textContent = Number(value || 0).toLocaleString("zh-CN");
 }
 
+function qualityCount(value) {
+  return Math.max(0, Number(value) || 0);
+}
+
+function renderQualityOverview(quality) {
+  const section = el("quality-dashboard");
+  if (!section) return;
+
+  const data = quality && typeof quality === "object" ? quality : {};
+  const total = qualityCount(data.total);
+  const deliverable = Math.min(total, qualityCount(data.deliverable));
+  const unknown = Math.min(total, qualityCount(data.unknown));
+  const reviewed = qualityCount(data.reviewed);
+  const attentionList = el("quality-attention-list");
+
+  setMetric("quality-verification-total", total);
+  el("quality-deliverable-rate").textContent = total ? `${(deliverable / total * 100).toFixed(1)}%` : "—";
+  el("quality-unknown-rate").textContent = total ? `${(unknown / total * 100).toFixed(1)}%` : "—";
+  setMetric("quality-reviewed-count", reviewed);
+  el("quality-summary-copy").textContent = total ? `基于 ${total.toLocaleString("zh-CN")} 条近期记录` : "暂无足够数据";
+
+  attentionList.replaceChildren();
+  if (!total) {
+    const empty = document.createElement("li");
+    empty.className = "quality-attention-empty";
+    empty.textContent = "暂无足够数据";
+    attentionList.append(empty);
+    return;
+  }
+
+  const flags = data.risk_flags && typeof data.risk_flags === "object" ? data.risk_flags : {};
+  const entries = [
+    ["一次性邮箱", flags.disposable],
+    ["收件箱已满", flags.mailbox_full],
+    ["角色邮箱", flags.role_address],
+    ["不应回复", flags.do_not_reply],
+  ].map(([label, value]) => [label, qualityCount(value)]).filter(([, value]) => value > 0);
+
+  if (!entries.length) {
+    const empty = document.createElement("li");
+    empty.className = "quality-attention-empty";
+    empty.textContent = "当前没有需要关注的记录";
+    attentionList.append(empty);
+    return;
+  }
+
+  entries.forEach(([label, value]) => {
+    const item = document.createElement("li");
+    const name = document.createElement("span");
+    const count = document.createElement("strong");
+    name.textContent = label;
+    count.textContent = value.toLocaleString("zh-CN");
+    item.append(name, count);
+    attentionList.append(item);
+  });
+}
+
 function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>"']/g, (character) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
@@ -394,11 +451,33 @@ function renderTraffic(days) {
   chart.innerHTML = `${grid}${lines}${labels}`;
 }
 
+function renderProviderQuality(quality) {
+  const body = el("provider-quality-body");
+  if (!body) return;
+  const labels = {
+    gmail: "Gmail",
+    microsoft: "\u5fae\u8f6f\u90ae\u7bb1",
+    qq: "QQ \u90ae\u7bb1",
+    other: "\u5176\u4ed6\u90ae\u7bb1",
+  };
+  const rows = Array.isArray(quality?.providers) ? quality.providers : [];
+  const rate = (value) => value == null ? "\u2014" : `${Number(value).toFixed(1)}%`;
+  body.innerHTML = rows.map((item) => {
+    const processed = Math.max(0, Number(item.processed) || 0);
+    const duration = processed
+      ? `${formatDuration(item.p50_seconds)} / ${formatDuration(item.p95_seconds)}`
+      : "\u2014";
+    return `<tr><th scope="row">${labels[item.provider] || labels.other}</th><td>${processed.toLocaleString("zh-CN")}</td><td>${rate(item.deliverable_rate)}</td><td>${rate(item.unconfirmed_rate)}</td><td>${rate(item.review_completion_rate)}</td><td>${duration}</td></tr>`;
+  }).join("") || '<tr><td colspan="6" class="provider-quality-empty">\u6700\u8fd1 24 \u5c0f\u65f6\u6682\u65e0\u5df2\u5b8c\u6210\u7ed3\u679c</td></tr>';
+}
+
 async function loadDashboardMetrics() {
   if (!state.user?.is_admin || state.view !== "dashboard") return;
   try {
     const data = await api("/api/admin/metrics");
     const today = data.today;
+    renderQualityOverview(data.provider_quality);
+    renderProviderQuality(data.provider_quality);
     const realSessions = Math.max(0, Number(today.sessions || 0) - Number(today.suspected_bots || 0));
     const submissions = Number(today.free_submissions || 0) + Number(today.batch_submissions || 0);
     const engagementRate = realSessions ? Number(today.engaged_sessions || 0) / realSessions * 100 : 0;

@@ -248,6 +248,16 @@ if [[ "$deploy_role" == "shanghai-app" ]]; then
     install -m 644 "$release_path/deploy/verigo-retention.timer" \
         /etc/systemd/system/verigo-retention.timer
 
+    # Runtime stores intentionally do not issue DDL on application startup.
+    # Apply this additive operational index before the new metrics query is
+    # exposed; the helper uses PostgreSQL's concurrent build to keep workers
+    # writing result rows during the release.
+    set -a
+    source /etc/verigo/verigo.env
+    set +a
+    PYTHONPATH="$release_path" "$state_dir/.venv/bin/python" \
+        "$release_path/scripts/ensure_quality_dashboard_schema.py"
+
     worker_bundle_tmp=$(mktemp "$state_dir/data/.cloudstudio-worker.XXXXXX.tar.gz")
     tar -czf "$worker_bundle_tmp" -C "$release_path" app requirements.txt RELEASE_VERSION
     chown verigo:verigo "$worker_bundle_tmp"

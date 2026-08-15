@@ -346,6 +346,16 @@ async function checkDashboard(browser) {
         average_engagement_seconds: 94, free_submissions: 4, batch_submissions: 2, verified_users: 2,
         job_completion_rate: 80, average_job_seconds: 31, deliverable_rate: 70, results_processed: 20,
       },
+      provider_quality: {
+        total: 1000, deliverable: 850, undeliverable: 80, unknown: 70, reviewed: 50,
+        risk_flags: { disposable: 12, mailbox_full: 8, role_address: 25, do_not_reply: 6 },
+        providers: [
+          { provider: "gmail", processed: 600, deliverable_rate: 86.7, unconfirmed_rate: 6.0, review_completion_rate: 80.0, p50_seconds: 8, p95_seconds: 30 },
+          { provider: "microsoft", processed: 250, deliverable_rate: 84.0, unconfirmed_rate: 8.0, review_completion_rate: null, p50_seconds: 10, p95_seconds: 45 },
+          { provider: "qq", processed: 100, deliverable_rate: 81.0, unconfirmed_rate: 11.0, review_completion_rate: 60.0, p50_seconds: 15, p95_seconds: 70 },
+          { provider: "other", processed: 50, deliverable_rate: 82.0, unconfirmed_rate: 10.0, review_completion_rate: null, p50_seconds: 18, p95_seconds: 90 },
+        ],
+      },
       totals: { page_views: 200, unique_visitors: 80, users: 31, verified_users: 20, jobs: 50, revenue_fen: 5990, paid_orders: 4 },
       jobs: { queued: 1, running: 2, completed: 45, failed: 2 },
       daily: Array.from({ length: 14 }, (_, index) => ({
@@ -378,8 +388,15 @@ async function checkDashboard(browser) {
     revenue: document.querySelector("#metric-today-revenue")?.textContent,
     cloudshellCards: document.querySelectorAll(".cloudshell-account-card").length,
     cloudshellTotal: document.querySelector("#cloudshell-total-accounts")?.textContent,
+    qualityTotal: document.querySelector("#quality-verification-total")?.textContent,
+    qualityDeliverable: document.querySelector("#quality-deliverable-rate")?.textContent,
+    qualityUnknown: document.querySelector("#quality-unknown-rate")?.textContent,
+    qualityReviewed: document.querySelector("#quality-reviewed-count")?.textContent,
+    qualityAttention: [...document.querySelectorAll("#quality-attention-list li")].map((item) => item.textContent),
+    providerRows: document.querySelectorAll("#provider-quality-body tr").length,
+    providerFirst: document.querySelector("#provider-quality-body tr")?.textContent,
   }));
-  if (result.title !== "运营监控 | Verigo" || result.overflow || !result.navVisible || result.credits !== "无限额度" || result.trafficLines !== 2 || result.reportUsers !== "17" || result.revenue !== "¥29.90" || result.cloudshellCards !== 10 || result.cloudshellTotal !== "10") {
+  if (result.title !== "运营监控 | Verigo" || result.overflow || !result.navVisible || result.credits !== "无限额度" || result.trafficLines !== 2 || result.reportUsers !== "17" || result.revenue !== "¥29.90" || result.cloudshellCards !== 10 || result.cloudshellTotal !== "10" || result.qualityTotal !== "1,000" || result.qualityDeliverable !== "85.0%" || result.qualityUnknown !== "7.0%" || result.qualityReviewed !== "50" || result.qualityAttention.join("|") !== "一次性邮箱12|收件箱已满8|角色邮箱25|不应回复6" || result.providerRows !== 4 || !result.providerFirst.includes("Gmail")) {
     throw new Error(`dashboard: unexpected rendering ${JSON.stringify(result)}`);
   }
   await page.close();
