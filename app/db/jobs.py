@@ -244,6 +244,7 @@ class JobStore:
                 connection.execute("CREATE INDEX IF NOT EXISTS idx_job_results_email ON job_results(job_id, email COLLATE NOCASE, original_index)")
                 connection.execute("CREATE INDEX IF NOT EXISTS idx_job_results_updated ON job_results(updated_at)")
                 connection.execute("CREATE INDEX IF NOT EXISTS idx_job_results_quality_window ON job_results(updated_at, progress_state)")
+                connection.execute("CREATE INDEX IF NOT EXISTS idx_job_results_review_backlog ON job_results(retry_at)")
                 connection.execute("""
                     CREATE TABLE IF NOT EXISTS result_objects (
                         id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, task_id TEXT NOT NULL,

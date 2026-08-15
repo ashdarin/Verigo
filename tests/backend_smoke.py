@@ -767,12 +767,19 @@ with TestClient(app) as guest:
     health_payload = health.json()
     assert health_payload == {"status": "ok", "database": "ok"}
     assert guest.get("/api/internal/readiness").status_code == 401
+    assert guest.get("/api/internal/quality").status_code == 401
     readiness = guest.get(
         "/api/internal/readiness",
         headers={"X-Verigo-Monitor-Token": "smoke-monitor-token"},
     )
     assert readiness.status_code == 200, readiness.text
     assert readiness.json()["database"] == "ok"
+    quality = guest.get(
+        "/api/internal/quality",
+        headers={"X-Verigo-Monitor-Token": "smoke-monitor-token"},
+    )
+    assert quality.status_code == 200, quality.text
+    assert {"providers", "review_backlog"}.issubset(quality.json())
     assert "pending_results" in readiness.json()
     assert guest.get("/dashboard").status_code == 200
     assert guest.get("/").status_code == 200

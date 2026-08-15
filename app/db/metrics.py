@@ -355,15 +355,33 @@ class MetricsStore:
             name: sum(int(item["risk_flags"][name]) for item in providers)
             for name in ("disposable", "mailbox_full", "role_address", "do_not_reply")
         }
+        review_backlog = connection.execute(
+            """
+            SELECT COUNT(*)
+            FROM job_results AS result
+            JOIN jobs AS job ON job.id=result.job_id
+            WHERE result.retry_at IS NOT NULL
+                AND job.parent_id IS NULL AND job.retry_parent_id IS NULL
+            """
+        ).fetchone()[0]
         return {
             "window_hours": 24,
             "total": sum(int(item["processed"]) for item in providers),
             "deliverable": sum(int(item["deliverable"]) for item in providers),
             "unknown": sum(int(item["unconfirmed"]) for item in providers),
             "reviewed": sum(int(item["review_completed"]) for item in providers),
+            "review_backlog": int(review_backlog),
             "risk_flags": risk_flags,
             "providers": providers,
         }
+
+    def quality_snapshot(self) -> dict[str, object]:
+        """Return the bounded quality payload used by operations monitoring."""
+        self.initialize()
+        cutoff = utc_now() - timedelta(hours=24)
+        cutoff_bind = cutoff if postgres_active() else cutoff.isoformat()
+        with closing(self._connect()) as connection:
+            return self._provider_quality(connection, cutoff_bind)
 
     def snapshot(self) -> dict[str, object]:
         self.initialize()
@@ -377,8 +395,6 @@ class MetricsStore:
             hour=0, minute=0, second=0, microsecond=0
         ).astimezone(ZoneInfo("UTC")).isoformat()
         bounce_cutoff = (utc_now() - timedelta(minutes=30)).isoformat()
-        quality_cutoff = utc_now() - timedelta(hours=24)
-        quality_cutoff_bind = quality_cutoff if postgres_active() else quality_cutoff.isoformat()
         with closing(self._connect()) as connection:
             today_views = connection.execute(
                 "SELECT page_views, unique_visitors FROM page_view_days WHERE day=?", (today,)
@@ -487,6 +503,8 @@ class MetricsStore:
                 """,
                 (bounce_cutoff, bounce_cutoff, days[0]),
             ).fetchall()
+            quality_cutoff = utc_now() - timedelta(hours=24)
+            quality_cutoff_bind = quality_cutoff if postgres_active() else quality_cutoff.isoformat()
             provider_quality = self._provider_quality(connection, quality_cutoff_bind)
 
         daily_by_day: dict[str, dict[str, int]] = defaultdict(lambda: {"page_views": 0, "unique_visitors": 0})

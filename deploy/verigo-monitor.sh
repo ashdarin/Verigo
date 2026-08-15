@@ -16,6 +16,7 @@ queue_limit=${VERIGO_MONITOR_QUEUE_LIMIT:-10}
 provider_pressure_limit=${VERIGO_MONITOR_PROVIDER_PRESSURE_LAST_60_SECONDS:-1}
 public_base_url=${VERIGO_MONITOR_PUBLIC_BASE_URL:-https://verigo.site}
 readiness_url=${VERIGO_MONITOR_READINESS_URL:-http://127.0.0.1:18000/api/internal/readiness}
+quality_url=${VERIGO_MONITOR_QUALITY_URL:-http://127.0.0.1:18000/api/internal/quality}
 postgres_tunnel_port=${VERIGO_MONITOR_POSTGRES_TUNNEL_PORT:-15433}
 postgres_tunnel_unit=${VERIGO_MONITOR_POSTGRES_TUNNEL_UNIT:-verigo-postgres-worker-tunnel}
 check_local_backup=${VERIGO_MONITOR_CHECK_LOCAL_BACKUP:-0}
@@ -26,6 +27,7 @@ mkdir -p "$state_dir"
 issues=()
 public_health_payload=
 readiness_payload=
+quality_payload=
 # Local PostgreSQL tunnel bind only. Never print DSN / DATABASE_URL / env.
 tunnel_down=0
 if ! ss -lnt 2>/dev/null | awk -v port="$postgres_tunnel_port" '$1 ~ /LISTEN/ && $4 == "127.0.0.1:" port { found=1 } END { exit !found }'; then
@@ -44,6 +46,22 @@ else
         -H "X-Verigo-Monitor-Token: ${monitor_token}" \
         "$readiness_url"); then
         issues+=("internal readiness endpoint is unavailable")
+    elif ! quality_payload=$(curl -fsS --max-time 12 \
+        -H "X-Verigo-Monitor-Token: ${monitor_token}" \
+        "$quality_url"); then
+        issues+=("internal quality endpoint is unavailable")
+    fi
+fi
+
+if [[ -n "$quality_payload" ]]; then
+    quality_alerts=$(VERIGO_QUALITY_PAYLOAD="$quality_payload" \
+        VERIGO_MONITOR_QUALITY_MIN_SAMPLE="${VERIGO_MONITOR_QUALITY_MIN_SAMPLE:-200}" \
+        VERIGO_MONITOR_UNCONFIRMED_PERCENT="${VERIGO_MONITOR_UNCONFIRMED_PERCENT:-15}" \
+        VERIGO_MONITOR_P95_SECONDS="${VERIGO_MONITOR_P95_SECONDS:-180}" \
+        VERIGO_MONITOR_REVIEW_BACKLOG="${VERIGO_MONITOR_REVIEW_BACKLOG:-25}" \
+        /opt/verigo/.venv/bin/python /opt/verigo/current/scripts/quality_alerts.py)
+    if [[ -n "$quality_alerts" ]]; then
+        issues+=("verification quality: ${quality_alerts}")
     fi
 fi
 

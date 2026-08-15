@@ -17,10 +17,12 @@ class FakeConnection:
     def __init__(self) -> None:
         self.sql = ""
         self.params = ()
+        self.queries = []
 
-    def execute(self, sql, params):
+    def execute(self, sql, params=()):
         self.sql = sql
         self.params = params
+        self.queries.append(sql)
         return self
 
     def fetchall(self):
@@ -28,6 +30,9 @@ class FakeConnection:
             ("gmail", 10, 7, 2, 4, 3, 2, 1, 3, 0, 9.6, 20.4),
             ("qq", 2, 1, 1, 0, 0, 0, 1, 0, 2, 12.2, 18.9),
         ]
+
+    def fetchone(self):
+        return (3,)
 
 
 def main() -> int:
@@ -44,10 +49,12 @@ def main() -> int:
     assert rows["microsoft"]["deliverable_rate"] is None
     assert quality["total"] == 12 and quality["deliverable"] == 8 and quality["unknown"] == 3
     assert quality["reviewed"] == 3
+    assert quality["review_backlog"] == 3
     assert quality["risk_flags"] == {"disposable": 2, "mailbox_full": 2, "role_address": 3, "do_not_reply": 2}
-    assert "result.updated_at >= ?" in connection.sql
-    assert "job.parent_id IS NULL" in connection.sql
-    assert "PERCENTILE_CONT" in connection.sql
+    assert any("result.updated_at >= ?" in query for query in connection.queries)
+    assert any("job.parent_id IS NULL" in query for query in connection.queries)
+    assert any("PERCENTILE_CONT" in query for query in connection.queries)
+    assert any("result.retry_at IS NOT NULL" in query for query in connection.queries)
     print("provider quality smoke: ok")
     return 0
 

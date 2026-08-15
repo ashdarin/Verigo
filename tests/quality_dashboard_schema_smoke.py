@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.ensure_quality_dashboard_schema import QUALITY_WINDOW_INDEX, main  # noqa: E402
+from scripts.ensure_quality_dashboard_schema import QUALITY_DASHBOARD_INDEXES, main  # noqa: E402
 
 
 class Cursor:
@@ -49,7 +49,8 @@ def run() -> int:
         assert main() == 0
     assert connect.call_args.kwargs["autocommit"] is True
     assert "CREATE INDEX CONCURRENTLY IF NOT EXISTS" in connection.cursor_instance.sql
-    assert QUALITY_WINDOW_INDEX in connection.cursor_instance.sql
+    assert len(QUALITY_DASHBOARD_INDEXES) == 2
+    assert QUALITY_DASHBOARD_INDEXES[-1][0] in connection.cursor_instance.sql
     print("quality dashboard schema smoke: ok")
     return 0
 

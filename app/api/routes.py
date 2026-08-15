@@ -601,6 +601,22 @@ def readiness(
     }
 
 
+@router.get("/internal/quality")
+def internal_quality(
+    token: Annotated[str | None, Header(alias="X-Verigo-Monitor-Token")] = None,
+) -> dict[str, object]:
+    """Bounded operational quality data for the local monitor only."""
+    configured_token = settings.monitor_token
+    if not configured_token:
+        raise HTTPException(status_code=503, detail="monitor token is not configured")
+    if not token or not hmac.compare_digest(token, configured_token):
+        raise HTTPException(status_code=401, detail="monitor authentication failed")
+    try:
+        return metrics_store.quality_snapshot()
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="quality metrics are unavailable") from exc
+
+
 @router.post("/workers/cloudstudio/probe")
 def cloudstudio_probe(
     request: Request,
