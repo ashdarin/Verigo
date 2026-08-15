@@ -7,7 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.db.jobs import Job
+from app.db.jobs import Job, JobStore
 from app.tasks import verification
 
 
@@ -147,5 +147,7 @@ for function in (
     source = inspect.getsource(function)
     assert "job_store.upsert_results" in source
     assert "job_store.persist(parent)" not in source
+upsert_source = inspect.getsource(JobStore._upsert_results)
+assert upsert_source.count("job_results.result_json <> excluded.result_json") == 2
 
 print("smtp retry flow smoke: ok")

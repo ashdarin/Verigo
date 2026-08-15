@@ -1207,7 +1207,8 @@ class JobStore:
                     retry_at=excluded.retry_at, retry_updated=excluded.retry_updated,
                     query_fields_ready=excluded.query_fields_ready
                 WHERE job_results.progress_state IN ('pending', 'verifying')
-                    OR job_results.progress_state = excluded.progress_state
+                    OR (job_results.progress_state = excluded.progress_state
+                        AND job_results.result_json <> excluded.result_json)
         """, rows)
         links = connection.execute("""
                 SELECT child_index, parent_job_id, parent_index FROM job_result_links
@@ -1236,7 +1237,8 @@ class JobStore:
                         retry_at=excluded.retry_at, retry_updated=excluded.retry_updated,
                         query_fields_ready=excluded.query_fields_ready
                     WHERE job_results.progress_state IN ('pending', 'verifying')
-                        OR job_results.progress_state = excluded.progress_state
+                        OR (job_results.progress_state = excluded.progress_state
+                            AND job_results.result_json <> excluded.result_json)
             """, parent_rows)
 
     def upsert_results(self, job_id: str, results: list[dict[str, Any]]) -> None:

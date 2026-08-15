@@ -245,18 +245,18 @@ class MetricsStore:
                     ELSE 'other'
                 END
             """
-            duration = "GREATEST(0, EXTRACT(EPOCH FROM (job.finished_at - job.created_at)))"
+            duration = "GREATEST(0, EXTRACT(EPOCH FROM (result.updated_at - job.created_at)))"
             review_duration = "GREATEST(0, EXTRACT(EPOCH FROM (result.updated_at - job.finished_at)))"
             skipped = "result.is_skipped IS TRUE"
             retry_state = "result.result_json ->> 'retry_state'"
             retry_updated = "result.retry_updated IS TRUE"
             risk_flag = lambda key: f"COALESCE((result.result_json #>> '{{risk_signals,{key},detected}}') = 'true', FALSE)"
             latency_columns = """
-                COALESCE(SUM(CASE WHEN initial_completed_at >= ? THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN initial_completed_at >= ? AND NOT retry_updated THEN 1 ELSE 0 END), 0),
                 COALESCE(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY duration_seconds)
-                    FILTER (WHERE initial_completed_at >= ?), 0),
+                    FILTER (WHERE initial_completed_at >= ? AND NOT retry_updated), 0),
                 COALESCE(PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY duration_seconds)
-                    FILTER (WHERE initial_completed_at >= ?), 0),
+                    FILTER (WHERE initial_completed_at >= ? AND NOT retry_updated), 0),
                 COALESCE(SUM(CASE WHEN retry_updated THEN 1 ELSE 0 END), 0),
                 COALESCE(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY review_duration_seconds)
                     FILTER (WHERE retry_updated), 0),
@@ -272,7 +272,7 @@ class MetricsStore:
                     ELSE 'other'
                 END
             """
-            duration = "MAX(0, (julianday(job.finished_at) - julianday(job.created_at)) * 86400)"
+            duration = "MAX(0, (julianday(result.updated_at) - julianday(job.created_at)) * 86400)"
             review_duration = "MAX(0, (julianday(result.updated_at) - julianday(job.finished_at)) * 86400)"
             skipped = "COALESCE(result.is_skipped, 0)=1"
             retry_state = "json_extract(result.result_json, '$.retry_state')"
@@ -280,7 +280,7 @@ class MetricsStore:
             risk_flag = lambda key: f"COALESCE(json_extract(result.result_json, '$.risk_signals.{key}.detected') = 1, 0)"
             # SQLite is retained only for historical tooling; PostgreSQL is the
             # production backend and performs percentile aggregation in-database.
-            latency_columns = "COALESCE(SUM(CASE WHEN initial_completed_at >= ? THEN 1 ELSE 0 END), 0), 0, 0, COALESCE(SUM(CASE WHEN retry_updated THEN 1 ELSE 0 END), 0), 0, 0"
+            latency_columns = "COALESCE(SUM(CASE WHEN initial_completed_at >= ? AND NOT retry_updated THEN 1 ELSE 0 END), 0), 0, 0, COALESCE(SUM(CASE WHEN retry_updated THEN 1 ELSE 0 END), 0), 0, 0"
 
         rows = connection.execute(
             f"""
@@ -436,12 +436,12 @@ class MetricsStore:
                 END
             """
             day_bucket = "TO_CHAR(result.updated_at AT TIME ZONE 'Asia/Shanghai', 'YYYY-MM-DD')"
-            duration = "GREATEST(0, EXTRACT(EPOCH FROM (job.finished_at - job.created_at)))"
+            duration = "GREATEST(0, EXTRACT(EPOCH FROM (result.updated_at - job.created_at)))"
             skipped = "result.is_skipped IS TRUE"
             latency_columns = """
-                COALESCE(SUM(CASE WHEN initial_completed_at >= ? AND initial_completed_at < ? THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN initial_completed_at >= ? AND initial_completed_at < ? AND NOT retry_updated THEN 1 ELSE 0 END), 0),
                 PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY duration_seconds)
-                    FILTER (WHERE initial_completed_at >= ? AND initial_completed_at < ?)
+                    FILTER (WHERE initial_completed_at >= ? AND initial_completed_at < ? AND NOT retry_updated)
             """
         else:
             provider = """
@@ -453,11 +453,11 @@ class MetricsStore:
                 END
             """
             day_bucket = "SUBSTR(result.updated_at, 1, 10)"
-            duration = "MAX(0, (julianday(job.finished_at) - julianday(job.created_at)) * 86400)"
+            duration = "MAX(0, (julianday(result.updated_at) - julianday(job.created_at)) * 86400)"
             skipped = "COALESCE(result.is_skipped, 0)=1"
             # SQLite is retained for local tooling.  It still produces the
             # rate baseline; percentile latency is available in PostgreSQL.
-            latency_columns = "COALESCE(SUM(CASE WHEN initial_completed_at >= ? AND initial_completed_at < ? THEN 1 ELSE 0 END), 0), 0"
+            latency_columns = "COALESCE(SUM(CASE WHEN initial_completed_at >= ? AND initial_completed_at < ? AND NOT retry_updated THEN 1 ELSE 0 END), 0), 0"
 
         rows = connection.execute(
             f"""
@@ -468,6 +468,7 @@ class MetricsStore:
                     result.deliverability,
                     {skipped} AS is_skipped,
                     job.finished_at AS initial_completed_at,
+                    result.retry_updated AS retry_updated,
                     {duration} AS duration_seconds
                 FROM job_results AS result
                 JOIN jobs AS job ON job.id=result.job_id
