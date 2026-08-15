@@ -752,6 +752,10 @@ def reconcile_orphaned_background_retries(
                     result["retry_updated"] = True
                     summary["recovered"] += 1
             result["original_index"] = int(current.get("original_index", index))
+            # Preserve the durable row state while upgrading its review
+            # payload.  The store intentionally rejects terminal-state
+            # transitions to protect completed results from stale workers.
+            result["progress_state"] = str(current.get("progress_state") or "completed")
             parent.results[index] = result
             updated.append(result)
 
