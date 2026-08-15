@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from app.core.smtp_retry_policy import apply_retry_plan
+
 
 RETRY_NEVER = "never"
 RETRY_DELAYED = "delayed"
@@ -23,6 +25,8 @@ _DELAYED_REASONS = frozenset({
     "smtp_timeout",
     "smtp_connection",
     "smtp_temporary",
+    "smtp_receiver_throttled",
+    "smtp_infrastructure",
     "provider_throttled",
 })
 
@@ -57,6 +61,8 @@ def apply_outcome(
     result["retry_policy"] = retry_policy
     if code is not None:
         result["smtp_code"] = str(code)
+    if retry_policy != RETRY_NEVER:
+        apply_retry_plan(result)
     return result
 
 
@@ -64,6 +70,8 @@ def ensure_outcome(result: dict[str, Any]) -> dict[str, Any]:
     """Classify legacy results conservatively until every producer is upgraded."""
     policy = str(result.get("retry_policy") or "")
     if policy in _RETRY_POLICIES:
+        if policy != RETRY_NEVER:
+            apply_retry_plan(result)
         return result
 
     reason = str(result.get("failure_reason") or "")
@@ -97,6 +105,15 @@ def ensure_outcome(result: dict[str, Any]) -> dict[str, Any]:
     if code and code.startswith("5"):
         return apply_outcome(
             result, stage="smtp", reason="smtp_permanent", retry_policy=RETRY_NEVER, code=code
+        )
+    plan = apply_retry_plan(result)
+    if plan.retry_class == "greylist":
+        return apply_outcome(
+            result, stage="smtp", reason="smtp_greylist", retry_policy=RETRY_GREYLIST, code=code
+        )
+    if plan.retry_class == "receiver_throttled":
+        return apply_outcome(
+            result, stage="smtp", reason="smtp_receiver_throttled", retry_policy=RETRY_DELAYED, code=code
         )
     if code == "450" and any(marker in detail for marker in ("greylist", "greylisted", "postgrey", "灰名单")):
         return apply_outcome(

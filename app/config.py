@@ -39,6 +39,11 @@ class Settings:
             )
         ),
     )
+    # The supplied QQ verifier is designed to run six internal processes.
+    # Keep this independent from the generic Cloud Studio task limit.
+    qq_worker_max_workers: int = min(
+        8, max(1, int(os.getenv("VERIGO_QQ_WORKER_MAX_WORKERS", "6")))
+    )
     cloudshell_worker_max_workers: int = max(
         1, int(os.getenv("VERIGO_CLOUDSHELL_MAX_WORKERS", "25"))
     )
@@ -63,10 +68,17 @@ class Settings:
     scheduler_remote_shard_size: int = max(
         1, int(os.getenv("VERIGO_SCHEDULER_REMOTE_SHARD_SIZE", "25"))
     )
-    # QQ SMTP is slow enough that large leases serialize work inside a single
-    # worker and starve otherwise healthy Cloud Studio processes.
+    # A QQ lease must contain enough addresses to feed the verifier's internal
+    # processes. Global receiver pressure is enforced separately by the MX
+    # scheduler and its adaptive cooldown.
     qq_scheduler_shard_size: int = max(
-        1, int(os.getenv("VERIGO_QQ_SCHEDULER_SHARD_SIZE", "1"))
+        1,
+        int(
+            os.getenv(
+                "VERIGO_QQ_SCHEDULER_SHARD_SIZE",
+                os.getenv("VERIGO_QQ_WORKER_MAX_WORKERS", "6"),
+            )
+        ),
     )
     # Small discovery leases let several otherwise idle nodes share one
     # company domain while the MX scheduler remains the global safety limit.
@@ -78,6 +90,15 @@ class Settings:
     )
     scheduler_successes_per_step: int = max(
         1, int(os.getenv("VERIGO_SCHEDULER_SUCCESSES_PER_STEP", "20"))
+    )
+    # Public mailbox providers recover independently after a pressure event.
+    # Their lower threshold lets verified capacity return without changing the
+    # conservative recovery behavior of ordinary business domains.
+    scheduler_gmail_successes_per_step: int = max(
+        1, int(os.getenv("VERIGO_SCHEDULER_GMAIL_SUCCESSES_PER_STEP", "8"))
+    )
+    scheduler_microsoft_successes_per_step: int = max(
+        1, int(os.getenv("VERIGO_SCHEDULER_MICROSOFT_SUCCESSES_PER_STEP", "8"))
     )
     # Contact discovery is a controlled, opt-in workflow. Stable enterprise
     # MX hosts can ramp faster than ordinary verification, while the same
@@ -172,7 +193,15 @@ class Settings:
     payment_checkout_url: str = os.getenv("VERIGO_PAYMENT_CHECKOUT_URL", "").strip()
     payment_webhook_token: str = os.getenv("VERIGO_PAYMENT_WEBHOOK_TOKEN", "")
     max_pending_jobs: int = int(os.getenv("VERIGO_MAX_PENDING_JOBS", "20"))
-    qq_smtp_per_mx: int = max(1, int(os.getenv("VERIGO_QQ_SMTP_PER_MX", "1")))
+    qq_smtp_per_mx: int = max(
+        1,
+        int(
+            os.getenv(
+                "VERIGO_QQ_SMTP_PER_MX",
+                os.getenv("VERIGO_QQ_WORKER_MAX_WORKERS", "6"),
+            )
+        ),
+    )
     qq_smtp_wait_seconds: float = max(
         1.0, float(os.getenv("VERIGO_QQ_SMTP_WAIT_SECONDS", "300"))
     )
@@ -297,11 +326,16 @@ class Settings:
     cloudshell_quota_cooldown_seconds: int = max(
         300, int(os.getenv("VERIGO_CLOUDSHELL_QUOTA_COOLDOWN_SECONDS", "3600"))
     )
+    # Transient bootstrap failures should release their pool slot quickly.
+    # Provider quota failures continue to use the longer cooldown above.
+    cloudshell_bootstrap_cooldown_seconds: int = max(
+        60, int(os.getenv("VERIGO_CLOUDSHELL_BOOTSTRAP_COOLDOWN_SECONDS", "300"))
+    )
     cloudshell_coordinator_enabled: bool = env_bool(
         "VERIGO_CLOUDSHELL_COORDINATOR_ENABLED", True
     )
     cloudshell_active_min_accounts: int = max(
-        1, int(os.getenv("VERIGO_CLOUDSHELL_ACTIVE_MIN_ACCOUNTS", "2"))
+        1, int(os.getenv("VERIGO_CLOUDSHELL_ACTIVE_MIN_ACCOUNTS", "1"))
     )
     cloudshell_active_max_accounts: int = max(
         cloudshell_active_min_accounts,
@@ -309,6 +343,16 @@ class Settings:
     )
     cloudshell_queue_per_active_account: int = max(
         1, int(os.getenv("VERIGO_CLOUDSHELL_QUEUE_PER_ACTIVE_ACCOUNT", "2"))
+    )
+    # Pool expansion follows verification work, not just submitted-job count.
+    # A single Gmail import may contain many thousands of pending addresses.
+    cloudshell_pending_emails_per_active_account: int = max(
+        1, int(os.getenv("VERIGO_CLOUDSHELL_PENDING_EMAILS_PER_ACTIVE_ACCOUNT", "48"))
+    )
+    # Cloud Shell has no StopEnvironment API. Stop Verigo's own remote
+    # processes after this idle period so the platform can reclaim the shell.
+    cloudshell_idle_stop_seconds: int = max(
+        60, int(os.getenv("VERIGO_CLOUDSHELL_IDLE_STOP_SECONDS", "600"))
     )
     # Zero means no guessed quota. Set this only when an account's soft daily
     # budget is known; hard Cloud Shell quota remains provider-controlled.
@@ -404,6 +448,10 @@ class Settings:
     cloudstudio_lifecycle_poll_seconds: float = max(
         1.0, float(os.getenv("VERIGO_CLOUDSTUDIO_LIFECYCLE_POLL_SECONDS", "5"))
     )
+    # Cloud Studio starts lifecycle work after the IDE terminal is attached.
+    cloudstudio_session_activation_seconds: int = max(
+        15, int(os.getenv("VERIGO_CLOUDSTUDIO_SESSION_ACTIVATION_SECONDS", "30"))
+    )
     worker_poll_seconds: float = float(os.getenv("VERIGO_WORKER_POLL_SECONDS", "1"))
     worker_lease_seconds: int = int(os.getenv("VERIGO_WORKER_LEASE_SECONDS", "180"))
     sqlite_busy_timeout_ms: int = max(
@@ -433,6 +481,32 @@ class Settings:
     temporary_smtp_retry_seconds: float = 60.0
     smtp_greylist_retry_seconds: int = 300
     smtp_greylist_retry_max_attempts: int = 2
+    # The public disposable-email API is advisory and queried only for an
+    # unknown domain after local checks. It never changes SMTP deliverability.
+    disposable_lookup_enabled: bool = env_bool("VERIGO_DISPOSABLE_LOOKUP_ENABLED", False)
+    disposable_lookup_url: str = os.getenv(
+        "VERIGO_DISPOSABLE_LOOKUP_URL", "https://disposable.debounce.io/"
+    ).strip()
+    disposable_lookup_timeout_seconds: float = min(
+        2.0, max(0.1, float(os.getenv("VERIGO_DISPOSABLE_LOOKUP_TIMEOUT_SECONDS", "0.8")))
+    )
+    # The public lookup must never compete with SMTP verification. These are
+    # per-process limits for best-effort background domain prefetches.
+    disposable_lookup_background_workers: int = min(
+        4, max(1, int(os.getenv("VERIGO_DISPOSABLE_LOOKUP_BACKGROUND_WORKERS", "2")))
+    )
+    disposable_lookup_background_queue: int = min(
+        16, max(0, int(os.getenv("VERIGO_DISPOSABLE_LOOKUP_BACKGROUND_QUEUE", "2")))
+    )
+    disposable_lookup_positive_cache_hours: int = min(
+        24 * 90, max(1, int(os.getenv("VERIGO_DISPOSABLE_LOOKUP_POSITIVE_CACHE_HOURS", "720")))
+    )
+    disposable_lookup_negative_cache_hours: int = min(
+        24 * 30, max(1, int(os.getenv("VERIGO_DISPOSABLE_LOOKUP_NEGATIVE_CACHE_HOURS", "168")))
+    )
+    disposable_lookup_failure_cache_seconds: int = min(
+        3600, max(1, int(os.getenv("VERIGO_DISPOSABLE_LOOKUP_FAILURE_CACHE_SECONDS", "300")))
+    )
     verification_cache_hours: int = int(os.getenv("VERIGO_VERIFICATION_CACHE_HOURS", "24"))
     verified_email_recheck_days: int = int(os.getenv("VERIGO_VERIFIED_EMAIL_RECHECK_DAYS", "30"))
     mail_host: str = os.getenv("VERIGO_MAIL_HOST", "")

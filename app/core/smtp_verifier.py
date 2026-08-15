@@ -18,6 +18,7 @@ import dns.exception
 import dns.resolver
 
 from app.config import settings
+from app.core.email_risk import ensure_email_risk_signals
 from app.core.qq_evidence import qq_avatar_evidence
 from app.core.smtp_limiter import SMTPDeliveryLimiter
 from app.core.verification_outcome import RETRY_DELAYED, RETRY_NEVER, apply_outcome
@@ -560,6 +561,8 @@ class EmailVerifier:
 
     def verify_email_comprehensive(self, email, process_id=0):
         """综合验证邮箱 - 保持原版本逻辑，增加QQ和Outlook修复"""
+        verification_started = time.monotonic()
+        timings_ms: dict[str, float] = {}
         result = {
             'email': email,
             'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
@@ -582,10 +585,14 @@ class EmailVerifier:
             'domain_type': 'unknown',  # 🆕 域名类型: normal/catch-all/consumer/no_mx
             'verification_method': 'standard'  # 🆕 验证方法: standard/data_command/catch-all_detected
         }
+        ensure_email_risk_signals(result)
 
         try:
             # 第一步：格式检查
-            if not self.is_valid_email_format(email):
+            stage_started = time.monotonic()
+            format_valid = self.is_valid_email_format(email)
+            timings_ms['format'] = round((time.monotonic() - stage_started) * 1000, 2)
+            if not format_valid:
                 result['message'] = '邮箱格式不正确'
                 result['deliverable'] = False
                 result['checks']['smtp'] = False
@@ -612,7 +619,15 @@ class EmailVerifier:
                 result['checks']['domain'] = True
                 result['checks']['mx'] = True
 
-                exists, detail = verify_outlook_via_microsoft(email)
+                stage_started = time.monotonic()
+                exists, detail, provider_timings = verify_outlook_via_microsoft(
+                    email, include_timings=True
+                )
+                timings_ms['provider'] = round((time.monotonic() - stage_started) * 1000, 2)
+                timings_ms.update({
+                    f"provider_{name}": elapsed
+                    for name, elapsed in provider_timings.items()
+                })
                 result['smtp_result'] = detail  # 写入"SMTP结果码"列(人话说明)
 
                 if exists is True:
@@ -649,7 +664,9 @@ class EmailVerifier:
                 result['consumer_provider'] = fix_strategy['provider']
 
             # 第二步：域名检查
+            stage_started = time.monotonic()
             domain_status = self.check_domain_status(domain)
+            timings_ms['dns'] = round((time.monotonic() - stage_started) * 1000, 2)
             if domain_status == 'nxdomain':
                 result['message'] = f'域名 {domain} 不存在'
                 result['smtp_result'] = '域名不存在，未发起SMTP验证'
@@ -674,7 +691,9 @@ class EmailVerifier:
             result['checks']['domain'] = True
 
             # 第三步：MX记录检查
+            stage_started = time.monotonic()
             mx_status, mx_records = self.get_mx_record_status(domain)
+            timings_ms['mx'] = round((time.monotonic() - stage_started) * 1000, 2)
             if mx_status == 'nxdomain':
                 result['message'] = f'域名 {domain} 不存在'
                 result['smtp_result'] = '域名不存在，未发起SMTP验证'
@@ -707,6 +726,7 @@ class EmailVerifier:
 
             result['checks']['mx'] = True
             result['mx_records'] = mx_records
+            ensure_email_risk_signals(result)
 
             # 🆕 第四步：域名类型检测 (catch-all检测)
             # Domain classification follows the selected provider strategy.
@@ -738,6 +758,7 @@ class EmailVerifier:
 
             max_mx_hosts = fix_strategy.get('max_mx_hosts', 2) if fix_strategy else 2
             mx_hosts_to_try = mx_records[:max_mx_hosts]
+            stage_started = time.monotonic()
             for i, mx_host in enumerate(mx_hosts_to_try):
                 if result['consumer_fix_applied']:
                     # 🆕 使用修复版SMTP检查
@@ -762,8 +783,10 @@ class EmailVerifier:
                         strategy_delays = {'fast': 0.2, 'normal': 0.3, 'medium': 0.5, 'strict': 0.8, 'super_aggressive': 0.5}
                         time.sleep(strategy_delays.get(strategy, 0.3))
 
+            timings_ms['smtp'] = round((time.monotonic() - stage_started) * 1000, 2)
             result['checks']['smtp'] = smtp_success
             result['smtp_result'] = smtp_message
+            ensure_email_risk_signals(result)
             if smtp_success is None:
                 apply_outcome(
                     result, stage='smtp', reason='smtp_temporary', retry_policy=RETRY_DELAYED
@@ -829,3 +852,6 @@ class EmailVerifier:
         except Exception as e:
             result['message'] = f'验证过程出错: {str(e)}'
             return result
+        finally:
+            timings_ms['total'] = round((time.monotonic() - verification_started) * 1000, 2)
+            result['timings_ms'] = timings_ms

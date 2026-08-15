@@ -7,6 +7,11 @@ import time
 from contextlib import contextmanager
 
 from app.config import settings
+from app.core.email_risk import (
+    enrich_disposable_provider,
+    ensure_email_risk_signals,
+    prefetch_disposable_provider,
+)
 
 
 class EmailVerificationTimeout(TimeoutError):
@@ -36,7 +41,7 @@ def email_verification_deadline(seconds: int):
 
 
 def timeout_result(email: str, index: int) -> dict[str, object]:
-    return {
+    result: dict[str, object] = {
         "email": email,
         "original_index": index,
         "valid": True,
@@ -50,6 +55,7 @@ def timeout_result(email: str, index: int) -> dict[str, object]:
         "failure_reason": "smtp_timeout",
         "retry_policy": "delayed",
     }
+    return ensure_email_risk_signals(result)
 
 
 def run_verification_worker(
@@ -94,13 +100,24 @@ def run_verification_worker(
                 "status": "processing",
                 "is_consumer_fix": is_consumer_fix,
             })
+            # This only warms a bounded domain cache while SMTP work is in
+            # flight. It never waits on the public provider.
+            prefetch_disposable_provider(email)
 
             try:
+                verification_started = time.monotonic()
                 with email_verification_deadline(settings.email_hard_timeout_seconds):
                     result = verifier.verify_email_comprehensive(email, process_id)
             except EmailVerificationTimeout:
                 result = timeout_result(email, index)
+            timings = result.get("timings_ms")
+            if not isinstance(timings, dict):
+                timings = {}
+                result["timings_ms"] = timings
+            timings["worker_total"] = round((time.monotonic() - verification_started) * 1000, 2)
             result["original_index"] = index
+            ensure_email_risk_signals(result)
+            enrich_disposable_provider(result, allow_network=False)
             cache_after = len(verifier.dns_cache)
             if cache_after == cache_before and f"mx_{domain}" in verifier.dns_cache:
                 dns_cache_hits += 1

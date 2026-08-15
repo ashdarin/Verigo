@@ -12,6 +12,11 @@ from zoneinfo import ZoneInfo
 
 from app.config import settings
 from app.core.catch_all import reconcile_catch_all_conflicts
+from app.core.email_risk import (
+    enrich_disposable_provider,
+    ensure_email_risk_signals,
+    prefetch_disposable_provider,
+)
 from app.core.legacy import create_verifier
 from app.core.provider_policy import YAHOO_UNSUPPORTED_MESSAGE, is_yahoo_email
 from app.core.prospecting_protection import is_suspicious_recipient_rejection
@@ -22,6 +27,7 @@ from app.core.result_retry import (
     smtp_permanent_status,
     smtp_temporary_status,
 )
+from app.core.smtp_retry_policy import apply_retry_plan, retry_plan
 from app.core.verification_outcome import (
     RETRY_NEVER,
     apply_outcome,
@@ -68,6 +74,12 @@ METHOD_LABELS = {
 def normalize_result(result: dict[str, Any]) -> dict[str, Any]:
     """Normalize presentation and keep temporary SMTP failures inconclusive."""
     result = dict(result)
+    ensure_email_risk_signals(result)
+    # Remote workers may not have database credentials, so complete their
+    # domain-only enrichment from the server cache. This path never waits on
+    # the public provider; a cold domain is warmed for later results instead.
+    prefetch_disposable_provider(result.get("email"))
+    enrich_disposable_provider(result, allow_network=False)
     ensure_outcome(result)
     detail = str(result.get("smtp_result") or result.get("message") or "")
     detail_lower = detail.lower()
@@ -101,11 +113,11 @@ def normalize_result(result: dict[str, Any]) -> dict[str, Any]:
             checks["smtp"] = False
         display_detail = f"{code} 收件箱容量已满，当前无法接收邮件" if code else "收件箱容量已满，当前无法接收邮件"
     elif result.get("temporary_retries_exhausted"):
-        result["deliverable"] = False
-        result["valid"] = False
+        result["deliverable"] = None
+        result["valid"] = True
         checks = result.get("checks")
         if isinstance(checks, dict):
-            checks["smtp"] = False
+            checks["smtp"] = None
         display_detail = detail
     elif smtp_permanent_status({"smtp_result": detail}):
         result["smtp_raw_result"] = detail
@@ -123,10 +135,31 @@ def normalize_result(result: dict[str, Any]) -> dict[str, Any]:
         if isinstance(checks, dict):
             checks["smtp"] = None
         result["temporary_smtp_code"] = code
-        if is_smtp_greylisted({"smtp_result": detail}):
-            display_detail = f"{code} 邮件服务器临时灰名单，正在重试"
+        retry_scheduled = result.get("retry_state") == "scheduled" and bool(result.get("retry_at"))
+        retry_attempt = int(result.get("retry_attempt") or 0)
+        retry_max_attempts = int(result.get("retry_max_attempts") or settings.temporary_smtp_immediate_retries)
+        if result.get("greylist_retry_exhausted"):
+            display_detail = f"{code} 邮件服务器临时灰名单；自动复核已结束，当前仍无法确认"
+        elif result.get("receiver_throttled_unconfirmed"):
+            display_detail = f"{code} 接收端正在限流；自动复核已结束，当前仍无法确认"
+        elif result.get("temporary_retries_exhausted"):
+            result["deliverable"] = False
+            result["valid"] = False
+            if isinstance(checks, dict):
+                checks["smtp"] = False
+            display_detail = f"{code} 邮件服务器连续 {retry_max_attempts} 次未能确认，当前不可投递"
+        elif result.get("retry_state") == "failed":
+            display_detail = f"{code} 邮件服务器临时拒绝收件；自动复核未完成，建议稍后手动重新验证"
+        elif is_smtp_greylisted({"smtp_result": detail}):
+            display_detail = (
+                f"{code} 邮件服务器临时灰名单；已安排第 {retry_attempt or 1}/{retry_max_attempts} 次自动复核"
+                if retry_scheduled else f"{code} 邮件服务器临时灰名单；当前尚无法确认"
+            )
         else:
-            display_detail = f"{code} 邮件服务器暂时无法确认，正在重试"
+            display_detail = (
+                f"{code} 邮件服务器临时拒绝收件；已安排第 {retry_attempt or 1}/{retry_max_attempts} 次自动复核"
+                if retry_scheduled else f"{code} 邮件服务器临时拒绝收件；当前尚无法确认"
+            )
     elif "mail from" in detail_lower or "helo" in detail_lower:
         display_detail = f"{code} 发送验证受限，不代表该邮箱不存在" if code else "发送验证受限，不代表该邮箱不存在"
     elif code == "250":
@@ -142,6 +175,7 @@ def normalize_result(result: dict[str, Any]) -> dict[str, Any]:
     result["verification_method"] = METHOD_LABELS.get(
         result.get("verification_method"), result.get("verification_method")
     )
+    ensure_email_risk_signals(result)
     return result
 
 
@@ -418,33 +452,50 @@ def enqueue_background_retry(
     emails: list[str],
     attempt: int,
 ) -> None:
-    """Queue a delayed recheck without changing the completed user task state."""
+    """Queue reason-specific rechecks without changing the user task state."""
     if not emails:
         return
-    if job_store.has_active_retry_child(parent.id):
-        return
-    retry_at = utc_now() + timedelta(seconds=settings.temporary_smtp_retry_seconds)
     email_keys = {email.lower() for email in emails}
+    retry_groups: dict[int, list[str]] = {}
     for result in parent.results:
         if str(result.get("email", "")).lower() not in email_keys:
             continue
+        plan = apply_retry_plan(result)
+        delay_seconds = plan.delay_for_attempt(attempt)
+        if delay_seconds is None:
+            finalize_temporary_smtp_results([result])
+            _clear_retry_metadata(result, "completed")
+            continue
+        retry_groups.setdefault(delay_seconds, []).append(str(result["email"]))
         result["retry_state"] = "scheduled"
         result["retry_attempt"] = attempt
-        result["retry_max_attempts"] = settings.temporary_smtp_immediate_retries
-        result["retry_at"] = retry_at.isoformat()
+        result["retry_max_attempts"] = plan.max_attempts
+        result["retry_at"] = (utc_now() + timedelta(seconds=delay_seconds)).isoformat()
     job_store.persist(parent)
-    retry_job = Job(
-        id=uuid.uuid4().hex[:12],
-        emails=emails,
-        worker_count=source.worker_count,
-        owner_id=parent.owner_id,
-        execution_target=source.execution_target,
-        retry_parent_id=parent.id,
-        deferred_retry_at=retry_at,
-        temporary_retry_attempts=attempt,
-    )
-    job_store.add(retry_job)
-    _notify_retry_target(retry_job)
+    active = job_store.retry_children(parent.id)
+    for delay_seconds, group_emails in retry_groups.items():
+        group_keys = {email.lower() for email in group_emails}
+        duplicate = any(
+            child.status in {"queued", "running"}
+            and child.temporary_retry_attempts == attempt
+            and {email.lower() for email in child.emails} == group_keys
+            for child in active
+        )
+        if duplicate:
+            continue
+        retry_at = utc_now() + timedelta(seconds=delay_seconds)
+        retry_job = Job(
+            id=uuid.uuid4().hex[:12],
+            emails=group_emails,
+            worker_count=source.worker_count,
+            owner_id=parent.owner_id,
+            execution_target=source.execution_target,
+            retry_parent_id=parent.id,
+            deferred_retry_at=retry_at,
+            temporary_retry_attempts=attempt,
+        )
+        job_store.add(retry_job)
+        _notify_retry_target(retry_job)
 
 
 def _clear_retry_metadata(result: dict[str, Any], state: str = "completed") -> None:
@@ -508,7 +559,8 @@ def finish_background_retry(job: Job) -> Job | None:
         email = str(result.get("email", ""))
         previous = existing.get(email.lower(), {})
         if is_retryable_smtp_result(result):
-            if job.temporary_retry_attempts >= settings.temporary_smtp_immediate_retries:
+            plan = apply_retry_plan(result)
+            if plan.delay_for_attempt(job.temporary_retry_attempts + 1) is None:
                 finalize_temporary_smtp_results([result])
                 _clear_retry_metadata(result)
             else:
@@ -563,10 +615,16 @@ def finish_background_retry_failure(job: Job, error: str) -> Job | None:
         return None
 
     affected = {email.lower() for email in job.emails}
-    if job.temporary_retry_attempts < settings.temporary_smtp_immediate_retries:
-        enqueue_background_retry(
-            parent, job, job.emails, job.temporary_retry_attempts + 1
-        )
+    retryable = [
+        result
+        for result in parent.results
+        if str(result.get("email", "")).lower() in affected and is_retryable_smtp_result(result)
+    ]
+    if any(
+        apply_retry_plan(result).delay_for_attempt(job.temporary_retry_attempts + 1) is not None
+        for result in retryable
+    ):
+        enqueue_background_retry(parent, job, job.emails, job.temporary_retry_attempts + 1)
         return parent
 
     changed = 0
@@ -581,6 +639,13 @@ def finish_background_retry_failure(job: Job, error: str) -> Job | None:
         result["valid"] = True
         result["smtp_result"] = "邮件服务器暂时无法复核，最终状态仍待确认"
         result["message"] = "邮件服务器暂时无法复核，最终状态仍待确认"
+        apply_outcome(
+            result,
+            stage=str(result.get("failure_stage") or "smtp"),
+            reason="retry_worker_failed",
+            retry_policy=RETRY_NEVER,
+            code=result.get("smtp_code"),
+        )
         result["retry_updated"] = True
         changed += 1
         changed_results.append(result)
@@ -658,6 +723,7 @@ def finalize_temporary_smtp_results(results: list[dict[str, Any]]) -> None:
     for result in results:
         if retry_policy(result) == RETRY_NEVER:
             continue
+        plan = apply_retry_plan(result)
         code = smtp_temporary_status(result)
         if not code:
             result["deliverable"] = None
@@ -684,23 +750,44 @@ def finalize_temporary_smtp_results(results: list[dict[str, Any]]) -> None:
             result.pop("retry_at", None)
             result["smtp_result"] = f"{code} 收件箱容量已满，当前无法接收邮件"
             result["message"] = f"{code} 收件箱容量已满，需要清理容量后才能接收邮件"
+            apply_outcome(
+                result, stage="smtp", reason="mailbox_full", retry_policy=RETRY_NEVER, code=code
+            )
             continue
-        if is_smtp_greylisted(result):
+        if plan.retry_class == "greylist":
             result["deliverable"] = None
             result["valid"] = True
             result["greylist_retry_exhausted"] = True
-            result["message"] = f"{code} 邮件服务器灰名单复核后仍无法确认"
+            result["smtp_result"] = f"{code} 邮件服务器临时灰名单；自动复核已结束，当前仍无法确认"
+            result["message"] = result["smtp_result"]
+            apply_outcome(
+                result, stage="smtp", reason="smtp_greylist_unconfirmed", retry_policy=RETRY_NEVER, code=code
+            )
+            continue
+        if plan.retry_class == "receiver_throttled":
+            result["deliverable"] = None
+            result["valid"] = True
+            result["receiver_throttled_unconfirmed"] = True
+            result["smtp_result"] = f"{code} 接收端正在限流；自动复核已结束，当前仍无法确认"
+            result["message"] = result["smtp_result"]
+            apply_outcome(
+                result, stage="smtp", reason="smtp_receiver_throttled_unconfirmed",
+                retry_policy=RETRY_NEVER, code=code,
+            )
             continue
         raw_detail = str(result.get("smtp_raw_result") or result.get("smtp_result") or "")
         result["smtp_raw_result"] = raw_detail
-        result["deliverable"] = False
-        result["valid"] = False
+        result["deliverable"] = None
+        result["valid"] = True
         checks = result.get("checks")
         if isinstance(checks, dict):
-            checks["smtp"] = False
+            checks["smtp"] = None
         result["temporary_retries_exhausted"] = True
-        result["smtp_result"] = f"{code} 服务器连续 3 次未能确认，当前不可投递"
-        result["message"] = f"{code} 邮件服务器连续 3 次未能确认，当前不可投递"
+        result["smtp_result"] = f"{code} 邮件服务器临时拒绝收件；自动复核已结束，当前仍无法确认"
+        result["message"] = result["smtp_result"]
+        apply_outcome(
+            result, stage="smtp", reason="smtp_temporary_unconfirmed", retry_policy=RETRY_NEVER, code=code
+        )
 
 
 def schedule_remote_temporary_retry(job: Job) -> bool:

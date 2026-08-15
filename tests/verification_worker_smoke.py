@@ -9,6 +9,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import app.core.verification_worker as verification_worker
 from app.core.verification_worker import run_verification_worker
 
 
@@ -36,6 +37,19 @@ progress_queue = Queue()
 email_queue.put(("person@example.com", 4))
 email_queue.put(None)
 
+prefetched: list[str] = []
+enrichment_network_flags: list[bool] = []
+verification_worker.prefetch_disposable_provider = prefetched.append
+original_enrich = verification_worker.enrich_disposable_provider
+
+
+def record_enrichment(result, *, allow_network=True):
+    enrichment_network_flags.append(allow_network)
+    return original_enrich(result, allow_network=allow_network)
+
+
+verification_worker.enrich_disposable_provider = record_enrichment
+
 run_verification_worker(
     3,
     email_queue,
@@ -51,6 +65,9 @@ assert result["email"] == "person@example.com"
 assert result["process_id"] == 3
 assert result["original_index"] == 4
 assert result["dns_cached"] is False
+assert result["timings_ms"]["worker_total"] >= 0
+assert prefetched == ["person@example.com"]
+assert enrichment_network_flags == [False]
 
 progress = []
 while not progress_queue.empty():

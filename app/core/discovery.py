@@ -7,6 +7,21 @@ NAME_PART = re.compile(r"[^a-z0-9]+")
 DOMAIN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$")
 
 
+# Ordered from the most common convention to less frequently observed, but
+# still mainstream, address formats.  Keep this list at 25: discovery jobs
+# are deliberately bounded so one lookup cannot turn into an open-ended
+# guessing batch.
+PERSONAL_LOCAL_FORMATS = (
+    "{first}.{last}", "{first}{last}", "{first}_{last}", "{first}-{last}",
+    "{last}.{first}", "{last}{first}", "{last}_{first}", "{last}-{first}",
+    "{f}.{last}", "{f}{last}", "{f}_{last}", "{f}-{last}",
+    "{first}.{l}", "{first}{l}", "{first}_{l}", "{first}-{l}",
+    "{l}.{first}", "{l}{first}", "{l}_{first}", "{l}-{first}",
+    "{last}.{f}", "{last}{f}", "{last}_{f}", "{last}-{f}",
+    "{f}.{l}",
+)
+
+
 def _name_part(value: str) -> str:
     normalized = NAME_PART.sub("", value.strip().lower())
     if not normalized:
@@ -22,11 +37,10 @@ def candidate_emails(first_name: str, last_name: str, domain: str) -> list[str]:
         raise ValueError("请输入有效的公司域名，例如 company.com")
     f, l = first[0], last[0]
     locals_ = [
-        f"{first}.{last}", f"{first}{last}", f"{first}_{last}", f"{first}-{last}",
-        f"{last}.{first}", f"{last}{first}", f"{last}_{first}", f"{last}-{first}",
-        f"{f}.{last}", f"{f}{last}", f"{f}_{last}", f"{f}-{last}",
-        f"{first}.{l}", f"{first}{l}", f"{first}_{l}", f"{first}-{l}",
-        f"{l}.{first}", f"{l}{first}", f"{l}_{first}", f"{l}-{first}",
-        first, last, f"{first}.{last[0]}", f"{last}.{first[0]}",
+        pattern.format(first=first, last=last, f=f, l=l)
+        for pattern in PERSONAL_LOCAL_FORMATS
     ]
+    # Short single-character names can make two otherwise distinct patterns
+    # render to the same local part. Preserve order while never verifying one
+    # email address twice.
     return list(dict.fromkeys(f"{local}@{domain}" for local in locals_))
