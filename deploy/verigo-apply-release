@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+role=${1:-}
+release_dir=${2:-}
+maintenance=${3:-false}
+
+case "$role" in
+    shanghai-app|hong-kong-edge-worker) ;;
+    *) echo "invalid deployment role" >&2; exit 2 ;;
+esac
+case "$maintenance" in true|false) ;; *) echo "invalid maintenance mode" >&2; exit 2 ;; esac
+
+resolved_release=$(readlink -f -- "$release_dir")
+case "$resolved_release" in
+    /tmp/verigo-release) ;;
+    *) echo "invalid release directory" >&2; exit 2 ;;
+esac
+
+test -f "$resolved_release/.verigo-release"
+test -f "$resolved_release/deploy/release.sh"
+
+exec env \
+    VERIGO_DEPLOY_ROLE="$role" \
+    VERIGO_RELEASE_DIR="$resolved_release" \
+    VERIGO_DEPLOY_MAINTENANCE="$maintenance" \
+    bash "$resolved_release/deploy/release.sh"

@@ -56,12 +56,12 @@ try {
     git -C $repoRoot archive --format=tar.gz --output=$archive HEAD
     if ($LASTEXITCODE -ne 0) { throw "Could not create the release archive." }
 
-    & $ssh @sshOptions $remote "sudo -n rm -rf -- $ReleaseRoot; sudo -n install -d -m 700 -o $UserName -g $UserName $ReleaseRoot"
+    & $ssh @sshOptions $remote "rm -rf -- $ReleaseRoot; install -d -m 700 $ReleaseRoot"
     if ($LASTEXITCODE -ne 0) { throw "Could not prepare the remote release directory." }
     & $scp @sshOptions $archive "${remote}:$ReleaseRoot/release.tar.gz"
     if ($LASTEXITCODE -ne 0) { throw "Could not upload the release archive." }
-    $maintenanceEnv = if ($Maintenance) { "VERIGO_DEPLOY_MAINTENANCE=true " } else { "" }
-    & $ssh @sshOptions $remote "tar -xzf $ReleaseRoot/release.tar.gz -C $ReleaseRoot; printf '%s\n' $version > $ReleaseRoot/.verigo-release; sudo -n env ${maintenanceEnv}VERIGO_DEPLOY_ROLE=$Role VERIGO_RELEASE_DIR=$ReleaseRoot bash $ReleaseRoot/deploy/release.sh"
+    $maintenanceValue = if ($Maintenance) { "true" } else { "false" }
+    & $ssh @sshOptions $remote "tar -xzf $ReleaseRoot/release.tar.gz -C $ReleaseRoot; printf '%s\n' $version > $ReleaseRoot/.verigo-release; sudo -n /usr/local/sbin/verigo-apply-release $Role $ReleaseRoot $maintenanceValue"
     if ($LASTEXITCODE -ne 0) { throw "Release failed; the server rollback was attempted." }
 } finally {
     Remove-Item -LiteralPath $archive -Force -ErrorAction SilentlyContinue

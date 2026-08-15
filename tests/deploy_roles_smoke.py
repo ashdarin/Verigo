@@ -8,10 +8,14 @@ publish = (deploy / "publish.ps1").read_text(encoding="utf-8")
 
 assert "VERIGO_DEPLOY_ROLE must be" in release
 assert "shanghai-app|hong-kong-edge-worker" in release
-assert "VERIGO_DEPLOY_ROLE=$Role" in publish
+assert "verigo-apply-release $Role $ReleaseRoot $maintenanceValue" in publish
 assert '[ValidateSet("shanghai-app", "hong-kong-edge-worker")]' in publish
 assert "status --porcelain" in publish
 assert "clean Git working tree" in publish
+release_wrapper = (deploy / "verigo-apply-release").read_text(encoding="utf-8")
+assert "shanghai-app|hong-kong-edge-worker" in release_wrapper
+assert "/tmp/verigo-release" in release_wrapper
+assert "VERIGO_DEPLOY_ROLE" in release_wrapper
 assert "VERIGO_MONITOR_PROVIDER_PRESSURE_LAST_60_SECONDS" in (
     deploy / "verigo-monitor.env.example"
 ).read_text(encoding="utf-8")
