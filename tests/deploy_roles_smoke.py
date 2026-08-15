@@ -19,6 +19,11 @@ assert "VERIGO_DEPLOY_ROLE" in release_wrapper
 assert "VERIGO_MONITOR_PROVIDER_PRESSURE_LAST_60_SECONDS" in (
     deploy / "verigo-monitor.env.example"
 ).read_text(encoding="utf-8")
+monitor = (deploy / "verigo-monitor.sh").read_text(encoding="utf-8")
+assert "VERIGO_MONITOR_READINESS_URL" in monitor
+assert "VERIGO_MONITOR_POSTGRES_TUNNEL_UNIT" in monitor
+assert "verigo-monitor-probe/results" in monitor
+assert "VERIGO_MONITOR_ASSET_MARKER" in monitor
 assert "OnUnitActiveSec=1m" in (deploy / "verigo-monitor.timer").read_text(encoding="utf-8")
 
 assert "disable_units caddy verigo-monitor.timer" in release

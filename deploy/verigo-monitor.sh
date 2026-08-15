@@ -14,6 +14,12 @@ disk_limit=${VERIGO_MONITOR_DISK_PERCENT:-85}
 backup_max_age_hours=${VERIGO_MONITOR_BACKUP_MAX_AGE_HOURS:-27}
 queue_limit=${VERIGO_MONITOR_QUEUE_LIMIT:-10}
 provider_pressure_limit=${VERIGO_MONITOR_PROVIDER_PRESSURE_LAST_60_SECONDS:-1}
+public_base_url=${VERIGO_MONITOR_PUBLIC_BASE_URL:-https://verigo.site}
+readiness_url=${VERIGO_MONITOR_READINESS_URL:-http://127.0.0.1:18000/api/internal/readiness}
+postgres_tunnel_port=${VERIGO_MONITOR_POSTGRES_TUNNEL_PORT:-15433}
+postgres_tunnel_unit=${VERIGO_MONITOR_POSTGRES_TUNNEL_UNIT:-verigo-postgres-worker-tunnel}
+check_local_backup=${VERIGO_MONITOR_CHECK_LOCAL_BACKUP:-0}
+asset_marker=${VERIGO_MONITOR_ASSET_MARKER:-risk-signals-v3}
 mkdir -p "$state_dir"
 
 issues=()
@@ -21,13 +27,13 @@ public_health_payload=
 readiness_payload=
 # Local PostgreSQL tunnel bind only. Never print DSN / DATABASE_URL / env.
 tunnel_down=0
-if ! ss -lnt 2>/dev/null | awk '$1 ~ /LISTEN/ && $4 == "127.0.0.1:15432" { found=1 } END { exit !found }'; then
-    logger -t verigo-monitor -- "postgres ssh tunnel is not listening on 127.0.0.1:15432"
-    issues+=("postgres ssh tunnel is not listening on 127.0.0.1:15432")
+if ! ss -lnt 2>/dev/null | awk -v port="$postgres_tunnel_port" '$1 ~ /LISTEN/ && $4 == "127.0.0.1:" port { found=1 } END { exit !found }'; then
+    logger -t verigo-monitor -- "postgres ssh tunnel is not listening on 127.0.0.1:${postgres_tunnel_port}"
+    issues+=("postgres ssh tunnel is not listening on 127.0.0.1:${postgres_tunnel_port}")
     tunnel_down=1
 fi
 
-if ! public_health_payload=$(curl -fsS --max-time 12 https://verigo.site/api/health); then
+if ! public_health_payload=$(curl -fsS --max-time 12 "${public_base_url}/api/health"); then
     issues+=("public health endpoint is unavailable")
 else
     monitor_token=$(sed -n 's/^VERIGO_MONITOR_TOKEN=//p' /etc/verigo/verigo.env | tail -n 1)
@@ -35,9 +41,27 @@ else
         issues+=("monitor token is not configured")
     elif ! readiness_payload=$(curl -fsS --max-time 12 \
         -H "X-Verigo-Monitor-Token: ${monitor_token}" \
-        http://127.0.0.1:8000/api/internal/readiness); then
+        "$readiness_url"); then
         issues+=("internal readiness endpoint is unavailable")
     fi
+fi
+
+# These probes only validate public routing and asset publication. They never
+# create an account, submit a job, or change user-visible analytics.
+if ! verify_page=$(curl -fsS --max-time 12 "${public_base_url}/verify"); then
+    issues+=("verification workspace is unavailable")
+elif [[ -n "$asset_marker" ]] && ! grep -Fq "$asset_marker" <<<"$verify_page"; then
+    issues+=("verification workspace is serving an unexpected asset version")
+fi
+
+auth_status=$(curl -sS --max-time 12 -o /dev/null -w '%{http_code}' "${public_base_url}/api/auth/me" || true)
+if [[ "$auth_status" != "401" ]]; then
+    issues+=("anonymous session endpoint returned HTTP ${auth_status:-000}")
+fi
+result_status=$(curl -sS --max-time 12 -o /dev/null -w '%{http_code}' \
+    "${public_base_url}/api/jobs/verigo-monitor-probe/results" || true)
+if [[ "$result_status" != "404" ]]; then
+    issues+=("result route probe returned HTTP ${result_status:-000}")
 fi
 
 if [[ -n "$readiness_payload" ]]; then
@@ -97,8 +121,8 @@ then
     issues+=("database is not writable")
 fi
 
-if ! systemctl is-active --quiet verigo-postgres-tunnel; then
-    issues+=("verigo-postgres-tunnel unit is not active")
+if ! systemctl is-active --quiet "$postgres_tunnel_unit"; then
+    issues+=("${postgres_tunnel_unit} unit is not active")
 fi
 
 disk_used=$(df -P / | awk 'NR==2 {gsub("%", "", $5); print $5}')
@@ -106,9 +130,11 @@ if (( disk_used >= disk_limit )); then
     issues+=("disk usage is ${disk_used}%")
 fi
 
-backup_success=/var/lib/verigo-backup/last-success
-if [[ ! -f "$backup_success" ]] || (( $(date +%s) - $(stat -c %Y "$backup_success") > backup_max_age_hours * 3600 )); then
-    issues+=("latest completed backup is older than ${backup_max_age_hours} hours")
+if [[ "$check_local_backup" == "1" ]]; then
+    backup_success=/var/lib/verigo-backup/last-success
+    if [[ ! -f "$backup_success" ]] || (( $(date +%s) - $(stat -c %Y "$backup_success") > backup_max_age_hours * 3600 )); then
+        issues+=("latest completed backup is older than ${backup_max_age_hours} hours")
+    fi
 fi
 
 if [[ -n "$readiness_payload" ]] && (( queued >= queue_limit )); then
