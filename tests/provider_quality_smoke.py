@@ -55,6 +55,7 @@ def main() -> int:
     assert any("job.parent_id IS NULL" in query for query in connection.queries)
     assert any("PERCENTILE_CONT" in query for query in connection.queries)
     assert any("result.retry_at IS NOT NULL" in query for query in connection.queries)
+    assert "baseline" not in quality
     print("provider quality smoke: ok")
     return 0
 

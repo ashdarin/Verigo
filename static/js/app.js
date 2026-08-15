@@ -461,14 +461,26 @@ function renderProviderQuality(quality) {
     other: "\u5176\u4ed6\u90ae\u7bb1",
   };
   const rows = Array.isArray(quality?.providers) ? quality.providers : [];
+  const baselineRows = Array.isArray(quality?.baseline?.providers) ? quality.baseline.providers : [];
+  const baselineByProvider = new Map(baselineRows.map((item) => [item.provider, item]));
   const rate = (value) => value == null ? "\u2014" : `${Number(value).toFixed(1)}%`;
   body.innerHTML = rows.map((item) => {
     const processed = Math.max(0, Number(item.processed) || 0);
+    const baseline = baselineByProvider.get(item.provider) || {};
+    const usableDays = Math.max(0, Number(baseline.usable_days) || 0);
+    const baselineDays = Math.max(1, Number(baseline.days) || 7);
     const duration = processed
       ? `${formatDuration(item.p50_seconds)} / ${formatDuration(item.p95_seconds)}`
       : "\u2014";
-    return `<tr><th scope="row">${labels[item.provider] || labels.other}</th><td>${processed.toLocaleString("zh-CN")}</td><td>${rate(item.deliverable_rate)}</td><td>${rate(item.unconfirmed_rate)}</td><td>${rate(item.review_completion_rate)}</td><td>${duration}</td></tr>`;
-  }).join("") || '<tr><td colspan="6" class="provider-quality-empty">\u6700\u8fd1 24 \u5c0f\u65f6\u6682\u65e0\u5df2\u5b8c\u6210\u7ed3\u679c</td></tr>';
+    const reference = baseline.baseline_unconfirmed_rate == null
+      ? "\u2014"
+      : `${rate(baseline.baseline_unconfirmed_rate)} / ${formatDuration(baseline.baseline_p95_seconds)}`;
+    const suggestion = baseline.ready
+      ? `${rate(baseline.suggested_unconfirmed_percent)} / ${formatDuration(baseline.suggested_p95_seconds)}`
+      : "\u5f85\u6570\u636e\u5145\u8db3";
+    const readiness = `${usableDays}/${baselineDays} ${baseline.ready ? "\u53ef\u6821\u51c6" : "\u91c7\u96c6\u4e2d"}`;
+    return `<tr><th scope="row">${labels[item.provider] || labels.other}</th><td>${processed.toLocaleString("zh-CN")}</td><td>${rate(item.deliverable_rate)}</td><td>${rate(item.unconfirmed_rate)}</td><td>${rate(item.review_completion_rate)}</td><td>${duration}</td><td>${readiness}</td><td>${reference}</td><td>${suggestion}</td></tr>`;
+  }).join("") || '<tr><td colspan="9" class="provider-quality-empty">\u6700\u8fd1 24 \u5c0f\u65f6\u6682\u65e0\u5df2\u5b8c\u6210\u7ed3\u679c</td></tr>';
 }
 
 async function loadDashboardMetrics() {

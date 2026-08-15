@@ -18,7 +18,7 @@
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" referrerpolicy="no-referrer">
   <link rel="stylesheet" href="/static/css/app.css?v=admin-grid-flow-v3">
-  <link rel="stylesheet" href="/static/css/product.css?v=admin-quality-v1">
+  <link rel="stylesheet" href="/static/css/product.css?v=quality-baseline-v1">
 </head>
 <body class="product-surface">
   <header class="topbar">
@@ -402,13 +402,13 @@
 
     <section class="report-card provider-quality-card" aria-labelledby="provider-quality-heading">
       <div class="report-card-heading">
-        <div><h2 id="provider-quality-heading">邮箱服务商质量</h2><p>最近 24 小时已完成的验证结果</p></div>
-        <span>按邮箱服务商</span>
+        <div><h2 id="provider-quality-heading">邮箱服务商质量</h2><p>最近 24 小时表现与七日稳定参考</p></div>
+        <span>建议线仅供管理员确认</span>
       </div>
       <div class="provider-quality-table-wrap">
         <table class="provider-quality-table">
-          <thead><tr><th scope="col">服务商</th><th scope="col">已处理</th><th scope="col">可投递率</th><th scope="col">无法确认率</th><th scope="col">复核完成率</th><th scope="col">p50 / p95 耗时</th></tr></thead>
-          <tbody id="provider-quality-body"><tr><td colspan="6" class="provider-quality-empty">正在加载质量数据</td></tr></tbody>
+          <thead><tr><th scope="col">服务商</th><th scope="col">24h 已处理</th><th scope="col">可投递率</th><th scope="col">无法确认率</th><th scope="col">复核完成率</th><th scope="col">p50 / p95 耗时</th><th scope="col">有效天数</th><th scope="col">七日参考</th><th scope="col">建议告警线</th></tr></thead>
+          <tbody id="provider-quality-body"><tr><td colspan="9" class="provider-quality-empty">正在加载质量数据</td></tr></tbody>
         </table>
       </div>
     </section>
@@ -657,6 +657,6 @@
   </dialog>
 
   <script src="/static/js/i18n.js?v=locale-v2" defer></script>
-  <script src="/static/js/app.js?v=risk-signals-v3" defer></script>
+  <script src="/static/js/app.js?v=quality-baseline-v1" defer></script>
 </body>
 </html>

@@ -8,6 +8,7 @@ import threading
 from collections import defaultdict
 from contextlib import closing
 from datetime import timedelta
+from statistics import median
 from zoneinfo import ZoneInfo
 
 from app.config import settings
@@ -27,6 +28,9 @@ BOT_USER_AGENT = re.compile(
     r"bot|crawler|spider|slurp|curl|wget|python|headless|lighthouse|facebookexternalhit|preview",
     re.IGNORECASE,
 )
+
+QUALITY_BASELINE_DAYS = 7
+QUALITY_BASELINE_MIN_DAILY_SAMPLE = 50
 
 
 class MetricsStore:
@@ -383,8 +387,114 @@ class MetricsStore:
         with closing(self._connect()) as connection:
             return self._provider_quality(connection, cutoff_bind)
 
+    @staticmethod
+    def _provider_quality_baseline(connection, start, end) -> dict[str, object]:
+        """Build a conservative seven-day provider baseline for administrators.
+
+        Daily buckets are kept separate so a high-volume day cannot hide a
+        short outage.  A day enters the baseline only after the minimum sample
+        count is met; the median of those days is used for the suggested alert
+        line.  This is intentionally not part of ``quality_snapshot`` because
+        the edge monitor should keep its one-minute query bounded to 24 hours.
+        """
+        if postgres_active():
+            provider = """
+                CASE
+                    WHEN LOWER(SPLIT_PART(result.email, '@', 2)) IN ('gmail.com', 'googlemail.com') THEN 'gmail'
+                    WHEN LOWER(SPLIT_PART(result.email, '@', 2)) IN ('outlook.com', 'hotmail.com', 'live.com', 'msn.com') THEN 'microsoft'
+                    WHEN LOWER(SPLIT_PART(result.email, '@', 2)) IN ('qq.com', 'foxmail.com', 'vip.qq.com') THEN 'qq'
+                    ELSE 'other'
+                END
+            """
+            day_bucket = "TO_CHAR(result.updated_at AT TIME ZONE 'Asia/Shanghai', 'YYYY-MM-DD')"
+            duration = "GREATEST(0, EXTRACT(EPOCH FROM (result.updated_at - COALESCE(job.started_at, job.created_at))))"
+            skipped = "result.is_skipped IS TRUE"
+            p95 = "PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY duration_seconds)"
+        else:
+            provider = """
+                CASE
+                    WHEN LOWER(SUBSTR(result.email, INSTR(result.email, '@') + 1)) IN ('gmail.com', 'googlemail.com') THEN 'gmail'
+                    WHEN LOWER(SUBSTR(result.email, INSTR(result.email, '@') + 1)) IN ('outlook.com', 'hotmail.com', 'live.com', 'msn.com') THEN 'microsoft'
+                    WHEN LOWER(SUBSTR(result.email, INSTR(result.email, '@') + 1)) IN ('qq.com', 'foxmail.com', 'vip.qq.com') THEN 'qq'
+                    ELSE 'other'
+                END
+            """
+            day_bucket = "SUBSTR(result.updated_at, 1, 10)"
+            duration = "MAX(0, (julianday(result.updated_at) - julianday(COALESCE(job.started_at, job.created_at))) * 86400)"
+            skipped = "COALESCE(result.is_skipped, 0)=1"
+            # SQLite is retained for local tooling.  It still produces the
+            # rate baseline; percentile latency is available in PostgreSQL.
+            p95 = "0"
+
+        rows = connection.execute(
+            f"""
+            WITH recent AS (
+                SELECT
+                    {day_bucket} AS day,
+                    {provider} AS provider,
+                    result.deliverability,
+                    {skipped} AS is_skipped,
+                    {duration} AS duration_seconds
+                FROM job_results AS result
+                JOIN jobs AS job ON job.id=result.job_id
+                WHERE result.updated_at >= ? AND result.updated_at < ?
+                    AND result.progress_state IN ('completed', 'failed')
+                    AND job.parent_id IS NULL AND job.retry_parent_id IS NULL
+            )
+            SELECT day, provider, COUNT(*),
+                COALESCE(SUM(CASE WHEN deliverability IS NULL AND NOT is_skipped THEN 1 ELSE 0 END), 0),
+                {p95}
+            FROM recent
+            GROUP BY day, provider
+            ORDER BY day, provider
+            """,
+            (start, end),
+        ).fetchall()
+
+        by_provider: dict[str, list[tuple[float, float | None]]] = defaultdict(list)
+        for day, provider, processed, unconfirmed, p95_seconds in rows:
+            del day
+            processed = int(processed)
+            if processed < QUALITY_BASELINE_MIN_DAILY_SAMPLE:
+                continue
+            by_provider[str(provider)].append((
+                float(unconfirmed) * 100 / processed,
+                float(p95_seconds) if postgres_active() and p95_seconds is not None else None,
+            ))
+
+        providers = []
+        for key in ("gmail", "microsoft", "qq", "other"):
+            samples = by_provider.get(key, [])
+            rates = [sample[0] for sample in samples]
+            durations = [sample[1] for sample in samples if sample[1] is not None]
+            rate_baseline = round(float(median(rates)), 1) if rates else None
+            duration_baseline = round(float(median(durations))) if durations else None
+            providers.append({
+                "provider": key,
+                "usable_days": len(samples),
+                "days": QUALITY_BASELINE_DAYS,
+                "ready": len(samples) >= 5,
+                "baseline_unconfirmed_rate": rate_baseline,
+                "baseline_p95_seconds": duration_baseline,
+                "suggested_unconfirmed_percent": (
+                    round(min(100.0, rate_baseline + max(2.0, rate_baseline * 0.5)), 1)
+                    if rate_baseline is not None else None
+                ),
+                "suggested_p95_seconds": (
+                    round(duration_baseline + max(30, duration_baseline * 0.5))
+                    if duration_baseline is not None else None
+                ),
+            })
+        return {
+            "window_days": QUALITY_BASELINE_DAYS,
+            "minimum_daily_sample": QUALITY_BASELINE_MIN_DAILY_SAMPLE,
+            "providers": providers,
+            "note": "建议线仅供管理员确认，不会自动修改告警阈值。",
+        }
+
     def snapshot(self) -> dict[str, object]:
         self.initialize()
+        now = utc_now()
         today = self._day()
         start = utc_now() - timedelta(days=13)
         days = [
@@ -503,9 +613,18 @@ class MetricsStore:
                 """,
                 (bounce_cutoff, bounce_cutoff, days[0]),
             ).fetchall()
-            quality_cutoff = utc_now() - timedelta(hours=24)
+            quality_cutoff = now - timedelta(hours=24)
             quality_cutoff_bind = quality_cutoff if postgres_active() else quality_cutoff.isoformat()
             provider_quality = self._provider_quality(connection, quality_cutoff_bind)
+            baseline_end = now.astimezone(ZoneInfo("Asia/Shanghai")).replace(
+                hour=0, minute=0, second=0, microsecond=0
+            ).astimezone(ZoneInfo("UTC"))
+            baseline_start = baseline_end - timedelta(days=QUALITY_BASELINE_DAYS)
+            baseline_start_bind = baseline_start if postgres_active() else baseline_start.isoformat()
+            baseline_end_bind = baseline_end if postgres_active() else baseline_end.isoformat()
+            provider_quality["baseline"] = self._provider_quality_baseline(
+                connection, baseline_start_bind, baseline_end_bind
+            )
 
         daily_by_day: dict[str, dict[str, int]] = defaultdict(lambda: {"page_views": 0, "unique_visitors": 0})
         for day, page_views, unique_visitors in daily_rows:

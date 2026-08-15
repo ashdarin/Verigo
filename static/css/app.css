@@ -395,7 +395,7 @@ th:nth-child(1) { width: 28%; } th:nth-child(2) { width: 14%; } th:nth-child(3) 
 .operations-footer { margin-top: 17px; }.service-ready { color: #188038 !important; }
 .provider-quality-card { margin-top:18px; }
 .provider-quality-table-wrap { overflow-x:auto; border:1px solid #edf0f2; }
-.provider-quality-table { width:100%; min-width:760px; border-collapse:collapse; font-variant-numeric:tabular-nums; }
+.provider-quality-table { width:100%; min-width:1120px; border-collapse:collapse; font-variant-numeric:tabular-nums; }
 .provider-quality-table th, .provider-quality-table td { padding:13px 15px; border-bottom:1px solid #edf0f2; color:#3c4043; font-size:12px; text-align:right; white-space:nowrap; }
 .provider-quality-table thead th { background:#f8faf9; color:#5f6368; font-size:11px; font-weight:600; }
 .provider-quality-table th:first-child, .provider-quality-table td:first-child { text-align:left; }
