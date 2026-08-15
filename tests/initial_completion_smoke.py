@@ -61,6 +61,24 @@ def main() -> int:
         ).fetchone()
     assert reviewed_initial == initial
     assert reviewed_update > first_update
+
+    failed_job = Job(
+        id="failed-before-claim",
+        emails=["failed@example.com"],
+        worker_count=1,
+        execution_target="unavailable-target",
+    )
+    store.add(failed_job)
+    assert store.fail_queued_target("unavailable-target", "worker unavailable") == 1
+    with store._connect() as connection:
+        failed_initial, failed_update, failed_payload = connection.execute(
+            """SELECT initial_completed_at, updated_at, result_json
+            FROM job_results WHERE job_id=?""",
+            (failed_job.id,),
+        ).fetchone()
+    assert failed_initial == failed_update
+    assert '"progress_state": "failed"' in failed_payload
+    assert '"message": "worker unavailable"' in failed_payload
     print("initial completion smoke: ok")
     return 0
 

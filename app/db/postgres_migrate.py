@@ -53,6 +53,13 @@ def iter_sqlite_rows(conn: sqlite3.Connection, table: TableDef):
             item = {name: None for name in col_names}
             for name in select_cols:
                 item[name] = row[name]
+            if (
+                table.name == "job_results"
+                and not item.get("initial_completed_at")
+                and str(item.get("progress_state") or "").lower()
+                in {"completed", "failed", "stopped"}
+            ):
+                item["initial_completed_at"] = item.get("updated_at")
             yield item
 
 
@@ -149,6 +156,16 @@ def schema_creation_order(tables: Iterable[str]) -> tuple[str, ...]:
     return tuple(ordered)
 
 
+def _add_column_sql(table: TableDef, column_name: str) -> str:
+    column = next(column for column in table.columns if column.name == column_name)
+    piece = f'ALTER TABLE "{table.name}" ADD COLUMN IF NOT EXISTS "{column.name}" {column.type}'
+    if column.default is not None:
+        piece += f" DEFAULT {column.default}"
+    if not column.nullable:
+        piece += " NOT NULL"
+    return piece
+
+
 def ensure_schema(pg_dsn: str, tables: Iterable[str], *, recreate: bool = False) -> None:
     with pg_connection(pg_dsn) as conn:
         with conn.cursor() as cur:
@@ -157,6 +174,9 @@ def ensure_schema(pg_dsn: str, tables: Iterable[str], *, recreate: bool = False)
                 if recreate:
                     cur.execute(f'DROP TABLE IF EXISTS "{table.name}" CASCADE')
                 cur.execute(create_table_sql(table))
+                if not recreate:
+                    for column in table.columns:
+                        cur.execute(_add_column_sql(table, column.name))
                 for stmt in create_indexes_sql(table):
                     cur.execute(stmt)
 
@@ -174,7 +194,15 @@ def _upsert_sql(table: TableDef, col_names: list[str]) -> str:
     conflict = ", ".join(f'"{name}"' for name in table.primary_key)
     non_pk = [name for name in col_names if name not in table.primary_key]
     if non_pk:
-        assignments = ", ".join(f'"{name}" = EXCLUDED."{name}"' for name in non_pk)
+        assignments = ", ".join(
+            (
+                '"initial_completed_at" = COALESCE('
+                '"job_results"."initial_completed_at", EXCLUDED."initial_completed_at")'
+            )
+            if table.name == "job_results" and name == "initial_completed_at"
+            else f'"{name}" = EXCLUDED."{name}"'
+            for name in non_pk
+        )
         return (
             f'INSERT INTO "{table.name}" ({quoted_cols}) VALUES ({placeholders}) '
             f"ON CONFLICT ({conflict}) DO UPDATE SET {assignments}"

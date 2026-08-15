@@ -2450,6 +2450,7 @@ class JobStore:
             for job_id, _parent_id, emails_json, results_json in queued:
                 emails = _json_load(emails_json)
                 results = _json_load(results_json)
+                failed_results = []
                 by_email = {
                     str(result.get("email", "")).lower(): result
                     for result in results
@@ -2470,15 +2471,12 @@ class JobStore:
                         "deliverable": None,
                         "valid": None,
                     })
+                    failed_results.append(result)
                 connection.execute(
                     "UPDATE jobs SET results_json=? WHERE id=?",
                     (json.dumps(results, ensure_ascii=False), job_id),
                 )
-            connection.execute("""
-                UPDATE job_results SET progress_state='failed'
-                WHERE job_id IN (SELECT id FROM jobs WHERE execution_target=? AND status='queued')
-                    AND progress_state IN ('pending', 'verifying')
-            """, (target,))
+                self._upsert_results(connection, str(job_id), failed_results)
             failed = connection.execute(
                 """
                 UPDATE jobs SET status='failed', error=?, finished_at=?,

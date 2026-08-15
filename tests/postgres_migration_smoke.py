@@ -13,7 +13,10 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from app.db.postgres_migrate import (  # noqa: E402
+    _add_column_sql,
+    _upsert_sql,
     fetch_sqlite_rows,
+    iter_sqlite_rows,
     normalize_rows,
     open_sqlite,
     schema_creation_order,
@@ -207,6 +210,45 @@ def test_schema_creation_order_places_foreign_key_parents_first() -> None:
                 assert positions[foreign_key.ref_table] < positions[name]
 
 
+def test_job_results_additive_upgrade_preserves_initial_completion() -> None:
+    table = require_registered("job_results")
+    add_column = _add_column_sql(table, "initial_completed_at")
+    assert add_column == (
+        'ALTER TABLE "job_results" ADD COLUMN IF NOT EXISTS '
+        '"initial_completed_at" timestamptz'
+    )
+    upsert = _upsert_sql(table, [column.name for column in table.columns])
+    assert (
+        '"initial_completed_at" = COALESCE('
+        '"job_results"."initial_completed_at", EXCLUDED."initial_completed_at")'
+    ) in upsert
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "legacy-results.db"
+        connection = sqlite3.connect(path)
+        connection.executescript(
+            """
+            CREATE TABLE job_results (
+                job_id TEXT NOT NULL,
+                original_index INTEGER NOT NULL,
+                email TEXT NOT NULL,
+                progress_state TEXT NOT NULL,
+                result_json TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY(job_id, original_index)
+            );
+            INSERT INTO job_results VALUES (
+                'legacy', 0, 'legacy@example.com', 'completed', '{}',
+                '2026-08-15T00:00:00+00:00'
+            );
+            """
+        )
+        connection.row_factory = sqlite3.Row
+        row = next(iter_sqlite_rows(connection, table))
+        connection.close()
+    assert row["initial_completed_at"] == row["updated_at"]
+
+
 def test_dry_run_cli() -> None:
     import subprocess
 
@@ -242,6 +284,7 @@ def main() -> int:
         test_jobs_content_digest_matches_pg_shaped_row,
         test_json_canonical_float_and_key_order,
         test_schema_creation_order_places_foreign_key_parents_first,
+        test_job_results_additive_upgrade_preserves_initial_completion,
         test_dry_run_cli,
     ):
         try:

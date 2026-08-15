@@ -1,4 +1,4 @@
-"""Apply additive PostgreSQL indexes needed by the administrator quality view."""
+"""Apply additive PostgreSQL schema needed by the administrator quality view."""
 from __future__ import annotations
 
 from app.db.postgresql import connect, resolve_database_url
@@ -32,6 +32,7 @@ def main() -> int:
     # retried safely because PostgreSQL retains the completed index by name.
     with connect(resolve_database_url(), autocommit=True) as connection:
         with connection.cursor() as cursor:
+            cursor.execute("SET statement_timeout = 0")
             cursor.execute(
                 "ALTER TABLE job_results "
                 "ADD COLUMN IF NOT EXISTS initial_completed_at timestamptz"
@@ -44,6 +45,21 @@ def main() -> int:
                 if changed == 0:
                     break
             for name, columns in QUALITY_DASHBOARD_INDEXES:
+                cursor.execute(
+                    """SELECT index.indisvalid
+                    FROM pg_index AS index
+                    JOIN pg_class AS relation ON relation.oid=index.indexrelid
+                    JOIN pg_namespace AS namespace ON namespace.oid=relation.relnamespace
+                    WHERE namespace.nspname=current_schema() AND relation.relname=%s""",
+                    (name,),
+                )
+                status = cursor.fetchone()
+                valid = (
+                    status.get("indisvalid") if isinstance(status, dict)
+                    else status[0] if status else None
+                )
+                if status is not None and not bool(valid):
+                    cursor.execute(f'DROP INDEX CONCURRENTLY IF EXISTS "{name}"')
                 cursor.execute(
                     "CREATE INDEX CONCURRENTLY IF NOT EXISTS "
                     f"{name} ON job_results ({columns})"
