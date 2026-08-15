@@ -1,15 +1,14 @@
 from __future__ import annotations
 
-import json
 import os
-import re
 import socket
-import subprocess
 import sys
 import threading
 import time
 from datetime import datetime, timezone
 from typing import Any
+
+import httpx
 
 from app.config import settings
 from app.core.legacy import create_verifier
@@ -37,6 +36,12 @@ WORKER_ID = os.getenv(
 POLL_SECONDS = max(0.1, float(os.getenv("VERIGO_TENCENT_QQ_POLL_SECONDS", "0.25")))
 RETRY_SECONDS = max(1.0, float(os.getenv("VERIGO_TENCENT_QQ_RETRY_SECONDS", "5")))
 WORKER_CAPACITY = max(1, int(os.getenv("VERIGO_REMOTE_WORKER_CAPACITY", "1")))
+# A long-poll records the node heartbeat once per wait window instead of once
+# per local poll interval. This keeps idle worker fleets from contending on
+# ``worker_nodes`` while preserving immediate claims when work is queued.
+CLAIM_WAIT_SECONDS = min(
+    25, max(1, int(os.getenv("VERIGO_REMOTE_WORKER_CLAIM_WAIT_SECONDS", "20")))
+)
 PARENT_TIMEOUT_GRACE_SECONDS = 15
 
 
@@ -46,46 +51,76 @@ class WorkerRequestError(RuntimeError):
         self.retryable = retryable
 
 
-TRANSIENT_CURL_EXIT_CODES = frozenset({5, 6, 7, 18, 28, 52, 55, 56})
-WORKER_REQUEST_ATTEMPTS = 4
+# Worker API deploys can briefly take the upstream out of rotation while the
+# public site stays available. Keep an in-flight lease callback alive through
+# that window so results already acknowledged by ``/results`` still receive
+# their matching ``/complete`` callback.
+WORKER_REQUEST_ATTEMPTS = 8
+WORKER_REQUEST_RETRY_MAX_SECONDS = 12
+TRANSIENT_HTTP_STATUS_CODES = frozenset({408, 429, 500, 502, 503, 504})
+_REQUEST_CLIENT: httpx.Client | None = None
+_REQUEST_CLIENT_PID = 0
+_REQUEST_CLIENT_LOCK = threading.Lock()
+
+
+def _reset_request_client_after_fork() -> None:
+    """Discard inherited HTTP state without touching a parent-owned pool."""
+    global _REQUEST_CLIENT, _REQUEST_CLIENT_PID, _REQUEST_CLIENT_LOCK
+    _REQUEST_CLIENT = None
+    _REQUEST_CLIENT_PID = 0
+    _REQUEST_CLIENT_LOCK = threading.Lock()
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_reset_request_client_after_fork)
+
+
+def _request_client() -> httpx.Client:
+    """Reuse worker API connections without sharing a pool across a fork."""
+    global _REQUEST_CLIENT, _REQUEST_CLIENT_PID
+    pid = os.getpid()
+    with _REQUEST_CLIENT_LOCK:
+        if _REQUEST_CLIENT is None or _REQUEST_CLIENT_PID != pid:
+            if _REQUEST_CLIENT is not None:
+                _REQUEST_CLIENT.close()
+            _REQUEST_CLIENT = httpx.Client(
+                base_url=SERVER_URL,
+                headers={
+                    "Content-Type": "application/json",
+                    "X-Verigo-Worker-Token": TOKEN,
+                    "X-Verigo-Worker-Id": WORKER_ID,
+                    "X-Verigo-Worker-Capacity": str(WORKER_CAPACITY),
+                },
+                timeout=httpx.Timeout(75, connect=10),
+                limits=httpx.Limits(max_connections=8, max_keepalive_connections=4),
+            )
+            _REQUEST_CLIENT_PID = pid
+        return _REQUEST_CLIENT
 
 
 def request_json(path: str, payload: dict[str, object] | None = None) -> dict[str, object]:
-    command = [
-        "curl", "--silent", "--show-error", "--fail", "--max-time", "75",
-        "--connect-timeout", "10",
-        "-X", "POST", f"{SERVER_URL}{path}",
-        "-H", "Content-Type: application/json",
-        "-H", f"X-Verigo-Worker-Token: {TOKEN}",
-        "-H", f"X-Verigo-Worker-Id: {WORKER_ID}",
-        "-H", f"X-Verigo-Worker-Capacity: {WORKER_CAPACITY}",
-    ]
-    request_body = None
-    if payload is not None:
-        command.extend(["--data-binary", "@-"])
-        request_body = json.dumps(payload, ensure_ascii=False)
     for attempt in range(WORKER_REQUEST_ATTEMPTS):
         try:
-            response = subprocess.run(
-                command,
-                input=request_body,
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=85,
-            )
-            if not response.returncode:
-                return json.loads(response.stdout)
-            message = response.stderr.strip() or "curl request failed"
-            retryable = response.returncode in TRANSIENT_CURL_EXIT_CODES or bool(
-                response.returncode == 22
-                and re.search(r"returned error: (408|429|500|502|503|504)\b", message)
-            )
-        except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError) as exc:
+            response = _request_client().post(path, json=payload)
+            response.raise_for_status()
+            data = response.json()
+            if not isinstance(data, dict):
+                raise ValueError("worker API response must be a JSON object")
+            return data
+        except httpx.HTTPStatusError as exc:
+            status = exc.response.status_code
+            message = f"worker API returned HTTP {status}"
+            # Keep FastAPI's compact validation detail so remote logs identify
+            # malformed callbacks without exposing the submitted result body.
+            if exc.response.text.strip():
+                detail = exc.response.text.strip().replace("\n", " ")[:500]
+                message = f"{message}: {detail}"
+            retryable = status in TRANSIENT_HTTP_STATUS_CODES
+        except (httpx.RequestError, ValueError) as exc:
             retryable = True
             message = str(exc)
         if retryable and attempt + 1 < WORKER_REQUEST_ATTEMPTS:
-            time.sleep(2 ** attempt)
+            time.sleep(min(2 ** attempt, WORKER_REQUEST_RETRY_MAX_SECONDS))
             continue
         raise WorkerRequestError(message, retryable=retryable)
     raise AssertionError("worker request retry loop exhausted unexpectedly")
@@ -186,7 +221,7 @@ def _verify_job(job: dict[str, object], control: dict[str, object]) -> None:
         remote_limit = settings.cloudstudio_worker_max_workers
     worker_count = max(1, min(int(job.get("worker_count", 1)), remote_limit))
     if any(is_qq_email(email) for email in emails):
-        worker_count = 1
+        worker_count = max(1, min(settings.qq_worker_max_workers, len(emails)))
     completed_results: list[dict[str, Any]] = []
     pending_reports: list[dict[str, Any]] = []
     last_report_at = [time.monotonic()]
@@ -206,6 +241,7 @@ def _verify_job(job: dict[str, object], control: dict[str, object]) -> None:
         relative_index = int(result.get("original_index", 0))
         if 0 <= relative_index < len(original_indices):
             result["original_index"] = original_indices[relative_index]
+            result["email"] = emails[relative_index]
         completed_results.append(dict(result))
         needs_retry = (
             is_retryable_smtp_result(result)
@@ -319,7 +355,9 @@ def main() -> None:
     print(f"Verigo {WORKER_TARGET} worker {WORKER_ID} polling {SERVER_URL}", flush=True)
     while True:
         try:
-            claim = request_json(f"/api/workers/{WORKER_TARGET}/claim?wait_seconds=0")
+            claim = request_json(
+                f"/api/workers/{WORKER_TARGET}/claim?wait_seconds={CLAIM_WAIT_SECONDS}"
+            )
             job = claim.get("job")
             if not job:
                 time.sleep(POLL_SECONDS)

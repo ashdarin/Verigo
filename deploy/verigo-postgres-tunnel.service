@@ -9,9 +9,9 @@ StartLimitBurst=20
 Type=simple
 User=verigo
 Group=verigo
-ExecStart=/usr/bin/ssh -NT -i /opt/verigo/.ssh/postgres_tunnel_ed25519 -o BatchMode=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=10 -o ServerAliveCountMax=3 -o TCPKeepAlive=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/opt/verigo/.ssh/postgres_known_hosts -L 127.0.0.1:15432:127.0.0.1:5432 verigo@101.34.212.199
+ExecStart=/usr/bin/ssh -NT -i /opt/verigo/.ssh/postgres_tunnel_ed25519 -o BatchMode=yes -o ExitOnForwardFailure=yes -o ConnectTimeout=10 -o ConnectionAttempts=3 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 -o TCPKeepAlive=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/opt/verigo/.ssh/postgres_known_hosts -L 127.0.0.1:15432:127.0.0.1:5432 verigo@101.34.212.199
 Restart=always
-RestartSec=3
+RestartSec=1
 KillMode=process
 TimeoutStopSec=8
 NoNewPrivileges=true

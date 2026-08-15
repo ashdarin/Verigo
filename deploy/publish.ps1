@@ -1,6 +1,9 @@
 [CmdletBinding()]
 param(
-    [string]$HostName = "103.242.2.226",
+    [Parameter(Mandatory)]
+    [ValidateSet("shanghai-app", "hong-kong-edge-worker")]
+    [string]$Role,
+    [string]$HostName,
     [string]$UserName = "verigo-deploy",
     [string]$ReleaseRoot = "/tmp/verigo-release",
     [switch]$Maintenance,
@@ -9,6 +12,13 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$roleHosts = @{
+    "shanghai-app" = "101.34.212.199"
+    "hong-kong-edge-worker" = "103.242.2.226"
+}
+if (!$HostName) {
+    $HostName = $roleHosts[$Role]
+}
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $ssh = "${env:ProgramFiles}\Git\usr\bin\ssh.exe"
 $scp = "${env:ProgramFiles}\Git\usr\bin\scp.exe"
@@ -35,6 +45,11 @@ try {
     if ($LASTEXITCODE -ne 0 -or $version -notmatch "^[0-9a-f]{40}$") {
         throw "The current folder must be a Git repository with a valid HEAD commit."
     }
+    $uncommitted = git -C $repoRoot status --porcelain
+    if ($LASTEXITCODE -ne 0) { throw "Could not inspect the Git working tree." }
+    if ($uncommitted) {
+        throw "Deployment requires a clean Git working tree because the release archive contains HEAD only. Commit the intended changes before publishing."
+    }
 
     $archive = Join-Path $env:TEMP "verigo-$version.tar.gz"
     Remove-Item -LiteralPath $archive -Force -ErrorAction SilentlyContinue
@@ -46,7 +61,7 @@ try {
     & $scp @sshOptions $archive "${remote}:$ReleaseRoot/release.tar.gz"
     if ($LASTEXITCODE -ne 0) { throw "Could not upload the release archive." }
     $maintenanceEnv = if ($Maintenance) { "VERIGO_DEPLOY_MAINTENANCE=true " } else { "" }
-    & $ssh @sshOptions $remote "tar -xzf $ReleaseRoot/release.tar.gz -C $ReleaseRoot; printf '%s\n' $version > $ReleaseRoot/.verigo-release; sudo -n env ${maintenanceEnv}VERIGO_RELEASE_DIR=$ReleaseRoot bash $ReleaseRoot/deploy/release.sh"
+    & $ssh @sshOptions $remote "tar -xzf $ReleaseRoot/release.tar.gz -C $ReleaseRoot; printf '%s\n' $version > $ReleaseRoot/.verigo-release; sudo -n env ${maintenanceEnv}VERIGO_DEPLOY_ROLE=$Role VERIGO_RELEASE_DIR=$ReleaseRoot bash $ReleaseRoot/deploy/release.sh"
     if ($LASTEXITCODE -ne 0) { throw "Release failed; the server rollback was attempted." }
 } finally {
     Remove-Item -LiteralPath $archive -Force -ErrorAction SilentlyContinue

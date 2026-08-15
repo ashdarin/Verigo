@@ -1,14 +1,14 @@
 [Unit]
 Description=Verigo remote verification node supervisor
-After=network-online.target verigo.service verigo-postgres-tunnel.service
-Wants=network-online.target verigo-postgres-tunnel.service
+After=network-online.target verigo-postgres-worker-tunnel.service
+Wants=network-online.target verigo-postgres-worker-tunnel.service
 
 [Service]
 Type=simple
 User=verigo
 Group=verigo
 WorkingDirectory=/opt/verigo/current
-EnvironmentFile=/etc/verigo/verigo.env
+EnvironmentFile=/etc/verigo/verigo-worker.env
 ExecStart=/opt/verigo/.venv/bin/python -m app.supervisor
 Restart=on-failure
 RestartSec=10

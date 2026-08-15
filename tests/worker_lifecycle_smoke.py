@@ -178,6 +178,25 @@ shared_coordinator = WorkerLifecycleCoordinator(
 shared_coordinator.tick(current_time)
 assert shared_api.run_calls == 1
 
+# A workspace stopped after an earlier activation must not remain blocked by
+# its old wake deadline.
+stale_wake_store = FakeStore()
+stale_wake_store.active = 1
+stale_wake_store.runtime = replace(
+    stale_wake_store.runtime,
+    wake_requested_at=current_time,
+    wake_deadline_at=current_time + timedelta(seconds=300),
+    wake_attempts=1,
+    last_wake_error=IDE_SESSION_ACTIVATED,
+)
+stale_wake_api = FakeApi(status="STOPPED")
+stale_wake_coordinator = WorkerLifecycleCoordinator(
+    store=stale_wake_store, api=stale_wake_api, config=config
+)
+stale_wake_coordinator.tick(current_time)
+assert stale_wake_api.run_calls == 1
+assert stale_wake_store.runtime.wake_deadline_at is not None
+
 timeout_store = FakeStore()
 timeout_api = FakeApi()
 timeout_coordinator = WorkerLifecycleCoordinator(
@@ -204,7 +223,7 @@ assert failure_api.run_calls == 2
 assert failure_store.failed == 1
 
 idle_store = FakeStore()
-idle_api = FakeApi()
+idle_api = FakeApi(status="RUNNING")
 idle_coordinator = WorkerLifecycleCoordinator(store=idle_store, api=idle_api, config=config)
 idle_store.runtime = WorkerRuntime(target=TARGET, last_seen_at=current_time)
 current_time += timedelta(seconds=1)
@@ -214,5 +233,29 @@ current_time += timedelta(seconds=60)
 idle_store.runtime = replace(idle_store.runtime, last_seen_at=current_time)
 idle_coordinator.tick(current_time)
 assert idle_api.stop_calls == 1
+
+# No heartbeat must not leave a previously running workspace billable forever.
+offline_idle_store = FakeStore()
+offline_idle_api = FakeApi(status="RUNNING")
+offline_idle_coordinator = WorkerLifecycleCoordinator(
+    store=offline_idle_store, api=offline_idle_api, config=config
+)
+current_time += timedelta(seconds=1)
+offline_idle_coordinator.tick(current_time)
+current_time += timedelta(seconds=60)
+offline_idle_coordinator.tick(current_time)
+assert offline_idle_api.stop_calls == 1
+
+# A stopped workspace does not receive repeated StopWorkspace calls.
+stopped_store = FakeStore()
+stopped_api = FakeApi(status="STOPPED")
+stopped_coordinator = WorkerLifecycleCoordinator(
+    store=stopped_store, api=stopped_api, config=config
+)
+current_time += timedelta(seconds=1)
+stopped_coordinator.tick(current_time)
+current_time += timedelta(seconds=60)
+stopped_coordinator.tick(current_time)
+assert stopped_api.stop_calls == 0
 
 print("worker lifecycle smoke: ok")

@@ -15,7 +15,7 @@ from typing import Annotated
 from urllib.parse import quote
 
 from fastapi import APIRouter, Body, Depends, File, Header, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, PlainTextResponse, Response
 
 from app.api.auth import (
     check_attempt_limit, optional_user, require_admin, require_user, request_network_hash,
@@ -79,6 +79,7 @@ from app.core.cloudshell_lifecycle import (
     notify_cloudshell_job_queued,
 )
 from app.core.cloudshell_coordinator import cloudshell_coordinator
+from app.core.cloudstudio_startup import worker_start_script
 from app.core.provider_policy import (
     YAHOO_UNSUPPORTED_MESSAGE,
     is_qq_email,
@@ -153,6 +154,8 @@ def remote_worker_label(execution_target: str) -> str:
 
 def remote_worker_count(execution_target: str, requested_count: int) -> int:
     """Apply the target-specific concurrency cap before a remote job is queued."""
+    if execution_target == TENCENT_QQ_TARGET:
+        return settings.qq_worker_max_workers
     if execution_target == "gmail":
         limit = settings.cloudshell_worker_max_workers
     elif execution_target == "codearts":
@@ -160,6 +163,19 @@ def remote_worker_count(execution_target: str, requested_count: int) -> int:
     else:
         limit = settings.cloudstudio_worker_max_workers
     return max(1, min(requested_count, limit))
+
+
+def remote_worker_shard_size(execution_target: str) -> int:
+    """Keep scheduler reservations within one worker's real parallelism."""
+    shard_size = min(
+        settings.scheduler_remote_shard_size,
+        settings.remote_worker_max_emails_per_job,
+    )
+    if execution_target == GMAIL_TARGET:
+        shard_size = min(shard_size, settings.cloudshell_worker_max_workers)
+    elif execution_target == TENCENT_QQ_TARGET:
+        shard_size = min(shard_size, settings.qq_scheduler_shard_size)
+    return max(1, shard_size)
 
 
 def require_job(job_id: str, *, include_results: bool = True) -> Job:
@@ -286,9 +302,6 @@ def partition_target_emails(
     for (target, child_worker_count), target_emails in targets.items():
         if target not in remote_targets:
             chunk_size = len(target_emails)
-        elif target == "tencent_qq":
-            # QQ remains on its single serial worker regardless of task size.
-            chunk_size = settings.remote_worker_max_emails_per_job
         else:
             # Worker capacity is discovered at claim time. Do not encode a fixed
             # number of Cloud Shell accounts into submission-time partitions.
@@ -316,13 +329,10 @@ def submit_routed_job(
             if is_yahoo_email(email)
             else email_execution_target(email, owner_email, fast_local=len(emails) == 1)
         )
-        # QQ verification stays on Cloud Studio and is intentionally serial.
-        # Cloud Studio otherwise retains its existing cap; Cloud Shell can use
-        # eight processes when the user chooses Fastest mode.
+        # QQ uses the supplied verifier's established six-process strategy.
+        # Other Cloud Studio targets retain their generic process cap.
         child_worker_count = (
-            1
-            if is_qq_email(email)
-            else remote_worker_count(target, worker_count)
+            remote_worker_count(target, worker_count)
             if target in {"tencent_qq", DOMESTIC_CLOUDSTUDIO_TARGET, "gmail", "codearts"}
             else worker_count
         )
@@ -443,6 +453,21 @@ def download_remote_worker_bundle(
     )
 
 
+@router.get("/workers/{worker_target}/bootstrap", response_class=PlainTextResponse)
+def download_remote_worker_bootstrap(
+    worker_target: str,
+    processes: int = Query(default=1, ge=1, le=8),
+    token: Annotated[str | None, Header(alias="X-Verigo-Worker-Token")] = None,
+) -> PlainTextResponse:
+    """Serve the full Cloud Studio startup script behind worker authentication."""
+    require_remote_worker(worker_target, token)
+    return PlainTextResponse(
+        worker_start_script(processes),
+        media_type="text/x-shellscript",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 def require_remote_job(job_id: str, worker_id: str, execution_target: str, lease_id: str | None = None) -> Job:
     job = require_job(job_id, include_results=False)
     valid_lease = bool(
@@ -546,7 +571,7 @@ def serialize_job(job: Job) -> JobResponse:
 @router.get("/health")
 def health() -> dict[str, object]:
     try:
-        job_store.health_summary()
+        job_store.database_ready()
     except Exception as exc:
         raise HTTPException(status_code=503, detail="database is unavailable") from exc
     return {
@@ -612,7 +637,7 @@ async def claim_tencent_qq_job(
         raise HTTPException(status_code=422, detail="腾讯 QQ 验证节点标识无效")
     if not 1 <= worker_capacity <= 128:
         raise HTTPException(status_code=422, detail="Remote worker capacity is invalid")
-    job_store.record_worker_seen(execution_target, worker_name, worker_capacity)
+    shard_size = remote_worker_shard_size(execution_target)
     rotation_token: str | None = None
     if execution_target == GMAIL_TARGET:
         # Only the least-used account is allowed to claim the next Gmail shard.
@@ -620,29 +645,31 @@ async def claim_tencent_qq_job(
         # the same rotation slot before the lease is committed.
         rotation_token = cloudshell_coordinator.reserve(
             worker_name,
-            min(settings.scheduler_remote_shard_size, settings.remote_worker_max_emails_per_job),
+            shard_size,
         )
         if rotation_token is None:
-            await asyncio.sleep(min(0.25, wait_seconds))
+            job_store.record_worker_seen(execution_target, worker_name, worker_capacity)
+            # Preserve long-poll semantics for an online account that did not
+            # win this rotation slot instead of immediately retrying the DB.
+            await asyncio.sleep(wait_seconds)
             return {"job": None}
     try:
         deadline = time.monotonic() + wait_seconds
         while True:
-            shard_size = min(
-                settings.scheduler_remote_shard_size,
-                settings.remote_worker_max_emails_per_job,
-            )
-            if execution_target == TENCENT_QQ_TARGET:
-                shard_size = min(shard_size, settings.qq_scheduler_shard_size)
             job = job_store.claim_remote_lease(
                 worker_name, execution_target, capacity=worker_capacity,
                 shard_size=shard_size,
-                allow_local_fallback=True,
+                # Gmail leases must remain on Cloud Shell workers so health
+                # and account rotation continue to describe the real target.
+                allow_local_fallback=execution_target != GMAIL_TARGET,
                 prospecting_shard_size=settings.prospecting_scheduler_shard_size,
             )
             if job is not None:
                 if execution_target == GMAIL_TARGET:
                     cloudshell_coordinator.commit(rotation_token or "", len(job.pending_indices))
+                # A lease proves the worker is online before it sends its first
+                # progress update, so reflect that in readiness immediately.
+                job_store.record_worker_seen(execution_target, worker_name, worker_capacity)
                 sync_parent_job(job)
                 return {
                     "job": {
@@ -663,7 +690,9 @@ async def claim_tencent_qq_job(
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 return {"job": None}
-            await asyncio.sleep(min(0.25, remaining))
+            # The worker API is long-polled. A 250 ms retry interval turned one
+            # idle request into up to 80 write transactions over PostgreSQL.
+            await asyncio.sleep(min(2.0, remaining))
     except Exception:
         if execution_target == GMAIL_TARGET:
             cloudshell_coordinator.release(rotation_token)

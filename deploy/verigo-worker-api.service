@@ -1,7 +1,7 @@
 [Unit]
-Description=Verigo verification worker %i
-After=network-online.target verigo-postgres-worker-tunnel.service
-Wants=network-online.target verigo-postgres-worker-tunnel.service
+Description=Verigo remote worker API
+After=network-online.target postgresql.service
+Wants=network-online.target
 
 [Service]
 Type=simple
@@ -9,8 +9,8 @@ User=verigo
 Group=verigo
 WorkingDirectory=/opt/verigo/current
 EnvironmentFile=/etc/verigo/verigo-worker.env
-ExecStart=/opt/verigo/.venv/bin/python -m app.worker --name %H-%i
-Restart=always
+ExecStart=/opt/verigo/.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8001 --workers 4
+Restart=on-failure
 RestartSec=5
 TimeoutStopSec=30
 NoNewPrivileges=true

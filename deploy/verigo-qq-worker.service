@@ -1,6 +1,6 @@
 [Unit]
-Description=Verigo email verification web service
-After=network-online.target postgresql.service
+Description=Verigo QQ remote verification worker
+After=network-online.target
 Wants=network-online.target
 
 [Service]
@@ -8,9 +8,9 @@ Type=simple
 User=verigo
 Group=verigo
 WorkingDirectory=/opt/verigo/current
-EnvironmentFile=/etc/verigo/verigo.env
-ExecStart=/opt/verigo/.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 2
-Restart=on-failure
+EnvironmentFile=/etc/verigo/tencent-qq-worker.env
+ExecStart=/opt/verigo/.venv/bin/python -m app.tencent_qq_worker
+Restart=always
 RestartSec=5
 TimeoutStopSec=30
 NoNewPrivileges=true

@@ -13,6 +13,7 @@ repeat_minutes=${VERIGO_ALERT_REPEAT_MINUTES:-360}
 disk_limit=${VERIGO_MONITOR_DISK_PERCENT:-85}
 backup_max_age_hours=${VERIGO_MONITOR_BACKUP_MAX_AGE_HOURS:-27}
 queue_limit=${VERIGO_MONITOR_QUEUE_LIMIT:-10}
+provider_pressure_limit=${VERIGO_MONITOR_PROVIDER_PRESSURE_LAST_60_SECONDS:-1}
 mkdir -p "$state_dir"
 
 issues=()
@@ -40,12 +41,22 @@ else
 fi
 
 if [[ -n "$readiness_payload" ]]; then
-    read -r health_status service_mode queued pending verifying stale unhealthy < <(
-        HEALTH_PAYLOAD="$readiness_payload" /opt/verigo/.venv/bin/python - <<'PY'
+    read -r health_status service_mode queued pending verifying stale unhealthy provider_pressure < <(
+        HEALTH_PAYLOAD="$readiness_payload" PROVIDER_PRESSURE_LIMIT="$provider_pressure_limit" /opt/verigo/.venv/bin/python - <<'PY'
 import json
 import os
 
 payload = json.loads(os.environ['HEALTH_PAYLOAD'])
+pressure_limit = max(1, int(os.environ['PROVIDER_PRESSURE_LIMIT']))
+provider_pressure = []
+for provider, runtime in payload.get("scheduler_runtime", {}).items():
+    if not isinstance(runtime, dict):
+        continue
+    pressure = int(runtime.get("pressure_last_60_seconds", 0) or 0)
+    current = int(runtime.get("limit", 0) or 0)
+    configured = int(runtime.get("configured_limit", 0) or 0)
+    if pressure >= pressure_limit and current < configured:
+        provider_pressure.append(f"{provider}:{pressure}/60s@{current}/{configured}")
 print(
     payload.get('status', 'unknown'),
     payload.get('service_mode', 'unknown'),
@@ -54,6 +65,7 @@ print(
     payload.get('verifying_results', 0),
     payload.get('stale_leases', 0),
     ','.join(payload.get('unhealthy_targets', [])) or '-',
+    ','.join(provider_pressure) or '-',
 )
 PY
     )
@@ -68,6 +80,9 @@ PY
     fi
     if [[ "$unhealthy" != "-" ]]; then
         issues+=("remote targets without healthy nodes: ${unhealthy}")
+    fi
+    if [[ "$provider_pressure" != "-" ]]; then
+        issues+=("provider pressure and reduced concurrency: ${provider_pressure}")
     fi
 fi
 

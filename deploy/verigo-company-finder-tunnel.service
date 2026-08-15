@@ -1,0 +1,14 @@
+[Unit]
+Description=Verigo Company Finder EC2 SSH tunnel
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/bin/ssh -N -L 127.0.0.1:18010:127.0.0.1:8010 -i /etc/verigo/company-finder-ec2_ed25519 -o BatchMode=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/etc/verigo/company-finder-ec2_known_hosts ubuntu@35.73.228.227
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

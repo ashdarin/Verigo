@@ -67,6 +67,8 @@ class CloudShellLifecycle:
         self._thread: threading.Thread | None = None
         self._failure_count = 0
         self._retry_after = 0.0
+        self._idle_since: float | None = None
+        self._idle_worker_stopped = False
 
     @property
     def account_id(self) -> str:
@@ -76,7 +78,10 @@ class CloudShellLifecycle:
     def configured(self) -> bool:
         return bool(
             settings.gmail_worker_enabled
-            and self._enabled
+            # When coordination is enabled, its durable account state is
+            # authoritative. Existing manifest accounts can then be toggled
+            # without waiting for a supervisor restart.
+            and (self._enabled or cloudshell_coordinator.enabled)
             and settings.gmail_worker_token
             and self._user
             and self._quota_project
@@ -85,10 +90,14 @@ class CloudShellLifecycle:
         )
 
     def notify_job_queued(self) -> None:
+        self._idle_since = None
+        self._idle_worker_stopped = False
         if not cloudshell_coordinator.account_can_wake(self._account_id):
             return
         self._wake_event.set()
-        if cloudshell_coordinator.worker_is_healthy(self._worker_id):
+        if cloudshell_coordinator.worker_is_healthy(
+            self._worker_id, self._worker_processes
+        ):
             return
         if time.monotonic() < self._retry_after:
             return
@@ -115,11 +124,15 @@ class CloudShellLifecycle:
     def _run(self) -> None:
         while not self._stop_event.is_set():
             try:
-                if self.configured and (
-                    job_store.active_target_count(GMAIL_TARGET)
-                    or job_store.active_target_count("local")
-                ):
-                    self.notify_job_queued()
+                if self.configured:
+                    active = (
+                        job_store.active_target_count(GMAIL_TARGET)
+                        or job_store.active_target_count("local")
+                    )
+                    if active:
+                        self.notify_job_queued()
+                    else:
+                        self._stop_idle_workers()
             except Exception:
                 # A temporary database or provider failure must not permanently
                 # stop the lifecycle thread. The next poll retries the wakeup.
@@ -128,6 +141,83 @@ class CloudShellLifecycle:
                 )
             self._wake_event.wait(5)
             self._wake_event.clear()
+
+    def _environment_ssh_base(self) -> list[str] | None:
+        """Return a running environment SSH command without starting it."""
+        token = self._token()
+        user = urllib.parse.quote(self._user, safe="")
+        request = urllib.request.Request(
+            f"https://cloudshell.googleapis.com/v1/users/{user}/environments/default",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "X-Goog-User-Project": self._quota_project,
+            },
+            method="GET",
+        )
+        with urllib.request.urlopen(request, timeout=30) as response:
+            environment = json.load(response)
+        if environment.get("state") != "RUNNING":
+            return None
+        host = str(environment.get("sshHost") or "").strip()
+        port = str(environment.get("sshPort") or "").strip()
+        ssh_user = str(environment.get("sshUsername") or "").strip()
+        if not host or not port or not ssh_user:
+            raise RuntimeError("Cloud Shell environment omitted SSH connection details")
+        return [
+            "ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new",
+            "-o", f"UserKnownHostsFile={self._ssh_known_hosts_path}",
+            "-i", str(self._ssh_key_path), "-p", port, f"{ssh_user}@{host}",
+        ]
+
+    def _stop_idle_workers(self) -> None:
+        if self._idle_worker_stopped:
+            return
+        now = time.monotonic()
+        if self._idle_since is None:
+            self._idle_since = now
+            return
+        if now - self._idle_since < settings.cloudshell_idle_stop_seconds:
+            return
+        if not self._lock.acquire(blocking=False):
+            return
+        try:
+            base = self._environment_ssh_base()
+            if base is None:
+                self._idle_worker_stopped = True
+                return
+            cleanup = " ".join(
+                (
+                    "cd ~/verigo-worker;",
+                    "for n in $(seq 1", str(self._worker_processes), "); do",
+                    'pid_file=".gmail-worker-${n}.pid";',
+                    'if test -s "$pid_file"; then kill "$(cat "$pid_file")" 2>/dev/null || true; fi;',
+                    'rm -f "$pid_file";',
+                    "done",
+                )
+            )
+            subprocess.run(
+                base + [cleanup], check=True, capture_output=True, timeout=30
+            )
+            for worker_number in range(1, self._worker_processes + 1):
+                job_store.mark_worker_offline(
+                    GMAIL_TARGET, f"{self._worker_id}-{worker_number}"
+                )
+            self._idle_worker_stopped = True
+            logger.info(
+                "Cloud Shell worker processes stopped after %ss idle for account %s",
+                settings.cloudshell_idle_stop_seconds,
+                self._account_id,
+            )
+        except Exception as exc:
+            # Retrying on the next lifecycle pass is appropriate: this does
+            # not alter job state and the platform remains available.
+            logger.warning(
+                "Could not stop idle Cloud Shell workers for account %s: %s",
+                self._account_id,
+                exc,
+            )
+        finally:
+            self._lock.release()
 
     def record_worker_seen(self, worker_id: str) -> None:
         job_store.record_worker_seen(GMAIL_TARGET, worker_id)
@@ -151,14 +241,18 @@ class CloudShellLifecycle:
             "rm -f .gmail-worker.pid; "
             if worker_number == 1 else ""
         )
-        dependency = "dnspython>=2.6,<3"
-        dependency_hash = hashlib.sha256(dependency.encode()).hexdigest()
+        # Cloud Shell receives only the worker source tree, not the full app
+        # virtualenv. Keep this small runtime set explicit and versioned so a
+        # recycled environment installs missing imports before launch.
+        dependencies = ("dnspython>=2.6,<3", "httpx>=0.27,<1")
+        dependency_hash = hashlib.sha256("\n".join(dependencies).encode()).hexdigest()
+        dependency_spec = " ".join(shlex.quote(item) for item in dependencies)
         dependency_marker = ".venv/.verigo-worker-deps-sha256"
         environment_bootstrap = (
             "if ! test -x .venv/bin/python; then python3 -m venv .venv; fi; "
             f"if ! test -s {dependency_marker} || "
             f"! grep -qx {shlex.quote(dependency_hash)} {dependency_marker}; then "
-            f".venv/bin/pip -q install {shlex.quote(dependency)} && "
+            f".venv/bin/pip -q install {dependency_spec} && "
             f"printf '%s\\n' {shlex.quote(dependency_hash)} > {dependency_marker}; "
             "fi; "
         )
@@ -501,7 +595,10 @@ def _load_cloudshell_account_specs(path: Path) -> list[dict[str, Any]]:
     return specs
 
 
-cloudshell_lifecycle = CloudShellLifecycle(register_ssh_public_key=True)
+cloudshell_lifecycle = CloudShellLifecycle(
+    account_id="account1",
+    register_ssh_public_key=True,
+)
 cloudshell_secondary_lifecycle = CloudShellLifecycle(
     enabled=settings.google_cloudshell_secondary_enabled,
     user=settings.google_cloudshell_secondary_user,
@@ -510,6 +607,7 @@ cloudshell_secondary_lifecycle = CloudShellLifecycle(
     ssh_key_path=settings.google_cloudshell_secondary_ssh_key_path,
     ssh_known_hosts_path=settings.google_cloudshell_secondary_ssh_known_hosts_path,
     worker_id="cloudshell-gmail-2",
+    account_id="account2",
     worker_processes=settings.cloudshell_secondary_worker_processes,
     register_ssh_public_key=True,
 )

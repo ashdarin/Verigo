@@ -2,10 +2,19 @@
 set -Eeuo pipefail
 
 release_dir=${VERIGO_RELEASE_DIR:-/tmp/verigo-release}
+deploy_role=${VERIGO_DEPLOY_ROLE:-}
 state_dir=/opt/verigo
 releases_dir="$state_dir/releases"
 current_link="$state_dir/current"
 release_version_file="$release_dir/.verigo-release"
+
+case "$deploy_role" in
+    shanghai-app|hong-kong-edge-worker) ;;
+    *)
+        echo "VERIGO_DEPLOY_ROLE must be shanghai-app or hong-kong-edge-worker" >&2
+        exit 2
+        ;;
+esac
 
 test -f "$release_dir/app/main.py"
 test -f "$release_dir/requirements.txt"
@@ -30,7 +39,8 @@ ensure_legacy_release() {
     fi
     local legacy_version
     legacy_version=$(tr -d '\r\n' < "$state_dir/RELEASE_VERSION" 2>/dev/null || true)
-    [[ "$legacy_version" =~ ^[0-9a-f]{7,40}$ ]] || legacy_version="legacy-$(date -u +%Y%m%dT%H%M%SZ)"
+    [[ "$legacy_version" =~ ^[0-9a-f]{7,40}$ ]] \
+        || legacy_version="legacy-$(date -u +%Y%m%dT%H%M%SZ)"
     local legacy_release="$releases_dir/$legacy_version"
     if [[ ! -d "$legacy_release" ]]; then
         local incoming
@@ -47,141 +57,164 @@ ensure_legacy_release() {
     activate_release "$legacy_release"
 }
 
+disable_units() {
+    local unit
+    for unit in "$@"; do
+        systemctl disable --now "$unit" >/dev/null 2>&1 || true
+    done
+}
+
 rollback() {
     local status=$?
     trap - ERR
     if [[ -n "${previous_release:-}" ]]; then
         echo "Release failed; switching back to $previous_release" >&2
         activate_release "$previous_release"
-        systemctl restart verigo || true
-        systemctl restart verigo-supervisor || true
-        systemctl restart verigo-worker@1.service || true
-        systemctl restart verigo-worker@2.service || true
+        if [[ "$deploy_role" == "shanghai-app" ]]; then
+            systemctl restart verigo verigo-worker-api || true
+        elif [[ "${VERIGO_DEPLOY_MAINTENANCE:-false}" == "true" ]]; then
+            systemctl restart verigo-supervisor verigo-worker@1 verigo-worker@2 \
+                verigo-qq-worker || true
+        fi
     fi
-    set_service_mode active || true
     exit "$status"
 }
 
-# Load production env so drain/active helpers follow the live backend after cutover.
-load_runtime_env() {
-    if [[ -r /etc/verigo/verigo.env ]]; then
-        set -a
-        # shellcheck disable=SC1091
-        source /etc/verigo/verigo.env
-        set +a
+install_env_files() {
+    install -d -m 700 /etc/verigo
+    if [[ ! -f /etc/verigo/verigo.env ]]; then
+        install -m 600 "$release_path/deploy/verigo.env.example" /etc/verigo/verigo.env
     fi
-}
+    local example target
+    for example in verigo-backup verigo-monitor verigo-retention; do
+        target=${example#verigo-}
+        if [[ ! -f "/etc/verigo/${target}.env" ]]; then
+            install -m 600 "$release_path/deploy/${example}.env.example" \
+                "/etc/verigo/${target}.env"
+        fi
+    done
 
-set_service_mode() {
-    local mode=$1
-    load_runtime_env
-    MODE="$mode" PYTHONPATH="$release_dir" "$state_dir/.venv/bin/python" - <<'PY'
-import os
-from app.db.backend_ops import set_service_mode
-print(set_service_mode(os.environ["MODE"]))
-PY
-}
+    local setting key
+    for setting in \
+        'VERIGO_DATABASE_PATH=/opt/verigo/data/verigo.db' \
+        'VERIGO_RESULTS_DIR=/opt/verigo/data/results' \
+        'VERIGO_NAME_CATALOG_PATH=/opt/verigo/data/name_catalog.db' \
+        'VERIGO_SMTP_LIMITER_PATH=/opt/verigo/data/smtp_limiter.db' \
+        'VERIGO_MAX_EMAILS=0' \
+        'VERIGO_MAX_WORKERS=8' \
+        'VERIGO_REMOTE_WORKER_MAX_EMAILS=5000' \
+        'VERIGO_CLOUDSTUDIO_MAX_WORKERS=4' \
+        'VERIGO_QQ_WORKER_MAX_WORKERS=6' \
+        'VERIGO_CLOUDSHELL_MAX_WORKERS=3' \
+        'VERIGO_CODEARTS_MAX_WORKERS=16' \
+        'VERIGO_CLOUDSHELL_WORKER_PROCESSES=4' \
+        'VERIGO_CLOUDSHELL_SECONDARY_WORKER_PROCESSES=4' \
+        'VERIGO_SCHEDULER_GMAIL_CONCURRENCY=25' \
+        'VERIGO_SCHEDULER_MICROSOFT_CONCURRENCY=64' \
+        'VERIGO_SCHEDULER_DEFAULT_DOMAIN_CONCURRENCY=4' \
+        'VERIGO_SCHEDULER_DOMAIN_MAX_CONCURRENCY=16' \
+        'VERIGO_SCHEDULER_REMOTE_SHARD_SIZE=25' \
+        'VERIGO_QQ_SCHEDULER_SHARD_SIZE=6' \
+        'VERIGO_QQ_SMTP_PER_MX=6' \
+        'VERIGO_PROSPECTING_SCHEDULER_SHARD_SIZE=4' \
+        'VERIGO_SCHEDULER_CLAIM_SCAN_LIMIT=64' \
+        'VERIGO_SCHEDULER_SUCCESSES_PER_STEP=20' \
+        'VERIGO_PROSPECTING_SCHEDULER_INITIAL_DOMAIN_CONCURRENCY=16' \
+        'VERIGO_PROSPECTING_SCHEDULER_SUCCESSES_PER_STEP=8' \
+        'VERIGO_PROSPECTING_SCHEDULER_STEP_SIZE=2' \
+        'VERIGO_SCHEDULER_COOLDOWN_SECONDS=120' \
+        'VERIGO_TENCENT_QQ_WORKER_ALLOWED_EMAILS=*' \
+        'VERIGO_GMAIL_WORKER_ALLOWED_EMAILS=*' \
+        'VERIGO_CODEARTS_WORKER_ALLOWED_EMAILS=*' \
+        'VERIGO_MAX_GUEST_EMAILS=100' \
+        'VERIGO_PROSPECTING_BETA_MAX_CANDIDATES=1000' \
+        'VERIGO_FREE_SINGLE_DAILY_LIMIT=20' \
+        'VERIGO_EMAIL_VERIFICATION_TRIAL_CREDITS=10' \
+        'VERIGO_TRIAL_CREDIT_DAYS=7' \
+        'VERIGO_MAX_IMPORT_BYTES=5242880' \
+        'VERIGO_SESSION_TTL_DAYS=30' \
+        'VERIGO_SECURE_COOKIES=true'
+    do
+        key=${setting%%=*}
+        grep -q "^${key}=" /etc/verigo/verigo.env \
+            || printf '%s\n' "$setting" >> /etc/verigo/verigo.env
+    done
+    grep -q '^VERIGO_METRICS_SALT=' /etc/verigo/verigo.env \
+        || printf 'VERIGO_METRICS_SALT=%s\n' "$(openssl rand -hex 32)" \
+            >> /etc/verigo/verigo.env
+    grep -q '^VERIGO_MONITOR_TOKEN=[^[:space:]]' /etc/verigo/verigo.env \
+        || printf 'VERIGO_MONITOR_TOKEN=%s\n' "$(openssl rand -hex 32)" \
+            >> /etc/verigo/verigo.env
+    chmod 600 /etc/verigo/verigo.env
 
-active_job_count() {
-    load_runtime_env
-    PYTHONPATH="$release_dir" "$state_dir/.venv/bin/python" - <<'PY'
-from app.db.backend_ops import active_job_count
-print(active_job_count())
-PY
-}
-
-active_targets() {
-    load_runtime_env
-    PYTHONPATH="$release_dir" "$state_dir/.venv/bin/python" - <<'PY'
-from app.db.backend_ops import active_targets
-for target in active_targets():
-    print(target)
-PY
-}
-
-drain_progress_marker() {
-    load_runtime_env
-    PYTHONPATH="$release_dir" "$state_dir/.venv/bin/python" - <<'PY'
-from app.db.backend_ops import drain_progress_marker
-print(drain_progress_marker())
-PY
-}
-
-ensure_drain_workers() {
-    local targets=()
-    mapfile -t targets < <(active_targets)
-    if (( ${#targets[@]} == 0 )); then
-        return 0
+    if grep -q '^VERIGO_PROSPECTING_BETA_MAX_CANDIDATES=120$' /etc/verigo/verigo.env; then
+        sed -i 's/^VERIGO_PROSPECTING_BETA_MAX_CANDIDATES=120$/VERIGO_PROSPECTING_BETA_MAX_CANDIDATES=1000/' \
+            /etc/verigo/verigo.env
     fi
+    sed -i '/^VERIGO_PROSPECTING_BETA_DAILY_RUN_LIMIT=/d' /etc/verigo/verigo.env
+}
 
-    local target
-    for target in "${targets[@]}"; do
-        if [[ "$target" == "local" ]]; then
-            if ! systemctl is-active --quiet verigo-worker@1.service \
-                && ! systemctl is-active --quiet verigo-worker@2.service; then
-                echo "Cannot drain local verification jobs: no local worker is active" >&2
-                return 1
-            fi
-        elif ! systemctl is-active --quiet verigo-supervisor.service; then
-            echo "Cannot drain $target verification jobs: remote node supervisor is inactive" >&2
-            return 1
+write_worker_env() {
+    local worker_env_tmp
+    worker_env_tmp=$(mktemp /etc/verigo/.verigo-worker.env.XXXXXX)
+    if [[ "$deploy_role" == "hong-kong-edge-worker" ]]; then
+        sed -e 's/127\.0\.0\.1:15432/127.0.0.1:15433/g' \
+            -e 's/localhost:15432/127.0.0.1:15433/g' \
+            /etc/verigo/verigo.env > "$worker_env_tmp"
+    else
+        cp /etc/verigo/verigo.env "$worker_env_tmp"
+    fi
+    if grep -q '^VERIGO_WORKER_LEASE_SECONDS=' "$worker_env_tmp"; then
+        sed -i 's/^VERIGO_WORKER_LEASE_SECONDS=.*/VERIGO_WORKER_LEASE_SECONDS=180/' \
+            "$worker_env_tmp"
+    else
+        printf '%s\n' 'VERIGO_WORKER_LEASE_SECONDS=180' >> "$worker_env_tmp"
+    fi
+    chmod 600 "$worker_env_tmp"
+    mv -f "$worker_env_tmp" /etc/verigo/verigo-worker.env
+}
+
+write_qq_env() {
+    grep -q '^VERIGO_TENCENT_QQ_WORKER_TOKEN=.' /etc/verigo/verigo-worker.env
+    local qq_env_tmp
+    qq_env_tmp=$(mktemp /etc/verigo/.tencent-qq-worker.env.XXXXXX)
+    grep -Ev '^(VERIGO_REMOTE_WORKER_(SERVER|TOKEN|ID|TARGET|CAPACITY|CLAIM_WAIT_SECONDS|MAX_WORKERS)|VERIGO_TENCENT_QQ_(SERVER|WORKER_ID)|VERIGO_QQ_WORKER_MAX_WORKERS|VERIGO_QQ_SMTP_PER_MX|VERIGO_QQ_SCHEDULER_SHARD_SIZE|VERIGO_EMAIL_HARD_TIMEOUT_SECONDS)=' \
+        /etc/verigo/verigo-worker.env > "$qq_env_tmp" || true
+    cat >> "$qq_env_tmp" <<'EOF'
+VERIGO_REMOTE_WORKER_SERVER=https://verigo.site
+VERIGO_REMOTE_WORKER_ID=vps-local-qq-fixed
+VERIGO_REMOTE_WORKER_TARGET=tencent-qq
+VERIGO_REMOTE_WORKER_CAPACITY=1
+VERIGO_REMOTE_WORKER_CLAIM_WAIT_SECONDS=20
+VERIGO_REMOTE_WORKER_MAX_WORKERS=6
+VERIGO_QQ_WORKER_MAX_WORKERS=6
+VERIGO_QQ_SMTP_PER_MX=6
+VERIGO_QQ_SCHEDULER_SHARD_SIZE=6
+VERIGO_EMAIL_HARD_TIMEOUT_SECONDS=90
+EOF
+    chmod 600 "$qq_env_tmp"
+    mv -f "$qq_env_tmp" /etc/verigo/tencent-qq-worker.env
+}
+
+prune_releases() {
+    ls -t "$releases_dir" | grep -v '^\.' | tail -n +11 | while read -r old_release; do
+        local old_path="$releases_dir/$old_release"
+        if [[ "$old_path" != "$(readlink -f "$current_link")" ]]; then
+            rm -rf "$old_path"
         fi
     done
 }
 
-mkdir -p "$releases_dir"
+mkdir -p "$releases_dir" "$state_dir/data"
 ensure_legacy_release
 previous_release=$(readlink -f "$current_link")
 trap rollback ERR
 
-# Reject new submissions first, then let existing workers settle their queue.
-# A timeout restores active mode and leaves the current release untouched.
-if [[ "${VERIGO_DEPLOY_MAINTENANCE:-false}" != "true" && -f "$state_dir/data/verigo.db" ]]; then
-    drain_timeout=${VERIGO_DEPLOY_DRAIN_TIMEOUT_SECONDS:-900}
-    drain_stall_timeout=${VERIGO_DEPLOY_DRAIN_STALL_SECONDS:-180}
-    if ! [[ "$drain_timeout" =~ ^[1-9][0-9]*$ ]]; then
-        echo "VERIGO_DEPLOY_DRAIN_TIMEOUT_SECONDS must be a positive integer" >&2
-        exit 1
-    fi
-    if ! [[ "$drain_stall_timeout" =~ ^[1-9][0-9]*$ ]]; then
-        echo "VERIGO_DEPLOY_DRAIN_STALL_SECONDS must be a positive integer" >&2
-        exit 1
-    fi
-    set_service_mode draining
-    if ! ensure_drain_workers; then
-        set_service_mode active
-        exit 2
-    fi
-    deadline=$((SECONDS + drain_timeout))
-    last_progress_at=$SECONDS
-    progress_marker=$(drain_progress_marker)
-    while :; do
-        active_jobs=$(active_job_count)
-        if [[ "$active_jobs" == "0" ]]; then
-            break
-        fi
-        current_marker=$(drain_progress_marker)
-        if [[ "$current_marker" != "$progress_marker" ]]; then
-            progress_marker=$current_marker
-            last_progress_at=$SECONDS
-        elif (( SECONDS - last_progress_at >= drain_stall_timeout )); then
-            echo "Release drain stalled for ${drain_stall_timeout}s with $active_jobs active verification jobs: $current_marker" >&2
-            set_service_mode active
-            exit 2
-        fi
-        if (( SECONDS >= deadline )); then
-            echo "Release drain timed out with $active_jobs active verification jobs" >&2
-            set_service_mode active
-            exit 2
-        fi
-        sleep 5
-    done
-fi
-
 release_path="$releases_dir/$release_version"
 if [[ ! -d "$release_path" ]]; then
     incoming=$(mktemp -d "$releases_dir/.incoming-${release_version:0:12}.XXXXXX")
-    rsync -a --delete --exclude='__pycache__' --exclude='.verigo-release' --exclude='release.tar.gz' "$release_dir/" "$incoming/"
+    rsync -a --delete --exclude='__pycache__' --exclude='.verigo-release' \
+        --exclude='release.tar.gz' "$release_dir/" "$incoming/"
     printf '%s\n' "$release_version" > "$incoming/RELEASE_VERSION"
     chown -R verigo:verigo "$incoming"
     mv "$incoming" "$release_path"
@@ -189,146 +222,123 @@ fi
 
 test -f "$release_path/app/main.py"
 test -f "$release_path/RELEASE_VERSION"
-
-worker_bundle_tmp=$(mktemp "$state_dir/data/.cloudstudio-worker.XXXXXX.tar.gz")
-tar -czf "$worker_bundle_tmp" -C "$release_path" app requirements.txt RELEASE_VERSION
-chown verigo:verigo "$worker_bundle_tmp"
-chmod 640 "$worker_bundle_tmp"
-mv -f "$worker_bundle_tmp" "$state_dir/data/cloudstudio-worker.tar.gz"
-
-if ! command -v aws >/dev/null && grep -q '^VERIGO_BACKUP_S3_BUCKET=.' /etc/verigo/backup.env 2>/dev/null; then
-    apt-get update
-    DEBIAN_FRONTEND=noninteractive apt-get install -y awscli
-fi
-
-install -m 700 "$release_path/deploy/verigo-backup.sh" /usr/local/sbin/verigo-backup
-install -m 644 "$release_path/deploy/verigo-backup.service" /etc/systemd/system/verigo-backup.service
-install -m 644 "$release_path/deploy/verigo-backup.timer" /etc/systemd/system/verigo-backup.timer
-install -m 700 "$release_path/deploy/verigo-monitor.sh" /usr/local/sbin/verigo-monitor
-install -m 644 "$release_path/deploy/verigo-monitor.service" /etc/systemd/system/verigo-monitor.service
-install -m 644 "$release_path/deploy/verigo-monitor.timer" /etc/systemd/system/verigo-monitor.timer
-install -m 700 "$release_path/deploy/verigo-retention.sh" /usr/local/sbin/verigo-retention
-install -m 644 "$release_path/deploy/verigo-retention.service" /etc/systemd/system/verigo-retention.service
-install -m 644 "$release_path/deploy/verigo-retention.timer" /etc/systemd/system/verigo-retention.timer
-install -m 644 "$release_path/deploy/verigo.service" /etc/systemd/system/verigo.service
-install -m 644 "$release_path/deploy/verigo-supervisor.service" /etc/systemd/system/verigo-supervisor.service
-install -m 644 "$release_path/deploy/verigo-worker@.service" /etc/systemd/system/verigo-worker@.service
-if command -v caddy >/dev/null; then
-    caddy validate --config "$release_path/deploy/Caddyfile" --adapter caddyfile
-    install -m 644 "$release_path/deploy/Caddyfile" /etc/caddy/Caddyfile
-fi
-install -d -m 700 /etc/verigo
-if [[ ! -f /etc/verigo/verigo.env ]]; then
-    install -m 600 "$release_path/deploy/verigo.env.example" /etc/verigo/verigo.env
-fi
-if [[ ! -f /etc/verigo/backup.env ]]; then
-    install -m 600 "$release_path/deploy/verigo-backup.env.example" /etc/verigo/backup.env
-fi
-if [[ ! -f /etc/verigo/monitor.env ]]; then
-    install -m 600 "$release_path/deploy/verigo-monitor.env.example" /etc/verigo/monitor.env
-fi
-if [[ ! -f /etc/verigo/retention.env ]]; then
-    install -m 600 "$release_path/deploy/verigo-retention.env.example" /etc/verigo/retention.env
-fi
-
-for setting in \
-    'VERIGO_DATABASE_PATH=/opt/verigo/data/verigo.db' \
-    'VERIGO_RESULTS_DIR=/opt/verigo/data/results' \
-    'VERIGO_NAME_CATALOG_PATH=/opt/verigo/data/name_catalog.db' \
-    'VERIGO_SMTP_LIMITER_PATH=/opt/verigo/data/smtp_limiter.db' \
-    'VERIGO_MAX_EMAILS=0' \
-    'VERIGO_MAX_WORKERS=8' \
-    'VERIGO_REMOTE_WORKER_MAX_EMAILS=5000' \
-    'VERIGO_CLOUDSTUDIO_MAX_WORKERS=4' \
-    'VERIGO_CLOUDSHELL_MAX_WORKERS=25' \
-    'VERIGO_CODEARTS_MAX_WORKERS=16' \
-    'VERIGO_CLOUDSHELL_WORKER_PROCESSES=2' \
-    'VERIGO_CLOUDSHELL_SECONDARY_WORKER_PROCESSES=1' \
-    'VERIGO_SCHEDULER_GMAIL_CONCURRENCY=25' \
-    'VERIGO_SCHEDULER_MICROSOFT_CONCURRENCY=64' \
-    'VERIGO_SCHEDULER_DEFAULT_DOMAIN_CONCURRENCY=4' \
-    'VERIGO_SCHEDULER_DOMAIN_MAX_CONCURRENCY=16' \
-    'VERIGO_SCHEDULER_REMOTE_SHARD_SIZE=25' \
-    'VERIGO_QQ_SCHEDULER_SHARD_SIZE=1' \
-    'VERIGO_PROSPECTING_SCHEDULER_SHARD_SIZE=4' \
-    'VERIGO_SCHEDULER_CLAIM_SCAN_LIMIT=64' \
-    'VERIGO_SCHEDULER_SUCCESSES_PER_STEP=20' \
-    'VERIGO_PROSPECTING_SCHEDULER_INITIAL_DOMAIN_CONCURRENCY=16' \
-    'VERIGO_PROSPECTING_SCHEDULER_SUCCESSES_PER_STEP=8' \
-    'VERIGO_PROSPECTING_SCHEDULER_STEP_SIZE=2' \
-    'VERIGO_SCHEDULER_COOLDOWN_SECONDS=120' \
-    'VERIGO_TENCENT_QQ_WORKER_ALLOWED_EMAILS=*' \
-    'VERIGO_GMAIL_WORKER_ALLOWED_EMAILS=*' \
-    'VERIGO_CODEARTS_WORKER_ALLOWED_EMAILS=*' \
-    'VERIGO_MAX_GUEST_EMAILS=100' \
-    'VERIGO_PROSPECTING_BETA_MAX_CANDIDATES=1000' \
-    'VERIGO_FREE_SINGLE_DAILY_LIMIT=20' \
-    'VERIGO_EMAIL_VERIFICATION_TRIAL_CREDITS=10' \
-    'VERIGO_TRIAL_CREDIT_DAYS=7' \
-    'VERIGO_MAX_IMPORT_BYTES=5242880' \
-    'VERIGO_SESSION_TTL_DAYS=30' \
-    'VERIGO_SECURE_COOKIES=true'
-do
-    key=${setting%%=*}
-    if ! grep -q "^${key}=" /etc/verigo/verigo.env; then
-        printf '%s\n' "$setting" >> /etc/verigo/verigo.env
-    fi
-done
-if ! grep -q '^VERIGO_METRICS_SALT=' /etc/verigo/verigo.env; then
-    printf 'VERIGO_METRICS_SALT=%s\n' "$(openssl rand -hex 32)" >> /etc/verigo/verigo.env
-fi
-if ! grep -q '^VERIGO_MONITOR_TOKEN=[^[:space:]]' /etc/verigo/verigo.env; then
-    printf 'VERIGO_MONITOR_TOKEN=%s\n' "$(openssl rand -hex 32)" >> /etc/verigo/verigo.env
-fi
-chmod 600 /etc/verigo/verigo.env
-
-# Version 2 of private prospecting needs a materially larger statistical
-# sample. Migrate only the old shipped default, preserving operator overrides.
-if grep -q '^VERIGO_PROSPECTING_BETA_MAX_CANDIDATES=120$' /etc/verigo/verigo.env; then
-    sed -i 's/^VERIGO_PROSPECTING_BETA_MAX_CANDIDATES=120$/VERIGO_PROSPECTING_BETA_MAX_CANDIDATES=1000/' /etc/verigo/verigo.env
-fi
-# The private beta no longer has a daily-run quota. Its per-run size remains
-# bounded while each account receives a fresh, non-repeating candidate set.
-sed -i '/^VERIGO_PROSPECTING_BETA_DAILY_RUN_LIMIT=/d' /etc/verigo/verigo.env
+install_env_files
+write_worker_env
 
 if ! cmp -s "$previous_release/requirements.txt" "$release_path/requirements.txt"; then
-    "$state_dir/.venv/bin/pip" install --disable-pip-version-check -r "$release_path/requirements.txt"
+    "$state_dir/.venv/bin/pip" install --disable-pip-version-check \
+        -r "$release_path/requirements.txt"
 fi
 
+if [[ "$deploy_role" == "shanghai-app" ]]; then
+    install -m 644 "$release_path/deploy/verigo.service" \
+        /etc/systemd/system/verigo.service
+    install -m 644 "$release_path/deploy/verigo-worker-api.service" \
+        /etc/systemd/system/verigo-worker-api.service
+    install -m 644 "$release_path/deploy/verigo-company-finder-tunnel.service" \
+        /etc/systemd/system/verigo-company-finder-tunnel.service
+    install -m 700 "$release_path/deploy/verigo-backup.sh" /usr/local/sbin/verigo-backup
+    install -m 644 "$release_path/deploy/verigo-backup.service" \
+        /etc/systemd/system/verigo-backup.service
+    install -m 644 "$release_path/deploy/verigo-backup.timer" \
+        /etc/systemd/system/verigo-backup.timer
+    install -m 700 "$release_path/deploy/verigo-retention.sh" /usr/local/sbin/verigo-retention
+    install -m 644 "$release_path/deploy/verigo-retention.service" \
+        /etc/systemd/system/verigo-retention.service
+    install -m 644 "$release_path/deploy/verigo-retention.timer" \
+        /etc/systemd/system/verigo-retention.timer
+
+    worker_bundle_tmp=$(mktemp "$state_dir/data/.cloudstudio-worker.XXXXXX.tar.gz")
+    tar -czf "$worker_bundle_tmp" -C "$release_path" app requirements.txt RELEASE_VERSION
+    chown verigo:verigo "$worker_bundle_tmp"
+    chmod 640 "$worker_bundle_tmp"
+    mv -f "$worker_bundle_tmp" "$state_dir/data/cloudstudio-worker.tar.gz"
+
+    systemctl daemon-reload
+    disable_units caddy verigo-monitor.timer verigo-monitor.service \
+        verigo-supervisor verigo-worker@1 verigo-worker@2 \
+        verigo-postgres-tunnel verigo-postgres-worker-tunnel \
+        verigo-data-app-tunnel verigo-cloudstudio-keepalive verigo-qq-worker
+    systemctl enable --now verigo-company-finder-tunnel \
+        verigo-backup.timer verigo-retention.timer
+    activate_release "$release_path"
+    systemctl enable verigo verigo-worker-api >/dev/null
+    systemctl restart verigo
+    for _ in {1..60}; do
+        if curl -fsS http://127.0.0.1:8000/api/health >/dev/null; then
+            systemctl restart verigo-worker-api
+            for _ in {1..60}; do
+                code=$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
+                    http://127.0.0.1:8001/api/workers/tencent-qq/claim || true)
+                [[ "$code" == "401" ]] && break
+                sleep 1
+            done
+            [[ "$code" == "401" ]]
+            prune_releases
+            trap - ERR
+            printf 'Verigo %s release %s health check passed\n' "$deploy_role" "$release_version"
+            exit 0
+        fi
+        sleep 1
+    done
+    journalctl -u verigo -n 80 --no-pager >&2
+    exit 1
+fi
+
+write_qq_env
+install -m 644 "$release_path/deploy/verigo-data-app-tunnel.service" \
+    /etc/systemd/system/verigo-data-app-tunnel.service
+install -m 644 "$release_path/deploy/verigo-postgres-tunnel.service" \
+    /etc/systemd/system/verigo-postgres-tunnel.service
+install -m 644 "$release_path/deploy/verigo-postgres-worker-tunnel.service" \
+    /etc/systemd/system/verigo-postgres-worker-tunnel.service
+install -m 644 "$release_path/deploy/verigo-supervisor.service" \
+    /etc/systemd/system/verigo-supervisor.service
+install -m 644 "$release_path/deploy/verigo-worker@.service" \
+    /etc/systemd/system/verigo-worker@.service
+install -m 644 "$release_path/deploy/verigo-qq-worker.service" \
+    /etc/systemd/system/verigo-qq-worker.service
+install -m 700 "$release_path/deploy/verigo-monitor.sh" /usr/local/sbin/verigo-monitor
+install -m 644 "$release_path/deploy/verigo-monitor.service" \
+    /etc/systemd/system/verigo-monitor.service
+install -m 644 "$release_path/deploy/verigo-monitor.timer" \
+    /etc/systemd/system/verigo-monitor.timer
+
+if ! command -v caddy >/dev/null; then
+    echo "Caddy is required by the hong-kong-edge-worker role" >&2
+    exit 1
+fi
+caddy validate --config "$release_path/deploy/Caddyfile.edge" --adapter caddyfile
+install -m 644 "$release_path/deploy/Caddyfile.edge" /etc/caddy/Caddyfile
+
+disable_units verigo-cloudstudio-keepalive
+rm -f /etc/systemd/system/verigo-cloudstudio-keepalive.service
 systemctl daemon-reload
-if command -v caddy >/dev/null; then
-    systemctl reload caddy
-fi
-systemctl enable --now verigo-backup.timer verigo-monitor.timer verigo-retention.timer
-# Keep release backup independent from a remote provider's latency.
-systemctl start --no-block verigo-backup.service
-
+disable_units verigo verigo-worker-api verigo-company-finder-tunnel \
+    verigo-backup.timer verigo-backup.service \
+    verigo-retention.timer verigo-retention.service
 activate_release "$release_path"
-systemctl restart verigo
-# Uvicorn may need over 20 seconds to initialize two workers after a cold
-# restart while SQLite migrations and imports are still warming up.
+systemctl enable --now verigo-data-app-tunnel verigo-postgres-tunnel \
+    verigo-postgres-worker-tunnel caddy verigo-monitor.timer \
+    verigo-supervisor verigo-worker@1 verigo-worker@2 \
+    verigo-qq-worker
+systemctl reload caddy
+
+if [[ "${VERIGO_DEPLOY_MAINTENANCE:-false}" == "true" ]]; then
+    systemctl restart verigo-supervisor verigo-worker@1 verigo-worker@2 \
+        verigo-qq-worker
+else
+    echo "Worker processes were left running; use maintenance mode for an immediate worker restart"
+fi
+
 for _ in {1..60}; do
-    if curl -fsS http://127.0.0.1:8000/api/health >/dev/null; then
-        systemctl restart verigo-worker-api.service
-        systemctl restart verigo-supervisor.service
-        # Jobs were drained before activation, so workers can safely reload
-        # the release instead of retaining modules from the old symlink target.
-        systemctl restart verigo-worker@1.service
-        systemctl restart verigo-worker@2.service
-        set_service_mode active
+    if curl -fsS https://verigo.site/api/health >/dev/null; then
+        prune_releases
         trap - ERR
-        # Keep only the 10 most recent releases to prevent disk accumulation.
-        ls -t "$releases_dir" | grep -v '^\.' | tail -n +11 | while read -r old_release; do
-            old_path="$releases_dir/$old_release"
-            if [ "$old_path" != "$(readlink -f "$current_link")" ]; then
-                rm -rf "$old_path"
-            fi
-        done
-        printf 'Verigo release %s health check passed\n' "$release_version"
+        printf 'Verigo %s release %s health check passed\n' "$deploy_role" "$release_version"
         exit 0
     fi
     sleep 1
 done
-
-journalctl -u verigo -n 80 --no-pager >&2
+journalctl -u caddy -u verigo-data-app-tunnel -n 80 --no-pager >&2
 exit 1

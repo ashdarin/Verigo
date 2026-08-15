@@ -1,0 +1,24 @@
+[Unit]
+Description=Verigo PostgreSQL SSH tunnel for background workers
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=20
+
+[Service]
+Type=simple
+User=verigo
+Group=verigo
+ExecStart=/usr/bin/ssh -NT -i /opt/verigo/.ssh/postgres_tunnel_ed25519 -o BatchMode=yes -o ExitOnForwardFailure=yes -o ConnectTimeout=10 -o ConnectionAttempts=3 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 -o TCPKeepAlive=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/opt/verigo/.ssh/postgres_known_hosts -L 127.0.0.1:15433:127.0.0.1:5432 verigo@101.34.212.199
+Restart=always
+RestartSec=1
+KillMode=process
+TimeoutStopSec=8
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/opt/verigo/.ssh
+
+[Install]
+WantedBy=multi-user.target

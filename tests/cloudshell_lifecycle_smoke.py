@@ -10,7 +10,13 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.core.cloudshell_lifecycle import CloudShellLifecycle, _load_cloudshell_account_specs
+import app.core.cloudshell_lifecycle as lifecycle_module
+from app.core.cloudshell_lifecycle import (
+    CloudShellLifecycle,
+    _load_cloudshell_account_specs,
+    cloudshell_lifecycle,
+    cloudshell_secondary_lifecycle,
+)
 
 
 command = CloudShellLifecycle._worker_command(2, "release-123")
@@ -26,6 +32,8 @@ assert "verigo-gmail-worker-2.log" in command
 assert "if ! test -x .venv/bin/python" in command
 assert ".verigo-worker-deps-sha256" in command
 assert command.count(".venv/bin/pip -q install") == 1
+assert "dnspython>=2.6,<3" in command
+assert "httpx>=0.27,<1" in command
 assert "python3 -m venv .venv && .venv/bin/pip" not in command
 try:
     CloudShellLifecycle._worker_command(0)
@@ -66,6 +74,33 @@ lifecycle.start()
 assert lifecycle._thread is not None and lifecycle._thread.is_alive()
 lifecycle.stop()
 assert lifecycle._thread is None
+assert cloudshell_lifecycle.account_id == "account1"
+assert cloudshell_secondary_lifecycle.account_id == "account2"
+
+idle_lifecycle = CloudShellLifecycle(worker_id="cloudshell-idle", worker_processes=2)
+idle_lifecycle._idle_since = 0.0
+with patch.object(idle_lifecycle, "_environment_ssh_base", return_value=["ssh", "idle@host"]), patch(
+    "app.core.cloudshell_lifecycle.subprocess.run",
+    return_value=SimpleNamespace(returncode=0, stdout=b"", stderr=b""),
+), patch.object(lifecycle_module.job_store, "mark_worker_offline") as marked_offline, patch(
+    "app.core.cloudshell_lifecycle.time.monotonic", return_value=9999.0
+):
+    idle_lifecycle._stop_idle_workers()
+assert idle_lifecycle._idle_worker_stopped
+assert marked_offline.call_count == 2
+
+process_check = CloudShellLifecycle(worker_id="cloudshell-process-check", worker_processes=3)
+with patch.object(
+    lifecycle_module.cloudshell_coordinator,
+    "account_can_wake",
+    return_value=True,
+), patch.object(
+    lifecycle_module.cloudshell_coordinator,
+    "worker_is_healthy",
+    return_value=True,
+) as healthy:
+    process_check.notify_job_queued()
+healthy.assert_called_once_with("cloudshell-process-check", 3)
 
 bootstrap = CloudShellLifecycle(worker_processes=2, worker_id="cloudshell-test")
 bootstrap_calls: list[tuple[list[str], bytes | None]] = []

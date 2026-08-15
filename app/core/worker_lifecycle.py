@@ -104,9 +104,19 @@ class TencentCloudStudioApi:
                 try:
                     page = browser.new_page()
                     page.goto(url, wait_until="domcontentloaded", timeout=60_000)
-                    # The loader posts the token and establishes the remote sockets.
-                    # Wait for the WebSocket to connect and trigger the Start hook.
-                    page.wait_for_timeout(15_000)
+                    # Loading the IDE frame alone does not always attach its terminal.
+                    # The Start lifecycle is released when the terminal receives its
+                    # first input, so submit the shell no-op after focusing it.
+                    terminal = page.locator("textarea").last
+                    terminal.wait_for(state="attached", timeout=30_000)
+                    terminal.focus()
+                    page.keyboard.type(":")
+                    page.keyboard.press("Enter")
+                    # Closing the browser after only the initial handshake can cancel
+                    # the Start lifecycle before watchdogs are detached.
+                    page.wait_for_timeout(
+                        self.config.cloudstudio_session_activation_seconds * 1_000
+                    )
                 finally:
                     browser.close()
         except Exception as exc:
@@ -180,6 +190,7 @@ class WorkerLifecycleCoordinator:
         self.config = config
         self.target = target
         self._ran_workspace = False
+        self._idle_workspace_stopped = False
         self._stop_event = threading.Event()
         self._wake_event = threading.Event()
         self._thread: threading.Thread | None = None
@@ -317,8 +328,6 @@ class WorkerLifecycleCoordinator:
     def _activate_workspace_session(
         self, runtime: WorkerRuntime, now: datetime, *, force: bool = False
     ) -> None:
-        if runtime.last_wake_error == IDE_SESSION_ACTIVATED and not force:
-            return
         if (
             runtime.last_wake_error == IDE_SESSION_ACTIVATED
             and runtime.wake_requested_at
@@ -377,6 +386,13 @@ class WorkerLifecycleCoordinator:
                 except Exception as exc:
                     logger.warning("Could not check Cloud Studio startup status: %s", exc)
                     return
+                if status == "STOPPED":
+                    # A manual stop or provider-side recycle can outlive the
+                    # persisted wake deadline. Restart immediately instead of
+                    # leaving queued work blocked until that deadline expires.
+                    self.store.clear_wake_state(self.target)
+                    self._wake_worker(self.store.worker_runtime(self.target), now)
+                    return
                 if status == "RUNNING":
                     retry_at = (
                         runtime.wake_requested_at + timedelta(
@@ -420,6 +436,15 @@ class WorkerLifecycleCoordinator:
         except Exception as exc:
             logger.warning("Could not check Cloud Studio status before wake: %s", exc)
             status = None
+
+        if status == "STOPPING":
+            deadline = now + timedelta(
+                seconds=self.config.cloudstudio_startup_timeout_seconds
+            )
+            self.store.record_wake_attempt(
+                self.target, deadline=deadline, error=RESTART_WAITING_FOR_STOP
+            )
+            return
 
         if status == "RUNNING":
             deadline = now + timedelta(
@@ -467,6 +492,8 @@ class WorkerLifecycleCoordinator:
         )
 
     def _stop_idle_worker(self, runtime: WorkerRuntime, now: datetime) -> None:
+        if self._idle_workspace_stopped:
+            return
         runtime = self.store.begin_worker_idle(self.target)
         if not runtime.idle_since:
             return
@@ -483,6 +510,18 @@ class WorkerLifecycleCoordinator:
             )
             if now < retry_at:
                 return
+        try:
+            status = self._workspace_api().workspace_status()
+        except Exception as exc:
+            self.store.record_stop_attempt(self.target, str(exc)[:500])
+            logger.error("Could not check Cloud Studio idle status: %s", exc)
+            return
+        if status in {None, "STOPPED"}:
+            self._idle_workspace_stopped = True
+            self._ran_workspace = False
+            return
+        if status == "STOPPING":
+            return
         try:
             request_id = self._workspace_api().stop_workspace()
         except Exception as exc:
@@ -505,6 +544,7 @@ class WorkerLifecycleCoordinator:
         online = self._is_online(runtime, now)
 
         if active:
+            self._idle_workspace_stopped = False
             self.store.clear_worker_idle(self.target)
             if online:
                 self.store.clear_wake_state(self.target)
@@ -514,10 +554,10 @@ class WorkerLifecycleCoordinator:
             return
 
         self.store.clear_wake_state(self.target)
-        if online:
-            self._stop_idle_worker(runtime, now)
-        else:
-            self.store.clear_worker_idle(self.target)
+        # A workspace can be RUNNING without a recent heartbeat, such as one
+        # left behind by an old keepalive service. It must still stop after the
+        # configured idle period rather than leaking paid workspace minutes.
+        self._stop_idle_worker(runtime, now)
 
 
 worker_lifecycle = WorkerLifecycleCoordinator()

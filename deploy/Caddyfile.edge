@@ -1,6 +1,5 @@
-# Backward-compatible alias for the Hong Kong edge configuration. Role-aware
-# releases use Caddyfile.edge explicitly; Shanghai direct recovery uses
-# Caddyfile.shanghai.
+# Public DNS points to the Hong Kong edge. The application and worker API stay
+# in Shanghai and are exposed only through verigo-data-app-tunnel.service.
 http://www.verigo.site {
     redir https://verigo.site{uri} permanent
 }
@@ -32,8 +31,6 @@ verigo.site {
         }
 
         reverse_proxy 127.0.0.1:18000 {
-            # Retry briefly while the application process is reloading during a
-            # release, preventing crawlers from seeing a transient 502.
             lb_try_duration 10s
         }
     }

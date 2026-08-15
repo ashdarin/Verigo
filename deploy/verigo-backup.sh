@@ -88,6 +88,7 @@ cmd = [
     "-f", str(out),
 ]
 subprocess.check_call(cmd, env=env)
+subprocess.check_call(["pg_restore", "--list", str(out)], stdout=subprocess.DEVNULL, env=env)
 print(f"postgres_dump={out} bytes={out.stat().st_size}")
 PY
     else

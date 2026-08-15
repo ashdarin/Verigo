@@ -1,6 +1,6 @@
-# Backward-compatible alias for the Hong Kong edge configuration. Role-aware
-# releases use Caddyfile.edge explicitly; Shanghai direct recovery uses
-# Caddyfile.shanghai.
+# This configuration is retained for direct-app recovery. The Shanghai role
+# normally keeps Caddy disabled because public DNS terminates on the Hong Kong
+# edge and forwards to ports 8000/8001 over the application tunnel.
 http://www.verigo.site {
     redir https://verigo.site{uri} permanent
 }
@@ -26,14 +26,12 @@ verigo.site {
 
     route {
         @worker_api path /api/workers/*
-        reverse_proxy @worker_api 127.0.0.1:18001 {
+        reverse_proxy @worker_api 127.0.0.1:8001 {
             lb_try_duration 45s
             lb_try_interval 250ms
         }
 
-        reverse_proxy 127.0.0.1:18000 {
-            # Retry briefly while the application process is reloading during a
-            # release, preventing crawlers from seeing a transient 502.
+        reverse_proxy 127.0.0.1:8000 {
             lb_try_duration 10s
         }
     }

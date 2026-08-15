@@ -46,29 +46,35 @@ def _ts_expired(value: Any, now: datetime) -> bool:
         return True
 
 
-def _db_timestamp(value: datetime) -> datetime | str:
-    """Bind timestamps as ``timestamptz`` values on PostgreSQL."""
-    return value if postgres_active() else value.isoformat()
-
-
 class CloudShellCoordinator:
     """Coordinate Cloud Shell claims without storing credentials or tokens."""
 
     def __init__(self, database_path: Path | None = None) -> None:
         self._lock = threading.Lock()
+        self._accounts_sync_lock = threading.Lock()
+        self._test_database_path = database_path
         self._database_path = database_path or settings.database_path
         self._pool_refreshed_at = 0.0
+        self._accounts_synced_at = 0.0
 
     def _connect(self):
+        if self._test_database_path is not None:
+            return connect(self._database_path)
         from app.db.pg_compat import connect_app
 
         return connect_app()
 
-    @staticmethod
-    def _begin_write(db: Any) -> bool:
+    @property
+    def _uses_postgres(self) -> bool:
+        return self._test_database_path is None and postgres_active()
+
+    def _timestamp(self, value: datetime) -> datetime | str:
+        return value if self._uses_postgres else value.isoformat()
+
+    def _begin_write(self, db: Any) -> bool:
         """Begin a serialized coordinator write without blocking worker claims."""
         begin_immediate(db)
-        if postgres_active():
+        if self._uses_postgres:
             # The in-process lock is insufficient when worker-api is scaled.
             # Do not wait for another request's transaction, though: the remote
             # worker uses short polling and can retry its claim shortly.
@@ -83,9 +89,7 @@ class CloudShellCoordinator:
         return bool(getattr(settings, "cloudshell_coordinator_enabled", True))
 
     def initialize(self) -> None:
-        from app.db.pg_compat import postgres_active
-
-        if postgres_active():
+        if self._uses_postgres:
             return
         with self._lock, closing(self._connect()) as db:
             db.execute(
@@ -169,31 +173,37 @@ class CloudShellCoordinator:
         ]
         records = builtins + [dict(item) for item in accounts]
         today = _day()
+        account_rows: list[tuple[str, str, str, bool, int]] = []
+        for item in records:
+            worker_id = str(item.get("worker_id") or "").strip()
+            if not worker_id:
+                continue
+            account_id = str(item.get("account_id") or item.get("id") or worker_id).strip()
+            account_rows.append((
+                worker_id,
+                today,
+                account_id,
+                bool(item.get("enabled", True)),
+                max(0, int(item.get(
+                    "soft_quota_units", settings.cloudshell_soft_quota_units
+                ) or 0)),
+            ))
         with self._lock, closing(self._connect()) as db:
             if not self._begin_write(db):
                 db.rollback()
                 return
-            for item in records:
-                worker_id = str(item.get("worker_id") or "").strip()
-                if not worker_id:
-                    continue
-                account_id = str(item.get("account_id") or item.get("id") or worker_id).strip()
-                enabled = bool(item.get("enabled", True))
+            if account_rows:
+                account_placeholders = ", ".join("(?, ?, ?, ?, ?)" for _ in account_rows)
+                parameters = tuple(value for row in account_rows for value in row)
                 db.execute(
-                    """INSERT INTO cloudshell_account_usage
-                        (worker_id, usage_date, account_id, enabled, soft_quota_units)
-                        VALUES (?, ?, ?, ?, ?)
-                        ON CONFLICT(worker_id, usage_date) DO UPDATE SET
-                            account_id=excluded.account_id,
-                            enabled=excluded.enabled,
-                            soft_quota_units=excluded.soft_quota_units""",
-                    (
-                        worker_id,
-                        today,
-                        account_id,
-                        enabled,
-                        max(0, int(item.get("soft_quota_units", settings.cloudshell_soft_quota_units) or 0)),
-                    ),
+                    f"""INSERT INTO cloudshell_account_usage
+                    (worker_id, usage_date, account_id, enabled, soft_quota_units)
+                    VALUES {account_placeholders}
+                    ON CONFLICT(worker_id, usage_date) DO UPDATE SET
+                        account_id=excluded.account_id,
+                        enabled=excluded.enabled,
+                        soft_quota_units=excluded.soft_quota_units""",
+                    parameters,
                 )
             db.commit()
 
@@ -219,8 +229,8 @@ class CloudShellCoordinator:
             # smoke tests; production workers should be declared in the manifest.
             db.execute(
                 """INSERT INTO cloudshell_account_usage
-                    (worker_id, usage_date, account_id, enabled) VALUES (?, ?, ?, 1)""",
-                (worker_id, today, worker_id),
+                    (worker_id, usage_date, account_id, enabled) VALUES (?, ?, ?, ?)""",
+                (worker_id, today, worker_id, True),
             )
 
     @staticmethod
@@ -253,29 +263,43 @@ class CloudShellCoordinator:
         if not self.enabled:
             return
         now_monotonic = time.monotonic()
-        if not force and now_monotonic - self._pool_refreshed_at < 5:
+        if not force and now_monotonic - self._pool_refreshed_at < 60:
             return
-        self.sync_accounts()
+        # The account manifest is static operational configuration. Avoid
+        # rewriting it from every worker-api process on every claim.
+        if now_monotonic - self._accounts_synced_at >= 60:
+            with self._accounts_sync_lock:
+                now_monotonic = time.monotonic()
+                if now_monotonic - self._accounts_synced_at >= 60:
+                    self.sync_accounts()
+                    self._accounts_synced_at = time.monotonic()
         with self._lock:
             now_monotonic = time.monotonic()
-            if not force and now_monotonic - self._pool_refreshed_at < 5:
+            if not force and now_monotonic - self._pool_refreshed_at < 60:
                 return
             today = _day()
             now = _now()
             with closing(self._connect()) as db:
                 if not self._begin_write(db):
                     db.rollback()
+                    # Another API process is already refreshing the durable
+                    # pool. Back off locally rather than retrying every claim.
+                    self._pool_refreshed_at = now_monotonic
                     return
-                queue_depth = int(db.execute(
-                    """SELECT COUNT(*) FROM jobs
-                       WHERE execution_target='gmail' AND status IN ('queued', 'running')
-                         AND EXISTS (SELECT 1 FROM job_results r
-                                    WHERE r.job_id=jobs.id AND r.progress_state='pending')"""
+                pending_emails = int(db.execute(
+                    """SELECT COUNT(*) FROM job_results r
+                       JOIN jobs ON jobs.id=r.job_id
+                       WHERE jobs.execution_target='gmail'
+                         AND jobs.status IN ('queued', 'running')
+                         AND r.progress_state='pending'"""
                 ).fetchone()[0])
                 desired = max(
                     settings.cloudshell_active_min_accounts,
-                    (queue_depth + settings.cloudshell_queue_per_active_account - 1)
-                    // settings.cloudshell_queue_per_active_account,
+                    (
+                        pending_emails
+                        + settings.cloudshell_pending_emails_per_active_account
+                        - 1
+                    ) // settings.cloudshell_pending_emails_per_active_account,
                 )
                 desired = min(settings.cloudshell_active_max_accounts, desired)
                 rows = db.execute(
@@ -301,7 +325,7 @@ class CloudShellCoordinator:
                 # Otherwise a previously active but now-offline account can keep
                 # the active slot while a live Cloud Shell worker is prevented
                 # from claiming queued work.
-                healthy_before = _db_timestamp(
+                healthy_before = self._timestamp(
                     now - timedelta(seconds=settings.node_stale_seconds)
                 )
                 healthy_worker_ids = {
@@ -350,19 +374,25 @@ class CloudShellCoordinator:
             return False
         return bool(row[0]) and bool(row[1]) and _ts_expired(row[2], _now())
 
-    def worker_is_healthy(self, worker_id: str) -> bool:
-        """Return whether one account already has a live polling process."""
+    def worker_is_healthy(self, worker_id: str, expected_processes: int = 1) -> bool:
+        """Return whether all configured polling processes are online."""
         self.initialize()
+        expected_processes = max(1, int(expected_processes))
+        process_ids = tuple(
+            f"{worker_id}-{number}" for number in range(1, expected_processes + 1)
+        )
+        if expected_processes == 1:
+            process_ids = (worker_id, *process_ids)
+        placeholders = ", ".join("?" for _ in process_ids)
         cutoff = _now() - timedelta(seconds=settings.node_stale_seconds)
         with closing(self._connect()) as db:
             row = db.execute(
-                """SELECT 1 FROM worker_nodes
+                f"""SELECT COUNT(DISTINCT worker_id) FROM worker_nodes
                    WHERE target='gmail' AND health='healthy' AND last_seen_at >= ?
-                     AND (worker_id=? OR worker_id LIKE ?)
-                   LIMIT 1""",
-                (cutoff, worker_id, f"{worker_id}-%"),
+                     AND worker_id IN ({placeholders})""",
+                (cutoff, *process_ids),
             ).fetchone()
-        return row is not None
+        return bool(row) and int(row[0]) >= expected_processes
 
     def reserve(self, worker_id: str, reserved_units: int) -> str | None:
         """Reserve a claim slot if this worker is currently least-used."""
@@ -386,7 +416,7 @@ class CloudShellCoordinator:
             now = _now()
             db.execute(
                 "DELETE FROM cloudshell_claim_reservations WHERE created_at < ?",
-                (_db_timestamp(now - timedelta(minutes=10)),),
+                (self._timestamp(now - timedelta(minutes=10)),),
             )
             worker = db.execute(
                 """SELECT enabled, cooldown_until, claimed_units
@@ -402,7 +432,7 @@ class CloudShellCoordinator:
             online_rows = db.execute(
                 """SELECT worker_id FROM worker_nodes
                    WHERE target='gmail' AND health='healthy' AND last_seen_at >= ?""",
-                (_db_timestamp(now - timedelta(seconds=settings.node_stale_seconds)),),
+                (self._timestamp(now - timedelta(seconds=settings.node_stale_seconds)),),
             ).fetchall()
             online_accounts = {
                 str(value[0]).rsplit("-", 1)[0]
@@ -416,11 +446,11 @@ class CloudShellCoordinator:
                    FROM cloudshell_account_usage u
                    LEFT JOIN cloudshell_claim_reservations r
                      ON r.worker_id=u.worker_id AND r.usage_date=u.usage_date
-                   WHERE u.usage_date=? AND u.enabled=1 AND u.active=1
+                   WHERE u.usage_date=? AND u.enabled=? AND u.active=?
                    GROUP BY u.worker_id, u.claimed_units, u.last_claimed_at
                    ORDER BY u.claimed_units + COALESCE(SUM(r.reserved_units), 0),
                             u.last_claimed_at, u.worker_id""",
-                (today,),
+                (today, True, True),
             ).fetchall()
             if online_accounts:
                 rows = [row for row in rows if str(row[0]) in online_accounts]
@@ -430,7 +460,7 @@ class CloudShellCoordinator:
             token = secrets.token_urlsafe(18)
             db.execute(
                 "INSERT INTO cloudshell_claim_reservations VALUES (?, ?, ?, ?, ?)",
-                (token, worker_id, today, reserved_units, _db_timestamp(now)),
+                (token, worker_id, today, reserved_units, self._timestamp(now)),
             )
             db.commit()
             return token
@@ -441,9 +471,10 @@ class CloudShellCoordinator:
         self.initialize()
         now = _now()
         with self._lock, closing(self._connect()) as db:
-            if not self._begin_write(db):
-                db.rollback()
-                return False
+            # The reservation token is unique. Consuming it does not need the
+            # global account-selection try-lock, which could silently discard
+            # usage accounting during a concurrent pool refresh.
+            begin_immediate(db)
             row = db.execute(
                 "SELECT worker_id, usage_date FROM cloudshell_claim_reservations WHERE token=?",
                 (token,),
@@ -458,7 +489,7 @@ class CloudShellCoordinator:
                    SET claimed_units=claimed_units+?, claimed_tasks=claimed_tasks+1,
                        last_claimed_at=?, failure_count=0, cooldown_until=NULL
                    WHERE worker_id=? AND usage_date=?""",
-                (max(1, int(units)), _db_timestamp(now), worker_id, usage_date),
+                (max(1, int(units)), self._timestamp(now), worker_id, usage_date),
             )
             db.commit()
             return True
@@ -472,12 +503,14 @@ class CloudShellCoordinator:
             db.commit()
 
     def record_failure(self, worker_id: str, error: str) -> None:
+        """Cool down every failed bootstrap so a standby account can take over."""
         detail = error.lower()
-        if not any(token in detail for token in ("quota", "resource_exhausted", "weekly", "rate limit")):
-            return
+        quota_failure = any(
+            token in detail
+            for token in ("quota", "resource_exhausted", "weekly", "rate limit")
+        )
         self.initialize()
         now = _now()
-        cooldown = now + timedelta(seconds=settings.cloudshell_quota_cooldown_seconds)
         with self._lock, closing(self._connect()) as db:
             if not self._begin_write(db):
                 db.rollback()
@@ -485,11 +518,27 @@ class CloudShellCoordinator:
             today = _day(now)
             worker_id = self._canonical_worker_id(db, worker_id, today)
             self._ensure_worker(db, worker_id, today)
+            row = db.execute(
+                """SELECT failure_count FROM cloudshell_account_usage
+                   WHERE worker_id=? AND usage_date=?""",
+                (worker_id, today),
+            ).fetchone()
+            failures = int(row[0]) + 1 if row else 1
+            cooldown_seconds = (
+                settings.cloudshell_quota_cooldown_seconds
+                if quota_failure
+                else min(
+                    settings.cloudshell_quota_cooldown_seconds,
+                    settings.cloudshell_bootstrap_cooldown_seconds
+                    * (2 ** min(failures - 1, 3)),
+                )
+            )
+            cooldown = now + timedelta(seconds=cooldown_seconds)
             db.execute(
                 """UPDATE cloudshell_account_usage
                    SET failure_count=failure_count+1, cooldown_until=?, last_failure_at=?
                    WHERE worker_id=? AND usage_date=?""",
-                (_db_timestamp(cooldown), _db_timestamp(now), worker_id, today),
+                (self._timestamp(cooldown), self._timestamp(now), worker_id, today),
             )
             db.commit()
 
@@ -567,6 +616,7 @@ class CloudShellCoordinator:
                 "today_units": sum(int(item["claimed_units"]) for item in items),
                 "today_tasks": sum(int(item["claimed_tasks"]) for item in items),
                 "queue_depth": self._queue_depth(),
+                "pending_emails": self._pending_email_count(),
                 "updated_at": now,
             },
         }
@@ -579,6 +629,17 @@ class CloudShellCoordinator:
                    WHERE execution_target='gmail' AND status IN ('queued', 'running')
                      AND EXISTS (SELECT 1 FROM job_results r WHERE r.job_id=jobs.id
                                 AND r.progress_state='pending')"""
+            ).fetchone()[0])
+
+    def _pending_email_count(self) -> int:
+        self.initialize()
+        with closing(self._connect()) as db:
+            return int(db.execute(
+                """SELECT COUNT(*) FROM job_results r
+                   JOIN jobs ON jobs.id=r.job_id
+                   WHERE jobs.execution_target='gmail'
+                     AND jobs.status IN ('queued', 'running')
+                     AND r.progress_state='pending'"""
             ).fetchone()[0])
 
 

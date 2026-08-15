@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import base64
 from typing import Any
 
 from tencentcloud.cloudstudio.v20230508 import models
@@ -14,6 +13,7 @@ def worker_start_script(worker_processes: int = 1) -> str:
     processes = max(1, min(8, int(worker_processes)))
     slots = " ".join(str(slot) for slot in range(1, processes + 1))
     return f"""set -eu
+trap 'status=$?; printf "Verigo bootstrap failed: line=%s status=%s\\n" "$LINENO" "$status" >&2' ERR
 curl -fsS --retry 3 --retry-delay 2 -X POST -H \"X-Verigo-CloudStudio-Probe-Token: ${{VERIGO_CLOUDSTUDIO_PROBE_TOKEN}}\" -H \"X-Verigo-CloudStudio-Workspace-Key: ${{VERIGO_CLOUDSTUDIO_SPACE_KEY}}\" https://verigo.site/api/workers/cloudstudio/probe >/tmp/verigo-cloudstudio-probe.log 2>&1 || true
 mkdir -p /workspace/Verigo
 bundle=/tmp/verigo-cloudstudio-worker.tar.gz
@@ -23,7 +23,6 @@ curl -fsS --retry 5 --retry-delay 2 --retry-connrefused \
   -o "$bundle"
 tar -xzf "$bundle" -C /workspace/Verigo
 cd /workspace/Verigo
-release_version="$(cat RELEASE_VERSION 2>/dev/null || printf unknown)"
 if [ ! -x .venv/bin/python ]; then
   python3 -m venv .venv >/tmp/verigo-qq-venv.log 2>&1
 fi
@@ -46,27 +45,9 @@ while true; do
 done
 VERIGO_WATCHDOG
 chmod 700 /tmp/verigo-qq-worker-watchdog.sh
-layout="${{VERIGO_REMOTE_WORKER_TARGET}}:${{VERIGO_TENCENT_QQ_WORKER_ID}}:{processes}:$release_version"
-layout_file=/tmp/verigo-qq-worker-layout
-layout_ready=true
-if [ ! -s "$layout_file" ] || [ "$(cat "$layout_file")" != "$layout" ]; then
-  layout_ready=false
-fi
-for slot in {slots}; do
-  pid_file="/tmp/verigo-qq-worker-watchdog-${{slot}}.pid"
-  if [ ! -s "$pid_file" ]; then
-    layout_ready=false
-    continue
-  fi
-  pid="$(cat "$pid_file")"
-  if ! kill -0 "$pid" 2>/dev/null || \
-      ! ps -p "$pid" -o args= 2>/dev/null | grep -Fq "/tmp/verigo-qq-worker-watchdog.sh $slot"; then
-    layout_ready=false
-  fi
-done
-if [ "$layout_ready" = true ]; then
-  exit 0
-fi
+# Cloud Studio preserves workspace files across hibernation, including PID
+# markers, even when a worker no longer has a usable network session. The Start
+# lifecycle runs once per workspace start, so always replace the watchdogs.
 for pid_file in /tmp/verigo-qq-worker-watchdog.pid /tmp/verigo-qq-worker-watchdog-*.pid; do
   [ -s "$pid_file" ] || continue
   pid="$(cat "$pid_file")"
@@ -74,7 +55,6 @@ for pid_file in /tmp/verigo-qq-worker-watchdog.pid /tmp/verigo-qq-worker-watchdo
 done
 sleep 2
 rm -f /tmp/verigo-qq-worker-watchdog.pid /tmp/verigo-qq-worker-watchdog-*.pid
-echo "$layout" >"$layout_file"
 for slot in {slots}; do
   pid_file="/tmp/verigo-qq-worker-watchdog-${{slot}}.pid"
   nohup setsid /tmp/verigo-qq-worker-watchdog.sh "$slot" >>/tmp/verigo-qq-watchdog.log 2>&1 </dev/null &
@@ -84,9 +64,20 @@ done
 
 
 def worker_start_command(worker_processes: int = 1) -> str:
-    """Encode the shell body because Cloud Studio's WAF rejects it verbatim."""
-    encoded = base64.b64encode(worker_start_script(worker_processes).encode()).decode()
-    return f"echo {encoded} | base64 -d | bash"
+    """Return a short lifecycle command accepted by Cloud Studio.
+
+    Cloud Studio accepts the lifecycle update but silently skips commands around
+    one kilobyte. The full bootstrap script is served by the worker API after
+    token authentication, while this command stays small enough to execute.
+    """
+    processes = max(1, min(8, int(worker_processes)))
+    return (
+        "bash -c 'curl -fsS --retry 3 --retry-delay 2 "
+        '-H "X-Verigo-Worker-Token: $VERIGO_TENCENT_QQ_WORKER_TOKEN" '
+        '"https://verigo.site/api/workers/$VERIGO_REMOTE_WORKER_TARGET/'
+        f"bootstrap?processes=${{VERIGO_CLOUDSTUDIO_WORKER_PROCESSES:-{processes}}}"
+        "\" | bash'"
+    )
 
 
 def workspace_configuration(
@@ -114,10 +105,21 @@ def workspace_configuration(
         "VERIGO_TENCENT_QQ_WORKER_TOKEN": token,
         "VERIGO_TENCENT_QQ_WORKER_ID": worker_id,
         "VERIGO_CLOUDSTUDIO_WORKER_PROCESSES": str(worker_processes),
-        # The limiter database is local to each workspace. Match both the
-        # provider-wide and per-MX capacity to this workspace's process count.
-        "VERIGO_QQ_SMTP_PER_MX": str(worker_processes) if worker_target == "tencent-qq" else "1",
+        # All watchdogs in a workspace share this limiter database. The server
+        # scheduler separately keeps aggregate QQ pressure within the same cap.
+        "VERIGO_QQ_WORKER_MAX_WORKERS": "6",
+        "VERIGO_QQ_SMTP_PER_MX": "6" if worker_target == "tencent-qq" else "1",
         "VERIGO_EMAIL_HARD_TIMEOUT_SECONDS": "90",
+        # The public lookup receives only probe@domain. Cloud Studio gets no
+        # database credentials, so it keeps an isolated process cache.
+        "VERIGO_DISPOSABLE_LOOKUP_ENABLED": "true" if getattr(settings, "disposable_lookup_enabled", False) else "false",
+        "VERIGO_DISPOSABLE_LOOKUP_URL": str(getattr(settings, "disposable_lookup_url", "https://disposable.debounce.io/")),
+        "VERIGO_DISPOSABLE_LOOKUP_TIMEOUT_SECONDS": str(getattr(settings, "disposable_lookup_timeout_seconds", 0.8)),
+        "VERIGO_DISPOSABLE_LOOKUP_BACKGROUND_WORKERS": str(getattr(settings, "disposable_lookup_background_workers", 2)),
+        "VERIGO_DISPOSABLE_LOOKUP_BACKGROUND_QUEUE": str(getattr(settings, "disposable_lookup_background_queue", 2)),
+        "VERIGO_DISPOSABLE_LOOKUP_POSITIVE_CACHE_HOURS": str(getattr(settings, "disposable_lookup_positive_cache_hours", 720)),
+        "VERIGO_DISPOSABLE_LOOKUP_NEGATIVE_CACHE_HOURS": str(getattr(settings, "disposable_lookup_negative_cache_hours", 168)),
+        "VERIGO_DISPOSABLE_LOOKUP_FAILURE_CACHE_SECONDS": str(getattr(settings, "disposable_lookup_failure_cache_seconds", 300)),
         "VERIGO_TENCENT_QQ_POLL_SECONDS": "0.25",
         "VERIGO_TENCENT_QQ_RETRY_SECONDS": "5",
         "VERIGO_CLOUDSTUDIO_PROBE_TOKEN": settings.cloudstudio_probe_token,
