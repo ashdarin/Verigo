@@ -10,6 +10,7 @@ from app.core.cloudshell_lifecycle import GMAIL_TARGET, start_cloudshell_lifecyc
 from app.core.worker_lifecycle import DOMESTIC_CLOUDSTUDIO_TARGET, worker_lifecycle
 from app.config import settings
 from app.db.jobs import job_store
+from app.tasks.verification import reconcile_orphaned_background_retries
 
 
 stop_event = threading.Event()
@@ -23,6 +24,7 @@ def main() -> None:
     signal.signal(signal.SIGINT, lambda *_: stop_event.set())
     signal.signal(signal.SIGTERM, lambda *_: stop_event.set())
     next_node_reconcile = 0.0
+    next_retry_reconcile = 0.0
     while not stop_event.wait(1):
         if time.monotonic() >= next_node_reconcile:
             # A concurrent API transaction can briefly hold a PostgreSQL row
@@ -43,6 +45,14 @@ def main() -> None:
             except Exception:  # noqa: BLE001
                 logger.exception("Remote worker maintenance pass failed; retrying")
             next_node_reconcile = time.monotonic() + 30
+        if time.monotonic() >= next_retry_reconcile:
+            try:
+                summary = reconcile_orphaned_background_retries(parent_limit=25)
+                if summary["results"]:
+                    logger.info("Settled orphaned verification reviews: %s", summary)
+            except Exception:  # noqa: BLE001
+                logger.exception("Orphaned review reconciliation failed; retrying")
+            next_retry_reconcile = time.monotonic() + 300
     stop_cloudshell_lifecycles()
     worker_lifecycle.stop()
 

@@ -350,10 +350,10 @@ async function checkDashboard(browser) {
         total: 1000, deliverable: 850, undeliverable: 80, unknown: 70, reviewed: 50,
         risk_flags: { disposable: 12, mailbox_full: 8, role_address: 25, do_not_reply: 6 },
         providers: [
-          { provider: "gmail", processed: 600, deliverable_rate: 86.7, unconfirmed_rate: 6.0, review_completion_rate: 80.0, p50_seconds: 8, p95_seconds: 30 },
-          { provider: "microsoft", processed: 250, deliverable_rate: 84.0, unconfirmed_rate: 8.0, review_completion_rate: null, p50_seconds: 10, p95_seconds: 45 },
-          { provider: "qq", processed: 100, deliverable_rate: 81.0, unconfirmed_rate: 11.0, review_completion_rate: 60.0, p50_seconds: 15, p95_seconds: 70 },
-          { provider: "other", processed: 50, deliverable_rate: 82.0, unconfirmed_rate: 10.0, review_completion_rate: null, p50_seconds: 18, p95_seconds: 90 },
+          { provider: "gmail", processed: 600, deliverable_rate: 86.7, unconfirmed_rate: 6.0, review_completion_rate: 80.0, latency_sample: 580, p50_seconds: 8, p95_seconds: 30, review_latency_sample: 20, review_p50_seconds: 900, review_p95_seconds: 3600 },
+          { provider: "microsoft", processed: 250, deliverable_rate: 84.0, unconfirmed_rate: 8.0, review_completion_rate: null, latency_sample: 250, p50_seconds: 10, p95_seconds: 45, review_latency_sample: 0, review_p50_seconds: 0, review_p95_seconds: 0 },
+          { provider: "qq", processed: 100, deliverable_rate: 81.0, unconfirmed_rate: 11.0, review_completion_rate: 60.0, latency_sample: 90, p50_seconds: 15, p95_seconds: 70, review_latency_sample: 10, review_p50_seconds: 1800, review_p95_seconds: 4200 },
+          { provider: "other", processed: 50, deliverable_rate: 82.0, unconfirmed_rate: 10.0, review_completion_rate: null, latency_sample: 50, p50_seconds: 18, p95_seconds: 90, review_latency_sample: 0, review_p50_seconds: 0, review_p95_seconds: 0 },
         ],
         baseline: {
           window_days: 7, minimum_daily_sample: 50,

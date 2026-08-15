@@ -457,6 +457,7 @@ def enqueue_background_retry(
         return
     email_keys = {email.lower() for email in emails}
     retry_groups: dict[int, list[str]] = {}
+    updated_results: list[dict[str, Any]] = []
     for result in parent.results:
         if str(result.get("email", "")).lower() not in email_keys:
             continue
@@ -465,13 +466,15 @@ def enqueue_background_retry(
         if delay_seconds is None:
             finalize_temporary_smtp_results([result])
             _clear_retry_metadata(result, "completed")
+            updated_results.append(result)
             continue
         retry_groups.setdefault(delay_seconds, []).append(str(result["email"]))
         result["retry_state"] = "scheduled"
         result["retry_attempt"] = attempt
         result["retry_max_attempts"] = plan.max_attempts
         result["retry_at"] = (utc_now() + timedelta(seconds=delay_seconds)).isoformat()
-    job_store.persist(parent)
+        updated_results.append(result)
+    job_store.upsert_results(parent.id, updated_results)
     active = job_store.retry_children(parent.id)
     for delay_seconds, group_emails in retry_groups.items():
         group_keys = {email.lower() for email in group_emails}
@@ -582,7 +585,7 @@ def finish_background_retry(job: Job) -> Job | None:
     job_store.cache_results(parent.results)
     job_store.record_catch_all(parent)
     write_csv(parent)
-    job_store.persist(parent)
+    job_store.upsert_results(parent.id, changed_results)
     publish_completed_result_objects(parent)
     if next_retry:
         enqueue_background_retry(parent, job, next_retry, job.temporary_retry_attempts + 1)
@@ -651,7 +654,7 @@ def finish_background_retry_failure(job: Job, error: str) -> Job | None:
         changed_results.append(result)
     job_store.cache_results(parent.results)
     write_csv(parent)
-    job_store.persist(parent)
+    job_store.upsert_results(parent.id, changed_results)
     publish_completed_result_objects(parent)
     if changed and parent.owner_id:
         result_index_by_email = {
@@ -672,6 +675,91 @@ def finish_background_retry_failure(job: Job, error: str) -> Job | None:
             )
     logger.warning("Deferred retry %s failed: %s", job.id, error)
     return parent
+
+
+def _mark_orphaned_retry_failed(result: dict[str, Any]) -> dict[str, Any]:
+    """Settle a scheduled review that no longer has any executable child job."""
+    _clear_retry_metadata(result, "failed")
+    result["deliverable"] = None
+    result["valid"] = True
+    result["smtp_result"] = "邮件服务器暂时无法完成自动复核，最终状态仍待确认"
+    result["message"] = "自动复核未完成，建议稍后手动重新验证"
+    apply_outcome(
+        result,
+        stage=str(result.get("failure_stage") or "smtp"),
+        reason="retry_worker_failed",
+        retry_policy=RETRY_NEVER,
+        code=result.get("smtp_code"),
+    )
+    result["retry_updated"] = True
+    return result
+
+
+def reconcile_orphaned_background_retries(
+    *, grace_seconds: int = 15 * 60, parent_limit: int = 25,
+) -> dict[str, int]:
+    """Recover terminal child results and settle abandoned review notices.
+
+    A grace period keeps this maintenance pass away from the small transaction
+    window between a worker completing its child job and the API merging that
+    result into the visible parent task.
+    """
+    cutoff = utc_now() - timedelta(seconds=max(60, int(grace_seconds)))
+    parent_ids = job_store.orphaned_retry_parent_ids(cutoff, parent_limit)
+    summary = {"parents": 0, "results": 0, "recovered": 0, "failed": 0}
+    for parent_id in parent_ids:
+        parent = job_store.get(parent_id)
+        if parent is None or job_store.has_active_retry_child(parent_id):
+            continue
+        latest: dict[str, tuple[int, dict[str, Any]]] = {}
+        for child in job_store.retry_children(parent_id):
+            attempt = int(child.temporary_retry_attempts or 0)
+            for child_result in child.results:
+                key = str(child_result.get("email") or "").lower()
+                previous = latest.get(key)
+                if key and (previous is None or attempt >= previous[0]):
+                    latest[key] = (attempt, dict(child_result))
+
+        updated: list[dict[str, Any]] = []
+        for index, current in enumerate(parent.results):
+            if not current.get("retry_at"):
+                continue
+            key = str(current.get("email") or "").lower()
+            candidate = latest.get(key)
+            if candidate is None:
+                result = _mark_orphaned_retry_failed(dict(current))
+                summary["failed"] += 1
+            else:
+                attempt, raw_candidate = candidate
+                result = normalize_result(raw_candidate)
+                if is_retryable_smtp_result(result):
+                    plan = apply_retry_plan(result)
+                    if attempt >= plan.max_attempts:
+                        finalize_temporary_smtp_results([result])
+                        _clear_retry_metadata(result, "completed")
+                        result["retry_updated"] = True
+                        summary["recovered"] += 1
+                    else:
+                        result = _mark_orphaned_retry_failed(result)
+                        summary["failed"] += 1
+                else:
+                    _clear_retry_metadata(result, "completed")
+                    result["retry_updated"] = True
+                    summary["recovered"] += 1
+            result["original_index"] = int(current.get("original_index", index))
+            parent.results[index] = result
+            updated.append(result)
+
+        if not updated:
+            continue
+        job_store.upsert_results(parent.id, updated)
+        job_store.cache_results(updated)
+        job_store.record_catch_all(parent)
+        write_csv(parent)
+        publish_completed_result_objects(parent)
+        summary["parents"] += 1
+        summary["results"] += len(updated)
+    return summary
 
 
 def verify_until_deliverable(

@@ -29,8 +29,9 @@ def evaluate(
         if unconfirmed >= unconfirmed_percent:
             alerts.append(f"{provider} unconfirmed={unconfirmed:.1f}%/{processed}")
         p95 = _number(row.get("p95_seconds"), -1)
-        if p95 >= p95_seconds:
-            alerts.append(f"{provider} p95={p95:.0f}s/{processed}")
+        latency_sample = int(_number(row.get("latency_sample"), processed))
+        if latency_sample >= minimum_sample and p95 >= p95_seconds:
+            alerts.append(f"{provider} p95={p95:.0f}s/{latency_sample}")
     backlog = int(_number(payload.get("review_backlog")))
     if backlog >= review_backlog:
         alerts.append(f"review backlog={backlog}")

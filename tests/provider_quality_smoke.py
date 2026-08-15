@@ -27,8 +27,8 @@ class FakeConnection:
 
     def fetchall(self):
         return [
-            ("gmail", 10, 7, 2, 4, 3, 2, 1, 3, 0, 9.6, 20.4),
-            ("qq", 2, 1, 1, 0, 0, 0, 1, 0, 2, 12.2, 18.9),
+            ("gmail", 10, 7, 2, 4, 3, 2, 1, 3, 0, 8, 9.6, 20.4, 3, 900, 3600),
+            ("qq", 2, 1, 1, 0, 0, 0, 1, 0, 2, 2, 12.2, 18.9, 0, 0, 0),
         ]
 
     def fetchone(self):
@@ -45,7 +45,11 @@ def main() -> int:
     assert rows["gmail"]["deliverable_rate"] == 70.0
     assert rows["gmail"]["unconfirmed_rate"] == 20.0
     assert rows["gmail"]["review_completion_rate"] == 75.0
+    assert rows["gmail"]["latency_sample"] == 8
     assert rows["gmail"]["p50_seconds"] == 10 and rows["gmail"]["p95_seconds"] == 20
+    assert rows["gmail"]["review_latency_sample"] == 3
+    assert rows["gmail"]["review_p50_seconds"] == 900
+    assert rows["gmail"]["review_p95_seconds"] == 3600
     assert rows["microsoft"]["deliverable_rate"] is None
     assert quality["total"] == 12 and quality["deliverable"] == 8 and quality["unknown"] == 3
     assert quality["reviewed"] == 3
@@ -55,6 +59,7 @@ def main() -> int:
     assert any("job.parent_id IS NULL" in query for query in connection.queries)
     assert any("PERCENTILE_CONT" in query for query in connection.queries)
     assert any("result.retry_at IS NOT NULL" in query for query in connection.queries)
+    assert any("child.status IN ('queued', 'running')" in query for query in connection.queries)
     assert "baseline" not in quality
     print("provider quality smoke: ok")
     return 0

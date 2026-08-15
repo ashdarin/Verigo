@@ -1466,6 +1466,31 @@ class JobStore:
             ).fetchone()
         return row is not None
 
+    def orphaned_retry_parent_ids(self, cutoff: datetime, limit: int = 25) -> list[str]:
+        """Return settled parent tasks whose visible recheck no longer has a worker job."""
+        self.initialize()
+        cutoff_bind = cutoff if postgres_active() else _sql_ts(cutoff)
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                """
+                SELECT result.job_id, MIN(result.retry_at) AS oldest_retry
+                FROM job_results AS result
+                JOIN jobs AS parent ON parent.id=result.job_id
+                WHERE result.retry_at IS NOT NULL AND result.retry_at <= ?
+                    AND parent.parent_id IS NULL AND parent.retry_parent_id IS NULL
+                    AND NOT EXISTS (
+                        SELECT 1 FROM jobs AS child
+                        WHERE child.retry_parent_id=parent.id
+                            AND child.status IN ('queued', 'running')
+                    )
+                GROUP BY result.job_id
+                ORDER BY oldest_retry, result.job_id
+                LIMIT ?
+                """,
+                (cutoff_bind, max(1, min(int(limit), 1000))),
+            ).fetchall()
+        return [str(row[0]) for row in rows]
+
     def refresh_parent(self, parent_id: str) -> Job | None:
         """Merge child results into the user-visible parent task."""
         parent = self.get(parent_id, include_results=False)

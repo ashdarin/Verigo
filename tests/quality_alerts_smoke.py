@@ -23,16 +23,24 @@ def main() -> int:
 
     alerts = evaluate(
         {"review_backlog": 25, "providers": [
-            {"provider": "gmail", "processed": 300, "unconfirmed_rate": 16.2, "p95_seconds": 181},
+            {"provider": "gmail", "processed": 300, "unconfirmed_rate": 16.2, "latency_sample": 220, "p95_seconds": 181},
             {"provider": "microsoft", "processed": 240, "unconfirmed_rate": 4.0, "p95_seconds": 33},
         ]},
         minimum_sample=200, unconfirmed_percent=15, p95_seconds=180, review_backlog=25,
     )
     assert alerts == [
         "gmail unconfirmed=16.2%/300",
-        "gmail p95=181s/300",
+        "gmail p95=181s/220",
         "review backlog=25",
     ]
+    sparse_latency = evaluate(
+        {"review_backlog": 0, "providers": [{
+            "provider": "qq", "processed": 300, "unconfirmed_rate": 2,
+            "latency_sample": 12, "p95_seconds": 900,
+        }]},
+        minimum_sample=200, unconfirmed_percent=15, p95_seconds=180, review_backlog=25,
+    )
+    assert sparse_latency == []
     print("quality alerts smoke: ok")
     return 0
 

@@ -469,9 +469,15 @@ function renderProviderQuality(quality) {
     const baseline = baselineByProvider.get(item.provider) || {};
     const usableDays = Math.max(0, Number(baseline.usable_days) || 0);
     const baselineDays = Math.max(1, Number(baseline.days) || 7);
-    const duration = processed
+    const latencySample = Math.max(0, Number(item.latency_sample) || 0);
+    const reviewLatencySample = Math.max(0, Number(item.review_latency_sample) || 0);
+    const initialDuration = latencySample
       ? `${formatDuration(item.p50_seconds)} / ${formatDuration(item.p95_seconds)}`
       : "\u2014";
+    const reviewDuration = reviewLatencySample
+      ? `${formatDuration(item.review_p50_seconds)} / ${formatDuration(item.review_p95_seconds)}`
+      : "\u2014";
+    const duration = `<span class="provider-latency"><span>\u9996\u6b21 ${initialDuration}</span><small>\u590d\u6838 ${reviewDuration}</small></span>`;
     const reference = baseline.baseline_unconfirmed_rate == null
       ? "\u2014"
       : `${rate(baseline.baseline_unconfirmed_rate)} / ${formatDuration(baseline.baseline_p95_seconds)}`;

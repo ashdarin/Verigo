@@ -17,7 +17,7 @@
   <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"Organization","name":"Verigo","url":"https://verigo.site/","logo":"https://verigo.site/static/favicon.svg"},{"@type":"WebApplication","name":"Verigo","url":"https://verigo.site/","applicationCategory":"BusinessApplication","operatingSystem":"Web","description":"面向销售、招聘与出海团队的邮箱验证、名单清洗和企业邮箱查找工具。","offers":{"@type":"Offer","price":"0.50","priceCurrency":"CNY","description":"100 次批量验证"}},{"@type":"FAQPage","mainEntity":[{"@type":"Question","name":"Catch-all 邮箱是什么意思？","acceptedAnswer":{"@type":"Answer","text":"Catch-all 是企业邮箱域名的一种设置：发往该域名的任意前缀都可能被接收或转发，因此单次验证结果不一定能确认某个具体收件人真实存在。"}},{"@type":"Question","name":"企业邮箱查找和普通验证有什么区别？","acceptedAnswer":{"@type":"Answer","text":"普通验证用于确认已有邮箱是否可用；企业邮箱查找用于获取目标企业的业务联络邮箱，适合销售开发、招聘和商务合作。"}}]}]}</script>
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" referrerpolicy="no-referrer">
-  <link rel="stylesheet" href="/static/css/app.css?v=admin-grid-flow-v3">
+  <link rel="stylesheet" href="/static/css/app.css?v=retry-reconcile-v1">
   <link rel="stylesheet" href="/static/css/product.css?v=quality-baseline-v1">
 </head>
 <body class="product-surface">
@@ -407,7 +407,7 @@
       </div>
       <div class="provider-quality-table-wrap">
         <table class="provider-quality-table">
-          <thead><tr><th scope="col">服务商</th><th scope="col">24h 已处理</th><th scope="col">可投递率</th><th scope="col">无法确认率</th><th scope="col">复核完成率</th><th scope="col">p50 / p95 耗时</th><th scope="col">有效天数</th><th scope="col">七日参考</th><th scope="col">建议告警线</th></tr></thead>
+          <thead><tr><th scope="col">服务商</th><th scope="col">24h 已处理</th><th scope="col">可投递率</th><th scope="col">无法确认率</th><th scope="col">复核完成率</th><th scope="col">首次 / 复核 p50-p95</th><th scope="col">有效天数</th><th scope="col">七日参考</th><th scope="col">建议告警线</th></tr></thead>
           <tbody id="provider-quality-body"><tr><td colspan="9" class="provider-quality-empty">正在加载质量数据</td></tr></tbody>
         </table>
       </div>
@@ -657,6 +657,6 @@
   </dialog>
 
   <script src="/static/js/i18n.js?v=locale-v2" defer></script>
-  <script src="/static/js/app.js?v=quality-baseline-v1" defer></script>
+  <script src="/static/js/app.js?v=retry-reconcile-v1" defer></script>
 </body>
 </html>
