@@ -391,6 +391,7 @@ TABLES["job_results"] = TableDef(
         _c("progress_state", "text", False, "'pending'"),
         _c("result_json", "jsonb", False),
         _c("updated_at", "timestamptz", False),
+        _c("initial_completed_at", "timestamptz", True),
         _c("deliverability", "bigint", True),
         _c("is_valid", "boolean", False, "false"),
         _c("is_skipped", "boolean", False, "false"),
@@ -406,6 +407,7 @@ TABLES["job_results"] = TableDef(
         IndexDef("idx_job_results_pending", ("job_id", "progress_state", "original_index",), partial=False),
         IndexDef("idx_job_results_updated", ("updated_at",), partial=False),
         IndexDef("idx_job_results_quality_window", ("updated_at", "progress_state",), partial=False),
+        IndexDef("idx_job_results_initial_quality_window", ("initial_completed_at", "progress_state",), partial=False),
         IndexDef("idx_job_results_review_backlog", ("retry_at",), partial=False),
     ),
 )

@@ -58,14 +58,12 @@ def main() -> int:
     assert providers["qq"]["usable_days"] == 1 and providers["qq"]["ready"] is False
     assert providers["microsoft"]["usable_days"] == 0
     assert providers["microsoft"]["suggested_unconfirmed_percent"] is None
-    assert "result.updated_at >= ? AND result.updated_at < ?" in connection.sql
+    assert "result.initial_completed_at >= ? AND result.initial_completed_at < ?" in connection.sql
+    assert "TO_CHAR(result.initial_completed_at" in connection.sql
+    assert "result.initial_completed_at - job.created_at" in connection.sql
     assert "GROUP BY day, provider" in connection.sql
     assert "PERCENTILE_CONT" in connection.sql
     assert connection.params == (
-        "2026-08-08T00:00:00+00:00",
-        "2026-08-15T00:00:00+00:00",
-        "2026-08-08T00:00:00+00:00",
-        "2026-08-15T00:00:00+00:00",
         "2026-08-08T00:00:00+00:00",
         "2026-08-15T00:00:00+00:00",
     )

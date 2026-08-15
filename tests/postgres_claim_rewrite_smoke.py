@@ -114,11 +114,13 @@ UPDATE jobs SET heartbeat_at=? WHERE id=?
 
 UPSERT_RESULTS = """
 INSERT INTO job_results(job_id, original_index, email, progress_state, result_json, updated_at,
-    deliverability, is_valid, is_skipped, is_catch_all, retry_at, retry_updated, query_fields_ready)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    initial_completed_at, deliverability, is_valid, is_skipped, is_catch_all,
+    retry_at, retry_updated, query_fields_ready)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(job_id, original_index) DO UPDATE SET
     email=excluded.email, progress_state=excluded.progress_state,
     result_json=excluded.result_json, updated_at=excluded.updated_at,
+    initial_completed_at=COALESCE(job_results.initial_completed_at, excluded.initial_completed_at),
     deliverability=excluded.deliverability, is_valid=excluded.is_valid,
     is_skipped=excluded.is_skipped, is_catch_all=excluded.is_catch_all,
     retry_at=excluded.retry_at, retry_updated=excluded.retry_updated,
@@ -236,9 +238,10 @@ def test_complete_lease_upsert_on_conflict() -> None:
     assert "?" not in upsert
     assert "ON CONFLICT (" in upsert
     assert "excluded.result_json" in upsert
+    assert "COALESCE(job_results.initial_completed_at, excluded.initial_completed_at)" in upsert
     assert "job_results.progress_state" in upsert
-    # 13 bind params for VALUES
-    assert upsert.count("%s") == 13
+    # 14 bind params for VALUES
+    assert upsert.count("%s") == 14
 
     complete = _assert_pg_shape(COMPLETE_LEASE)
     assert complete.count("%s") == 4

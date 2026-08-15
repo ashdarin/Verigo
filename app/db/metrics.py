@@ -232,9 +232,10 @@ class MetricsStore:
     def _provider_quality(connection, cutoff) -> dict[str, object]:
         """Summarize the last 24 hours of settled user-visible results.
 
-        The query is deliberately bounded by ``job_results.updated_at``.  It
-        reads the durable query fields rather than result payload text, except
-        for the persisted retry state needed for the review-completion rate.
+        Quality events are bounded by ``job_results.updated_at`` while original
+        latency samples are bounded by the immutable completion timestamp.  The
+        query reads durable fields rather than payload text, except for the
+        persisted retry state needed for the review-completion rate.
         """
         if postgres_active():
             provider = """
@@ -245,23 +246,23 @@ class MetricsStore:
                     ELSE 'other'
                 END
             """
-            duration = "GREATEST(0, EXTRACT(EPOCH FROM (result.updated_at - job.created_at)))"
-            review_duration = "GREATEST(0, EXTRACT(EPOCH FROM (result.updated_at - job.finished_at)))"
+            duration = "GREATEST(0, EXTRACT(EPOCH FROM (result.initial_completed_at - job.created_at)))"
+            review_duration = "GREATEST(0, EXTRACT(EPOCH FROM (result.updated_at - result.initial_completed_at)))"
             skipped = "result.is_skipped IS TRUE"
             retry_state = "result.result_json ->> 'retry_state'"
             retry_updated = "result.retry_updated IS TRUE"
             risk_flag = lambda key: f"COALESCE((result.result_json #>> '{{risk_signals,{key},detected}}') = 'true', FALSE)"
             latency_columns = """
-                COALESCE(SUM(CASE WHEN initial_completed_at >= ? AND NOT retry_updated THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN initial_completed_at >= ? THEN 1 ELSE 0 END), 0),
                 COALESCE(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY duration_seconds)
-                    FILTER (WHERE initial_completed_at >= ? AND NOT retry_updated), 0),
+                    FILTER (WHERE initial_completed_at >= ?), 0),
                 COALESCE(PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY duration_seconds)
-                    FILTER (WHERE initial_completed_at >= ? AND NOT retry_updated), 0),
-                COALESCE(SUM(CASE WHEN retry_updated THEN 1 ELSE 0 END), 0),
+                    FILTER (WHERE initial_completed_at >= ?), 0),
+                COALESCE(SUM(CASE WHEN retry_updated AND initial_completed_at IS NOT NULL THEN 1 ELSE 0 END), 0),
                 COALESCE(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY review_duration_seconds)
-                    FILTER (WHERE retry_updated), 0),
+                    FILTER (WHERE retry_updated AND initial_completed_at IS NOT NULL), 0),
                 COALESCE(PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY review_duration_seconds)
-                    FILTER (WHERE retry_updated), 0)
+                    FILTER (WHERE retry_updated AND initial_completed_at IS NOT NULL), 0)
             """
         else:
             provider = """
@@ -272,15 +273,15 @@ class MetricsStore:
                     ELSE 'other'
                 END
             """
-            duration = "MAX(0, (julianday(result.updated_at) - julianday(job.created_at)) * 86400)"
-            review_duration = "MAX(0, (julianday(result.updated_at) - julianday(job.finished_at)) * 86400)"
+            duration = "MAX(0, (julianday(result.initial_completed_at) - julianday(job.created_at)) * 86400)"
+            review_duration = "MAX(0, (julianday(result.updated_at) - julianday(result.initial_completed_at)) * 86400)"
             skipped = "COALESCE(result.is_skipped, 0)=1"
             retry_state = "json_extract(result.result_json, '$.retry_state')"
             retry_updated = "COALESCE(result.retry_updated, 0)=1"
             risk_flag = lambda key: f"COALESCE(json_extract(result.result_json, '$.risk_signals.{key}.detected') = 1, 0)"
             # SQLite is retained only for historical tooling; PostgreSQL is the
             # production backend and performs percentile aggregation in-database.
-            latency_columns = "COALESCE(SUM(CASE WHEN initial_completed_at >= ? AND NOT retry_updated THEN 1 ELSE 0 END), 0), 0, 0, COALESCE(SUM(CASE WHEN retry_updated THEN 1 ELSE 0 END), 0), 0, 0"
+            latency_columns = "COALESCE(SUM(CASE WHEN initial_completed_at >= ? THEN 1 ELSE 0 END), 0), 0, 0, COALESCE(SUM(CASE WHEN retry_updated AND initial_completed_at IS NOT NULL THEN 1 ELSE 0 END), 0), 0, 0"
 
         rows = connection.execute(
             f"""
@@ -294,7 +295,7 @@ class MetricsStore:
                     {risk_flag('mailbox_full')} AS mailbox_full,
                     {risk_flag('role_address')} AS role_address,
                     {risk_flag('do_not_reply')} AS do_not_reply,
-                    job.finished_at AS initial_completed_at,
+                    result.initial_completed_at,
                     {duration} AS duration_seconds,
                     {retry_updated} AS retry_updated,
                     {review_duration} AS review_duration_seconds
@@ -435,13 +436,12 @@ class MetricsStore:
                     ELSE 'other'
                 END
             """
-            day_bucket = "TO_CHAR(result.updated_at AT TIME ZONE 'Asia/Shanghai', 'YYYY-MM-DD')"
-            duration = "GREATEST(0, EXTRACT(EPOCH FROM (result.updated_at - job.created_at)))"
+            day_bucket = "TO_CHAR(result.initial_completed_at AT TIME ZONE 'Asia/Shanghai', 'YYYY-MM-DD')"
+            duration = "GREATEST(0, EXTRACT(EPOCH FROM (result.initial_completed_at - job.created_at)))"
             skipped = "result.is_skipped IS TRUE"
             latency_columns = """
-                COALESCE(SUM(CASE WHEN initial_completed_at >= ? AND initial_completed_at < ? AND NOT retry_updated THEN 1 ELSE 0 END), 0),
+                COUNT(*),
                 PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY duration_seconds)
-                    FILTER (WHERE initial_completed_at >= ? AND initial_completed_at < ? AND NOT retry_updated)
             """
         else:
             provider = """
@@ -452,12 +452,12 @@ class MetricsStore:
                     ELSE 'other'
                 END
             """
-            day_bucket = "SUBSTR(result.updated_at, 1, 10)"
-            duration = "MAX(0, (julianday(result.updated_at) - julianday(job.created_at)) * 86400)"
+            day_bucket = "SUBSTR(result.initial_completed_at, 1, 10)"
+            duration = "MAX(0, (julianday(result.initial_completed_at) - julianday(job.created_at)) * 86400)"
             skipped = "COALESCE(result.is_skipped, 0)=1"
             # SQLite is retained for local tooling.  It still produces the
             # rate baseline; percentile latency is available in PostgreSQL.
-            latency_columns = "COALESCE(SUM(CASE WHEN initial_completed_at >= ? AND initial_completed_at < ? AND NOT retry_updated THEN 1 ELSE 0 END), 0), 0"
+            latency_columns = "COUNT(*), 0"
 
         rows = connection.execute(
             f"""
@@ -467,12 +467,12 @@ class MetricsStore:
                     {provider} AS provider,
                     result.deliverability,
                     {skipped} AS is_skipped,
-                    job.finished_at AS initial_completed_at,
+                    result.initial_completed_at,
                     result.retry_updated AS retry_updated,
                     {duration} AS duration_seconds
                 FROM job_results AS result
                 JOIN jobs AS job ON job.id=result.job_id
-                WHERE result.updated_at >= ? AND result.updated_at < ?
+                WHERE result.initial_completed_at >= ? AND result.initial_completed_at < ?
                     AND result.progress_state IN ('completed', 'failed')
                     AND job.parent_id IS NULL AND job.retry_parent_id IS NULL
             )
@@ -483,7 +483,7 @@ class MetricsStore:
             GROUP BY day, provider
             ORDER BY day, provider
             """,
-            (start, end, start, end, start, end) if postgres_active() else (start, end, start, end),
+            (start, end),
         ).fetchall()
 
         by_provider: dict[str, list[tuple[float, float | None]]] = defaultdict(list)

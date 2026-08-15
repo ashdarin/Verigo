@@ -220,7 +220,8 @@ class JobStore:
                     CREATE TABLE IF NOT EXISTS job_results (
                         job_id TEXT NOT NULL, original_index INTEGER NOT NULL, email TEXT NOT NULL,
                         progress_state TEXT NOT NULL DEFAULT 'pending', result_json TEXT NOT NULL,
-                        updated_at TEXT NOT NULL, deliverability INTEGER, is_valid INTEGER NOT NULL DEFAULT 0,
+                        updated_at TEXT NOT NULL, initial_completed_at TEXT, deliverability INTEGER,
+                        is_valid INTEGER NOT NULL DEFAULT 0,
                         is_skipped INTEGER NOT NULL DEFAULT 0, is_catch_all INTEGER NOT NULL DEFAULT 0,
                         retry_at TEXT, retry_updated INTEGER NOT NULL DEFAULT 0,
                         query_fields_ready INTEGER NOT NULL DEFAULT 0,
@@ -229,6 +230,7 @@ class JobStore:
                 """)
                 result_columns = {row[1] for row in connection.execute("PRAGMA table_info(job_results)")}
                 for name, kind in (
+                    ("initial_completed_at", "TEXT"),
                     ("deliverability", "INTEGER"),
                     ("is_valid", "INTEGER NOT NULL DEFAULT 0"),
                     ("is_skipped", "INTEGER NOT NULL DEFAULT 0"),
@@ -239,11 +241,26 @@ class JobStore:
                 ):
                     if name not in result_columns:
                         connection.execute(f"ALTER TABLE job_results ADD COLUMN {name} {kind}")
+                connection.execute(
+                    """UPDATE job_results
+                    SET initial_completed_at=COALESCE(
+                        (SELECT CASE
+                            WHEN jobs.finished_at IS NOT NULL
+                                AND jobs.finished_at < job_results.updated_at
+                            THEN jobs.finished_at
+                            ELSE job_results.updated_at
+                        END FROM jobs WHERE jobs.id=job_results.job_id),
+                        job_results.updated_at
+                    )
+                    WHERE initial_completed_at IS NULL
+                        AND progress_state IN ('completed', 'failed', 'stopped')"""
+                )
                 connection.execute("CREATE INDEX IF NOT EXISTS idx_job_results_pending ON job_results(job_id, progress_state, original_index)")
                 connection.execute("CREATE INDEX IF NOT EXISTS idx_job_results_filter ON job_results(job_id, deliverability, is_skipped, original_index)")
                 connection.execute("CREATE INDEX IF NOT EXISTS idx_job_results_email ON job_results(job_id, email COLLATE NOCASE, original_index)")
                 connection.execute("CREATE INDEX IF NOT EXISTS idx_job_results_updated ON job_results(updated_at)")
                 connection.execute("CREATE INDEX IF NOT EXISTS idx_job_results_quality_window ON job_results(updated_at, progress_state)")
+                connection.execute("CREATE INDEX IF NOT EXISTS idx_job_results_initial_quality_window ON job_results(initial_completed_at, progress_state)")
                 connection.execute("CREATE INDEX IF NOT EXISTS idx_job_results_review_backlog ON job_results(retry_at)")
                 connection.execute("""
                     CREATE TABLE IF NOT EXISTS result_objects (
@@ -670,13 +687,15 @@ class JobStore:
         payload = dict(result)
         payload["original_index"] = index
         deliverable = payload.get("deliverable")
+        state = cls._result_state(payload)
         return (
             job_id,
             index,
             str(payload.get("email") or ""),
-            cls._result_state(payload),
+            state,
             json.dumps(payload, ensure_ascii=False, default=str),
             now,
+            now if state in {"completed", "failed", "stopped"} else None,
             1 if deliverable is True else 0 if deliverable is False else None,
             bool(payload.get("valid") is True),
             bool(payload.get("skipped") is True),
@@ -701,7 +720,7 @@ class JobStore:
             if not isinstance(result, dict):
                 continue
             row = self._result_row(str(job_id), int(index), result, str(updated_at))
-            updates.append((*row[6:], str(job_id), int(index)))
+            updates.append((*row[7:], str(job_id), int(index)))
         if not updates:
             return 0
         connection.executemany(
@@ -732,8 +751,9 @@ class JobStore:
             if rows:
                 connection.executemany("""
                     INSERT INTO job_results(job_id, original_index, email, progress_state, result_json, updated_at,
-                        deliverability, is_valid, is_skipped, is_catch_all, retry_at, retry_updated, query_fields_ready)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        initial_completed_at, deliverability, is_valid, is_skipped, is_catch_all,
+                        retry_at, retry_updated, query_fields_ready)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(job_id, original_index) DO NOTHING
                 """, rows)
 
@@ -767,8 +787,9 @@ class JobStore:
                     rows.append(self._result_row(job_id, index, result, now))
                 cursor = connection.executemany("""
                     INSERT INTO job_results(job_id, original_index, email, progress_state, result_json, updated_at,
-                        deliverability, is_valid, is_skipped, is_catch_all, retry_at, retry_updated, query_fields_ready)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        initial_completed_at, deliverability, is_valid, is_skipped, is_catch_all,
+                        retry_at, retry_updated, query_fields_ready)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(job_id, original_index) DO NOTHING
                 """, rows)
                 migrated_rows += max(0, cursor.rowcount)
@@ -930,8 +951,9 @@ class JobStore:
         ]
         connection.executemany("""
             INSERT INTO job_results(job_id, original_index, email, progress_state, result_json, updated_at,
-                deliverability, is_valid, is_skipped, is_catch_all, retry_at, retry_updated, query_fields_ready)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                initial_completed_at, deliverability, is_valid, is_skipped, is_catch_all,
+                retry_at, retry_updated, query_fields_ready)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(job_id, original_index) DO NOTHING
         """, rows)
 
@@ -1197,11 +1219,13 @@ class JobStore:
             rows.append(self._result_row(job_id, index, result, now))
         connection.executemany("""
                 INSERT INTO job_results(job_id, original_index, email, progress_state, result_json, updated_at,
-                    deliverability, is_valid, is_skipped, is_catch_all, retry_at, retry_updated, query_fields_ready)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    initial_completed_at, deliverability, is_valid, is_skipped, is_catch_all,
+                    retry_at, retry_updated, query_fields_ready)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(job_id, original_index) DO UPDATE SET
                     email=excluded.email, progress_state=excluded.progress_state,
                     result_json=excluded.result_json, updated_at=excluded.updated_at,
+                    initial_completed_at=COALESCE(job_results.initial_completed_at, excluded.initial_completed_at),
                     deliverability=excluded.deliverability, is_valid=excluded.is_valid,
                     is_skipped=excluded.is_skipped, is_catch_all=excluded.is_catch_all,
                     retry_at=excluded.retry_at, retry_updated=excluded.retry_updated,
@@ -1227,11 +1251,13 @@ class JobStore:
                 parent_rows.append(self._result_row(parent_id, int(parent_index), result, now))
             connection.executemany("""
                     INSERT INTO job_results(job_id, original_index, email, progress_state, result_json, updated_at,
-                        deliverability, is_valid, is_skipped, is_catch_all, retry_at, retry_updated, query_fields_ready)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        initial_completed_at, deliverability, is_valid, is_skipped, is_catch_all,
+                        retry_at, retry_updated, query_fields_ready)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(job_id, original_index) DO UPDATE SET
                         email=excluded.email, progress_state=excluded.progress_state,
                         result_json=excluded.result_json, updated_at=excluded.updated_at,
+                        initial_completed_at=COALESCE(job_results.initial_completed_at, excluded.initial_completed_at),
                         deliverability=excluded.deliverability, is_valid=excluded.is_valid,
                         is_skipped=excluded.is_skipped, is_catch_all=excluded.is_catch_all,
                         retry_at=excluded.retry_at, retry_updated=excluded.retry_updated,
@@ -1309,7 +1335,7 @@ class JobStore:
             WHERE job_id=? AND original_index=?""",
             [
                 (
-                    row[4], row[5], row[6], row[7], row[8], row[9], row[10], row[11], row[12],
+                    row[4], row[5], row[7], row[8], row[9], row[10], row[11], row[12], row[13],
                     row[0], row[1],
                 )
                 for row in updated_rows
