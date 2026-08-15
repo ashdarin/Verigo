@@ -172,6 +172,10 @@ body.product-surface { min-width: 320px; margin: 0; color: var(--product-ink); b
 .product-surface .result-detail-drawer { width: min(470px, 100vw); padding: 28px; border-left: 1px solid var(--product-line); box-shadow: -18px 0 48px rgba(20,45,33,.14); }
 .product-surface .drawer-heading h2 { overflow-wrap: anywhere; }
 .product-surface .drawer-heading .result-pill { margin-top: 10px; }
+.product-surface .detail-section-heading { margin-top: 20px; }
+.product-surface .detail-section-heading:first-child { margin-top: 2px; }
+.product-surface .detail-section-heading h3 { margin: 0; color: var(--product-ink); font-size: 13px; }
+.product-surface .detail-section-heading p { margin: 5px 0 0; color: var(--product-muted); font-size: 12px; line-height: 1.5; }
 .product-surface .detail-check-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 8px; margin: 14px 0 8px; }
 .product-surface .detail-check { min-height: 64px; padding: 12px; display: flex; flex-direction: column; justify-content: space-between; gap: 8px; border: 1px solid var(--product-line); border-radius: 6px; background: #fbfcfb; }
 .product-surface .detail-check span { color: var(--product-muted); font-size: 11px; }
@@ -180,6 +184,11 @@ body.product-surface { min-width: 320px; margin: 0; color: var(--product-ink); b
 .product-surface .detail-check .check-good { color: var(--product-green-dark); }
 .product-surface .detail-check .check-bad { color: #a83e38; }
 .product-surface .detail-check .check-pending { color: #966c18; }
+.product-surface .detail-check small { color: var(--product-muted); font-size: 11px; line-height: 1.45; overflow-wrap: anywhere; }
+.product-surface .detail-check .risk-block { color: #a83e38; }
+.product-surface .detail-check .risk-caution { color: #966c18; }
+.product-surface .detail-check .risk-clear { color: var(--product-green-dark); }
+.product-surface .detail-check .risk-unknown { color: #68746f; }
 .product-surface .file-dropzone { min-height: 190px; border: 1px dashed #9fc0ad; border-radius: 6px; background: #f7fbf8; }
 .product-surface .file-dropzone:hover, .product-surface .file-dropzone.dragging { border-color: var(--product-green); background: var(--product-green-pale); }
 .product-surface .file-symbol { width: 42px; height: 42px; border-radius: 6px; background: var(--product-green-pale); }
@@ -213,6 +222,7 @@ body.product-surface { min-width: 320px; margin: 0; color: var(--product-ink); b
   .product-surface .claim-trial { max-width: 108px; padding: 0 7px; font-size: 10px; line-height: 1.2; }
   .product-surface .account-button { width: 42px; min-width: 42px; padding: 0; font-size: 0; }
   .product-surface .account-button::after { content: "账户"; font-size: 11px; }
+  .product-surface .detail-check-grid { grid-template-columns: 1fr; }
   .product-surface .workspace,
   .product-surface .discovery-workspace { width: 100%; margin: 0; border: 0; border-radius: 0; }
   .product-surface .control-panel,

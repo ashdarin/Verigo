@@ -8,7 +8,7 @@ async function checkViewport(browser, name, width, height) {
   page.on("console", (message) => {
     if (message.type() === "error") errors.push(message.text());
   });
-  await page.goto(BASE_URL, { waitUntil: "networkidle" });
+  await page.goto(BASE_URL, { waitUntil: "domcontentloaded" });
 
   const result = await page.evaluate(() => {
     const visible = (selector) => {
@@ -42,10 +42,31 @@ async function checkViewport(browser, name, width, height) {
   return { name, ...result };
 }
 
+async function checkRiskPresentation(browser) {
+  const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+  await page.goto(BASE_URL, { waitUntil: "domcontentloaded" });
+  const result = await page.evaluate(() => {
+    const disposable = riskSignalPresentation.find((item) => item.key === "disposable_provider");
+    const pending = riskSignalStatus(disposable, { detected: false });
+    const detected = riskSignalStatus(disposable, { detected: true });
+    const detail = riskSignalDetail(disposable, {
+      detected: true, detail: "internal detail must not render",
+    });
+    return { pending, detected, detail };
+  });
+  if (result.pending.value !== "\u6682\u65e0\u6cd5\u786e\u8ba4"
+    || result.detected.value !== "\u4e00\u6b21\u6027\u90ae\u7bb1\u670d\u52a1"
+    || result.detail.includes("internal detail")) {
+    throw new Error(`risk presentation: unexpected rendering ${JSON.stringify(result)}`);
+  }
+  await page.close();
+  return { riskPresentation: true };
+}
+
 async function checkAccountAndImport(browser) {
   const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
   await page.setExtraHTTPHeaders({ "x-forwarded-for": `198.51.100.${Math.floor(Math.random() * 200) + 1}` });
-  await page.goto(BASE_URL, { waitUntil: "networkidle" });
+  await page.goto(BASE_URL, { waitUntil: "domcontentloaded" });
   await page.click("#account-button");
   await page.click('[data-auth-mode="register"]');
   const email = `ui_${Date.now()}@example.com`;
@@ -145,7 +166,7 @@ async function checkAccountAndImport(browser) {
 async function checkMobileTrialAction(browser) {
   const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
   await page.setExtraHTTPHeaders({ "x-forwarded-for": `198.51.100.${Math.floor(Math.random() * 200) + 1}` });
-  await page.goto(BASE_URL, { waitUntil: "networkidle" });
+  await page.goto(BASE_URL, { waitUntil: "domcontentloaded" });
   await page.click("#account-button");
   await page.click('[data-auth-mode="register"]');
   await page.fill("#auth-email", `mobile_${Date.now()}@example.com`);
@@ -186,7 +207,7 @@ async function checkEnglishLocale(browser) {
       }],
     }),
   }));
-  await page.goto(BASE_URL, { waitUntil: "networkidle" });
+  await page.goto(BASE_URL, { waitUntil: "domcontentloaded" });
   await page.evaluate(() => document.querySelector("#locale-toggle").click());
   await page.fill("#single-email-input", "locale-check@yahoo.com");
   await page.click("#start-button");
@@ -228,14 +249,14 @@ async function checkEnglishDiscoveryAndDocs(browser) {
   }));
   await page.route("**/api/jobs?offset=0&limit=8", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ total: 0, offset: 0, limit: 8, items: [] }) }));
   await page.route(/\/api\/notifications(?:\?.*)?$/, (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: [], unread_count: 0 }) }));
-  await page.goto(BASE_URL, { waitUntil: "networkidle" });
+  await page.goto(BASE_URL, { waitUntil: "domcontentloaded" });
   await page.evaluate(() => document.querySelector("#locale-toggle").click());
   await page.click('[data-view="batch"]');
   await page.fill("#email-input", "coverage@qq.com");
   await page.click('[data-view="discovery"]');
   const main = await page.evaluate(() => ({
     chinese: (() => { const root = document.querySelector("#discovery-workspace"); const values = []; if (!root) return values; const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT); let node; while ((node = walker.nextNode())) { const value = node.nodeValue.trim(); if (value && /[\u4e00-\u9fff]/.test(value) && node.parentElement?.getClientRects().length) values.push(value); } return values; })(),
-    title: document.querySelector("#discovery-workspace h1")?.textContent,
+    title: document.querySelector("#discovery-workspace h2")?.textContent,
     search: document.querySelector("#discovery-start")?.textContent,
     qqNotice: document.querySelector("#qq-rate-notice")?.textContent,
     nodeMessage: VerigoI18n.text("腾讯 QQ 验证节点正在启动，请稍候"),
@@ -281,7 +302,7 @@ async function checkEnglishDesktopHeadingAndApiKeys(browser) {
     contentType: "application/json",
     body: JSON.stringify([{ id: "desktop-key", name: "production", prefix: "vg_live_12345678", last_used_at: null }]),
   }));
-  await page.goto(BASE_URL, { waitUntil: "networkidle" });
+  await page.goto(BASE_URL, { waitUntil: "domcontentloaded" });
   await page.click("#locale-toggle");
   const measureHeading = () => page.evaluate(() => {
     const heading = document.querySelector("#verify-heading").getBoundingClientRect();
@@ -345,7 +366,7 @@ async function checkDashboard(browser) {
       })),
     }),
   }));
-  await page.goto(`${BASE_ORIGIN}/dashboard`, { waitUntil: "networkidle" });
+  await page.goto(`${BASE_ORIGIN}/dashboard`, { waitUntil: "domcontentloaded" });
   await page.waitForSelector("#dashboard-workspace:not(.hidden)");
   const result = await page.evaluate(() => ({
     title: document.title,
@@ -382,7 +403,7 @@ async function checkAdminCredits(browser) {
       paid_credits: 25, reference: "admin_grant:smoke", created_at: new Date().toISOString(),
     }),
   }));
-  await page.goto(`${BASE_ORIGIN}/admin/credits`, { waitUntil: "networkidle" });
+  await page.goto(`${BASE_ORIGIN}/admin/credits`, { waitUntil: "domcontentloaded" });
   await page.waitForSelector("#admin-credits-workspace:not(.hidden)");
   await page.fill("#admin-credit-email", "customer@example.com");
   await page.fill("#admin-credit-amount", "25");
@@ -433,7 +454,7 @@ async function checkNotificationCenter(browser) {
   await page.route("**/api/jobs/notify-job/results?**", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ total: 1, available: 1, offset: 0, limit: 50, items: [{ email: "person@example.com", deliverable: true, valid: true, progress_state: "completed", original_index: 0, checks: { format: true, domain: true, mx: true, smtp: true }, verification_method: "standard", smtp_result: "250 OK", message: "250 OK", domain_type: "normal" }] }) }));
   await page.route("**/api/jobs/notify-job/results/0/reviewed", (route) => route.fulfill({ status: 204, body: "" }));
   await page.route("**/api/wallet", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ available_verifications: 100, paid_verifications: 100, paid_verifications_used: 0, cumulative_recharge_fen: 50, remaining_paid_value_yuan: 0.5, paid_used_value_yuan: 0, price_fen_per_100: 50, trial_verifications: 0, usage_daily: [], transactions: [] }) }));
-  await page.goto(BASE_URL, { waitUntil: "networkidle" });
+  await page.goto(BASE_URL, { waitUntil: "domcontentloaded" });
   await page.click("#notification-button");
   await page.waitForFunction(() => document.querySelectorAll(".notification-item").length === 30);
   if (await page.locator(".notification-date-group").count() < 1) throw new Error("notifications: date grouping is missing");
@@ -478,12 +499,17 @@ async function checkNotificationCenter(browser) {
 (async () => {
   const browser = await chromium.launch({ headless: true });
   try {
+    if (process.env.VERIGO_UI_ONLY_RISK === "1") {
+      console.log(JSON.stringify([await checkRiskPresentation(browser)]));
+      return;
+    }
     if (process.env.VERIGO_UI_ONLY_NOTIFICATION === "1") {
       console.log(JSON.stringify([await checkNotificationCenter(browser)]));
       return;
     }
     const desktop = await checkViewport(browser, "desktop", 1440, 900);
     const mobile = await checkViewport(browser, "mobile", 390, 844);
+    const riskPresentation = await checkRiskPresentation(browser);
     const interaction = await checkAccountAndImport(browser);
     const mobileTrialAction = await checkMobileTrialAction(browser);
     const englishLocale = await checkEnglishLocale(browser);
@@ -492,7 +518,7 @@ async function checkNotificationCenter(browser) {
     const dashboard = await checkDashboard(browser);
     const adminCredits = await checkAdminCredits(browser);
     const notificationCenter = await checkNotificationCenter(browser);
-    console.log(JSON.stringify([desktop, mobile, interaction, mobileTrialAction, englishLocale, englishDiscoveryAndDocs, englishDesktopHeadingAndApiKeys, dashboard, adminCredits, notificationCenter]));
+    console.log(JSON.stringify([desktop, mobile, riskPresentation, interaction, mobileTrialAction, englishLocale, englishDiscoveryAndDocs, englishDesktopHeadingAndApiKeys, dashboard, adminCredits, notificationCenter]));
   } finally {
     await browser.close();
   }

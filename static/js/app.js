@@ -630,7 +630,13 @@ function renderJobProgress(job, progressCopy) {
       el("progress-copy").textContent = VerigoI18n.text(`${progressCopy}${suffix}`);
       return;
     }
-    const seconds = Math.max(0, Math.ceil((retryAt.getTime() - Date.now()) / 1000));
+    const seconds = Math.ceil((retryAt.getTime() - Date.now()) / 1000);
+    if (seconds <= 0) {
+      el("progress-copy").textContent = VerigoI18n.text(`${progressCopy}${suffix}`);
+      clearInterval(state.retryCountdownTimer);
+      state.retryCountdownTimer = null;
+      return;
+    }
     const countdown = seconds >= 60
       ? `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒`
       : `${seconds} 秒`;
@@ -640,6 +646,18 @@ function renderJobProgress(job, progressCopy) {
   if (retryAt && retryAt.getTime() > Date.now()) {
     state.retryCountdownTimer = window.setInterval(() => { render(); renderResults(); }, 1000);
   }
+}
+
+function retryReviewStatus(item) {
+  if (item.retry_state === "scheduled") {
+    const attempt = Number(item.retry_attempt || 1);
+    const maximum = Number(item.retry_max_attempts || 3);
+    return `已安排自动复核（第 ${attempt}/${maximum} 次）`;
+  }
+  if (item.retry_state === "failed") return "自动复核未完成；当前结果仍无法确认，建议稍后再次验证。";
+  if (item.temporary_retries_exhausted) return "自动复核已结束；当前结果仍无法确认，建议稍后再次验证。";
+  if (item.greylist_retry_exhausted) return "自动复核已结束；当前结果仍无法确认，建议稍后再次验证。";
+  return null;
 }
 
 function formatJobName(timestamp) {
@@ -671,10 +689,12 @@ async function pollJob() {
     await loadResults();
     if (job.status === "completed" || job.status === "stopped") {
       if (state.user) await loadRecentJobs();
-      if (job.status === "completed" && job.retry_at) {
+      const retryAt = job.retry_at ? new Date(job.retry_at) : null;
+      if (job.status === "completed" && retryAt && retryAt.getTime() > Date.now()) {
         schedulePoll(2000);
       } else {
         clearInterval(state.retryCountdownTimer);
+        state.retryCountdownTimer = null;
       }
     } else if (job.status !== "failed") {
       schedulePoll();
@@ -711,6 +731,18 @@ function resultMeta(item) {
   return ["无法确认", "result-unknown", "unknown"];
 }
 
+function consumerResultAction(item) {
+  if (item.progress_state === "pending" || item.progress_state === "verifying") return VerigoI18n.text("正在确认，请稍候。");
+  if (item.progress_state === "failed") return VerigoI18n.text("本次验证未完成，请稍后再次验证。");
+  if (item.skipped) return VerigoI18n.text("验证已停止，尚未形成结论。");
+  if (item.deliverable === true) return VerigoI18n.text("可以联系。首次发送建议小批量进行。");
+  if (item.risk_signals?.mailbox_full?.detected === true) return VerigoI18n.text("暂不建议发送，等待对方清理收件箱后再联系。");
+  if (item.failure_reason === "domain_nxdomain") return VerigoI18n.text("请检查域名拼写后再联系。");
+  if (item.failure_reason === "mx_missing") return VerigoI18n.text("请确认该域名是否用于接收邮件。");
+  if (item.deliverable === false) return VerigoI18n.text("建议更换或人工确认该联系地址。");
+  return retryReviewStatus(item) || VerigoI18n.text("暂时无法确认，建议稍后再次验证。");
+}
+
 function renderResults() {
   const body = el("results-body");
   const rows = state.results;
@@ -720,7 +752,7 @@ function renderResults() {
     const row = document.createElement("tr");
     row.className = "empty-row";
     const cell = document.createElement("td");
-    cell.colSpan = 5;
+    cell.colSpan = 4;
     cell.textContent = state.results.length ? "没有符合条件的结果" : "正在等待首条验证结果";
     row.append(cell);
     body.append(row);
@@ -734,8 +766,7 @@ function renderResults() {
     const values = [
       item.email,
       label,
-      VerigoI18n.resultValue(item.verification_method || item.strategy || "-"),
-      VerigoI18n.resultValue(item.smtp_result || item.message || "-"),
+      consumerResultAction(item),
       "详情",
     ];
     values.forEach((value, index) => {
@@ -778,7 +809,7 @@ function renderResults() {
         pill.className = `result-pill ${className}`;
         pill.textContent = label;
         cell.append(pill);
-      } else if (index === 4) {
+      } else if (index === 3) {
         const action = document.createElement("button");
         action.type = "button";
         action.className = "result-detail-action";
@@ -834,6 +865,52 @@ function renderPagination() {
   });
 }
 
+const riskSignalPresentation = [
+  { key: "disposable_provider", label: "一次性邮箱", level: "block", detected: "一次性邮箱服务", detail: "该地址可能很快失效。不要将其用于长期联系。" },
+  { key: "free_provider", label: "免费邮箱", level: "caution", detected: "公共免费邮箱", detail: "该地址不属于企业自有域名。联系前应结合联系人身份确认。" },
+  { key: "role_address", label: "角色邮箱", level: "caution", detected: "团队共享地址", detail: "该地址由多人共同接收，适合一般咨询，不适合个人化联系。" },
+  { key: "tagged_address", label: "邮箱标签", level: "caution", detected: "包含地址标签", detail: "邮件通常会投递到主地址。按原地址发送即可。" },
+  { key: "mailbox_full", label: "邮箱容量", level: "block", detected: "收件箱已满", detail: "该地址当前无法接收新邮件。等待对方清理容量后再联系。" },
+  { key: "do_not_reply", label: "回复意图", level: "block", detected: "不应回复", detail: "这通常是系统发信地址，回复可能不会被处理。请更换可联系地址。" },
+  { key: "irregular_pattern", label: "地址模式", level: "block", detected: "异常字符模式", detail: "该地址的字符模式异常，可能影响投递。建议人工确认后再发送。" },
+  { key: "unicode_or_suspicious_characters", label: "字符范围", level: "block", detected: "特殊字符", detail: "该地址含有部分系统不支持的字符，可能影响投递。建议人工确认后再发送。" },
+  { key: "secure_email_gateway", label: "安全网关", level: "caution", detected: "额外投递规则", detail: "对方可能有额外的投递规则。首次联系应监控退信并逐步发送。" },
+];
+
+function detailSection(title, note = "") {
+  const heading = document.createElement("div");
+  heading.className = "detail-section-heading";
+  const label = document.createElement("h3");
+  label.textContent = title;
+  heading.append(label);
+  if (note) {
+    const copy = document.createElement("p");
+    copy.textContent = note;
+    heading.append(copy);
+  }
+  return heading;
+}
+
+function riskSignalStatus(presentation, signal) {
+  if (signal.detected === true) return { value: presentation.detected, className: `risk-${presentation.level}` };
+  // An unconfirmed disposable-domain result must not be presented as clear.
+  if (presentation.key === "disposable_provider") {
+    return { value: "暂无法确认", className: "risk-unknown" };
+  }
+  if (signal.detected === false) return { value: "未识别", className: "risk-clear" };
+  return { value: "暂无法确认", className: "risk-unknown" };
+}
+
+function riskSignalDetail(presentation, signal) {
+  if (signal.detected !== true) {
+    if (presentation.key === "disposable_provider") {
+      return "当前无法确认该地址是否来自一次性邮箱服务。建议不要将其作为长期联系人地址。";
+    }
+    return signal.detected === false ? "本次未发现该特征，无需额外处理。" : "当前无法确认该特征，不影响已显示的验证结果。";
+  }
+  return presentation.detail;
+}
+
 function openResultDetails(item) {
   state.activeResultItem = item;
   const drawer = el("result-detail-drawer");
@@ -847,6 +924,7 @@ function openResultDetails(item) {
   const checkClass = (value) => value === true ? "check-good" : value === false ? "check-bad" : "check-pending";
   const content = el("result-detail-content");
   content.replaceChildren();
+  content.append(detailSection("可投递性检查"));
   const checkGrid = document.createElement("div");
   checkGrid.className = "detail-check-grid";
   [["语法格式", checks.format], ["邮箱域名", checks.domain], ["MX 记录", checks.mx], ["SMTP 连接", checks.smtp]].forEach(([label, value]) => {
@@ -856,13 +934,35 @@ function openResultDetails(item) {
     item.append(key, val); checkGrid.append(item);
   });
   content.append(checkGrid);
+  const riskSignals = item.risk_signals && typeof item.risk_signals === "object" ? item.risk_signals : {};
+  const detectedRiskCount = riskSignalPresentation.filter(({ key }) => riskSignals[key]?.detected === true).length;
+  const hasRiskSignals = riskSignalPresentation.some(({ key }) => riskSignals[key] && typeof riskSignals[key] === "object");
+  content.append(detailSection(
+    "地址特征与投递风险",
+    !hasRiskSignals ? "该历史结果尚未提供风险信号。"
+      : detectedRiskCount ? `已识别 ${detectedRiskCount} 项需要关注的特征。` : "本次未识别到需要特别关注的地址特征。",
+  ));
+  const riskGrid = document.createElement("div"); riskGrid.className = "detail-check-grid";
+  riskSignalPresentation.forEach((presentation) => {
+    const signal = riskSignals[presentation.key] && typeof riskSignals[presentation.key] === "object" ? riskSignals[presentation.key] : {};
+    const status = riskSignalStatus(presentation, signal);
+    const item = document.createElement("div"); item.className = "detail-check";
+    const key = document.createElement("span"); key.textContent = presentation.label;
+    const val = document.createElement("strong");
+    val.className = status.className;
+    val.textContent = status.value;
+    const detail = document.createElement("small");
+    detail.textContent = riskSignalDetail(presentation, signal);
+    item.append(key, val, detail); riskGrid.append(item);
+  });
+  content.append(riskGrid);
+  content.append(detailSection("验证结论"));
   const fields = [
-    ["邮箱类型", item.domain_type || "-"],
-    ["验证方式", VerigoI18n.resultValue(item.verification_method || item.strategy || "-")],
     ["邮箱状态", statusLabel],
-    ["服务器响应", VerigoI18n.resultValue(item.smtp_result || item.message || "-")],
-    ["判断说明", item.message || item.failure_reason || "-"],
+    ["下一步", consumerResultAction(item)],
   ];
+  const reviewStatus = retryReviewStatus(item);
+  if (reviewStatus) fields.push(["复核状态", reviewStatus]);
   fields.forEach(([label, value]) => {
     const row = document.createElement("div"); row.className = "detail-field";
     const key = document.createElement("span"); key.textContent = label;
@@ -995,7 +1095,7 @@ function renderDiscoveryResults() {
     if (state.discovery.candidates.length && !state.discovery.jobId) {
       state.discovery.candidates.forEach((email) => {
         const row = document.createElement("tr");
-        [email, "未验证", "-", "-"].forEach((value) => {
+        [email, "未验证", "验证后查看联系建议"].forEach((value) => {
           const cell = document.createElement("td");
           cell.textContent = value;
           row.append(cell);
@@ -1005,7 +1105,7 @@ function renderDiscoveryResults() {
     } else {
       const row = document.createElement("tr");
       row.className = "empty-row";
-      row.innerHTML = '<td colspan="4">正在生成验证结果</td>';
+      row.innerHTML = '<td colspan="3">正在生成验证结果</td>';
       body.append(row);
     }
     return;
@@ -1017,8 +1117,7 @@ function renderDiscoveryResults() {
     [
       item.email,
       label,
-      VerigoI18n.resultValue(item.verification_method || item.strategy || "-"),
-      VerigoI18n.resultValue(item.smtp_result || item.message || "-"),
+      consumerResultAction(item),
     ].forEach((value, index) => {
       const cell = document.createElement("td");
       if (index === 0) {
