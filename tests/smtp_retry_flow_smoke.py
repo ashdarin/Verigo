@@ -49,7 +49,7 @@ class FakeStore:
 
 
 verification.write_csv = lambda _job: None
-verification.publish_completed_result_objects = lambda _job: None
+verification.publish_completed_result_objects = lambda _job, _results=None: None
 verification._notify_retry_target = lambda _job: None
 
 temporary_parent = Job(

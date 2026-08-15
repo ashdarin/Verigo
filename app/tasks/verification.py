@@ -6,6 +6,7 @@ import re
 import secrets
 import time
 import uuid
+from dataclasses import replace
 from datetime import datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -509,11 +510,15 @@ def _clear_retry_metadata(result: dict[str, Any], state: str = "completed") -> N
     result.pop("retry_max_attempts", None)
 
 
-def publish_completed_result_objects(job: Job) -> None:
+def publish_completed_result_objects(
+    job: Job, results: list[dict[str, Any]] | None = None,
+) -> None:
     """Write account-owned settled rows into result_objects after job completion."""
     from app.db.result_objects import result_object_store
 
-    result_object_store.publish_completed_job(job)
+    result_object_store.publish_completed_job(
+        replace(job, results=results) if results is not None else job
+    )
 
 
 def finish_initial_job(job: Job) -> Job:
@@ -586,7 +591,7 @@ def finish_background_retry(job: Job) -> Job | None:
     job_store.record_catch_all(parent)
     write_csv(parent)
     job_store.upsert_results(parent.id, changed_results)
-    publish_completed_result_objects(parent)
+    publish_completed_result_objects(parent, changed_results)
     if next_retry:
         enqueue_background_retry(parent, job, next_retry, job.temporary_retry_attempts + 1)
     if changed and parent.owner_id:
@@ -655,7 +660,7 @@ def finish_background_retry_failure(job: Job, error: str) -> Job | None:
     job_store.cache_results(parent.results)
     write_csv(parent)
     job_store.upsert_results(parent.id, changed_results)
-    publish_completed_result_objects(parent)
+    publish_completed_result_objects(parent, changed_results)
     if changed and parent.owner_id:
         result_index_by_email = {
             email.lower(): index for index, email in enumerate(parent.emails)
@@ -756,7 +761,7 @@ def reconcile_orphaned_background_retries(
         job_store.cache_results(updated)
         job_store.record_catch_all(parent)
         write_csv(parent)
-        publish_completed_result_objects(parent)
+        publish_completed_result_objects(parent, updated)
         summary["parents"] += 1
         summary["results"] += len(updated)
     return summary
