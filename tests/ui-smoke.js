@@ -532,6 +532,10 @@ async function checkNotificationCenter(browser) {
       console.log(JSON.stringify([await checkNotificationCenter(browser)]));
       return;
     }
+    if (process.env.VERIGO_UI_ONLY_DASHBOARD === "1") {
+      console.log(JSON.stringify([await checkDashboard(browser)]));
+      return;
+    }
     const desktop = await checkViewport(browser, "desktop", 1440, 900);
     const mobile = await checkViewport(browser, "mobile", 390, 844);
     const riskPresentation = await checkRiskPresentation(browser);
