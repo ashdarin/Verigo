@@ -61,6 +61,12 @@ def test_json_and_timestamp_columns() -> None:
     assert any(c.type == "timestamptz" for c in pc.columns) or True
 
 
+def test_identity_columns_match_automatic_insert_tables() -> None:
+    for name in ("catch_all_emails", "credit_ledger"):
+        identity = next(column for column in require_registered(name).columns if column.name == "id")
+        assert "IDENTITY" in identity.type.upper()
+
+
 def test_auth_rate_limit_no_pk_strategy() -> None:
     t = require_registered("auth_rate_limit_events")
     assert t.no_primary_key
@@ -97,6 +103,7 @@ def main() -> int:
         test_groups_cover_all,
         test_users_has_boolean_and_partial_email_unique,
         test_json_and_timestamp_columns,
+        test_identity_columns_match_automatic_insert_tables,
         test_auth_rate_limit_no_pk_strategy,
         test_ddl_renders,
         test_unknown_table_fails,

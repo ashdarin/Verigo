@@ -16,9 +16,10 @@ from app.db.postgres_migrate import (  # noqa: E402
     fetch_sqlite_rows,
     normalize_rows,
     open_sqlite,
+    schema_creation_order,
     summarize_table,
 )
-from app.db.postgres_schema import require_registered  # noqa: E402
+from app.db.postgres_schema import all_registered_tables, require_registered  # noqa: E402
 from app.db.postgres_shadow import (  # noqa: E402
     coerce_sqlite_value,
     normalize_for_digest,
@@ -196,6 +197,16 @@ def test_json_canonical_float_and_key_order() -> None:
     assert normalize_for_digest(col, left) == normalize_for_digest(col, right)
 
 
+def test_schema_creation_order_places_foreign_key_parents_first() -> None:
+    order = schema_creation_order(all_registered_tables())
+    positions = {name: index for index, name in enumerate(order)}
+    assert set(order) == set(all_registered_tables())
+    for name in order:
+        for foreign_key in require_registered(name).foreign_keys:
+            if foreign_key.ref_table in positions:
+                assert positions[foreign_key.ref_table] < positions[name]
+
+
 def test_dry_run_cli() -> None:
     import subprocess
 
@@ -230,6 +241,7 @@ def main() -> int:
         test_bool_parse,
         test_jobs_content_digest_matches_pg_shaped_row,
         test_json_canonical_float_and_key_order,
+        test_schema_creation_order_places_foreign_key_parents_first,
         test_dry_run_cli,
     ):
         try:

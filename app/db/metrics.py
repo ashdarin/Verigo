@@ -144,7 +144,10 @@ class MetricsStore:
                 ON CONFLICT(session_id) DO UPDATE SET
                     last_seen=excluded.last_seen, page_views=traffic_sessions.page_views+1
                 """,
-                (session_id, self._day(), now, now, int(not user_agent or bool(BOT_USER_AGENT.search(user_agent)))),
+                (
+                    session_id, self._day(), now, now,
+                    bool(not user_agent or BOT_USER_AGENT.search(user_agent)),
+                ),
             )
 
     def session_is_active(self, session_id: str) -> bool:
@@ -419,17 +422,21 @@ class MetricsStore:
                 stop_true = "stop_on_deliverable IS TRUE"
                 stop_false = "stop_on_deliverable IS NOT TRUE"
                 emails_text = "emails_json::text"
+                # psycopg interprets percent signs in parameterized SQL, so a
+                # literal LIKE wildcard must be escaped for PostgreSQL.
+                list_separator_pattern = "'%%,%%'"
             else:
                 day_bucket = "substr(created_at,1,10)"
                 stop_true = "stop_on_deliverable=1"
                 stop_false = "stop_on_deliverable=0"
                 emails_text = "emails_json"
+                list_separator_pattern = "'%,%'"
             rows = connection.execute(
                 f"""
                 SELECT {day_bucket},
                     SUM(CASE WHEN {stop_true} THEN 1 ELSE 0 END),
-                    SUM(CASE WHEN {stop_false} AND {emails_text} NOT LIKE '%,%' THEN 1 ELSE 0 END),
-                    SUM(CASE WHEN {stop_false} AND {emails_text} LIKE '%,%' THEN 1 ELSE 0 END)
+                    SUM(CASE WHEN {stop_false} AND {emails_text} NOT LIKE {list_separator_pattern} THEN 1 ELSE 0 END),
+                    SUM(CASE WHEN {stop_false} AND {emails_text} LIKE {list_separator_pattern} THEN 1 ELSE 0 END)
                 FROM jobs
                 WHERE parent_id IS NULL AND execution_target != 'aggregate' AND created_at >= ?
                 GROUP BY {day_bucket}

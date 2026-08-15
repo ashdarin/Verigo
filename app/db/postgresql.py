@@ -45,10 +45,14 @@ def dsn_uses_local_tunnel(dsn: str) -> bool:
     try:
         parsed = urlparse(dsn)
     except Exception:
-        return "127.0.0.1:15432" in dsn or "localhost:15432" in dsn
+        return any(
+            f"{host}:{port}" in dsn
+            for host in ("127.0.0.1", "localhost")
+            for port in (15432, 15433)
+        )
     host = (parsed.hostname or "").lower()
     port = parsed.port or 5432
-    return host in {"127.0.0.1", "localhost"} and port == 15432
+    return host in {"127.0.0.1", "localhost"} and port in {15432, 15433}
 
 
 def connect(
@@ -64,7 +68,9 @@ def connect(
     # the host OS timezone (e.g. Asia/Beijing) is unknown to PostgreSQL.
     kwargs: dict = {
         "connect_timeout": connect_timeout,
-        "options": "-c TimeZone=UTC",
+        # Set session defaults in the startup packet instead of sending a SET
+        # round trip every time a pooled connection is checked out.
+        "options": "-c TimeZone=UTC -c statement_timeout=15000",
     }
     if dict_rows:
         kwargs["row_factory"] = dict_row
@@ -75,7 +81,9 @@ def connect(
 
 _POOL_LOCK = None
 _POOLS: dict = {}
-_POOL_MAX_IDLE = 8
+# Each web/worker process has its own pool. Keep the per-process idle budget
+# small so a quiet fleet does not exhaust PostgreSQL connections.
+_POOL_MAX_IDLE = 2
 
 
 def _pool_state():
@@ -87,20 +95,11 @@ def _pool_state():
     return _POOL_LOCK, _POOLS
 
 
-def _connection_alive(conn) -> bool:
+def _connection_open(conn) -> bool:
+    """Check local socket state without adding a database round trip."""
     if conn is None or getattr(conn, "closed", False):
         return False
-    try:
-        with conn.cursor() as cur:
-            cur.execute("SELECT 1")
-            cur.fetchone()
-        return True
-    except Exception:
-        try:
-            conn.close()
-        except Exception:
-            pass
-        return False
+    return True
 
 
 def acquire_connection(
@@ -114,27 +113,31 @@ def acquire_connection(
     from collections import deque
 
     url = resolve_database_url(dsn)
+    local_tunnel = dsn_uses_local_tunnel(url)
     key = (url, autocommit, dict_rows)
     lock, pools = _pool_state()
     with lock:
         idle = pools.setdefault(key, deque())
         while idle:
             conn = idle.popleft()
-            if _connection_alive(conn):
+            if _connection_open(conn):
                 return conn, key
     last_error = None
-    for attempt in range(3):
+    attempts = 12 if local_tunnel else 3
+    effective_timeout = min(connect_timeout, 5) if local_tunnel else connect_timeout
+    for attempt in range(attempts):
         try:
             conn = connect(
                 url,
                 autocommit=autocommit,
-                connect_timeout=connect_timeout,
+                connect_timeout=effective_timeout,
                 dict_rows=dict_rows,
             )
             return conn, key
         except Exception as exc:  # noqa: BLE001
             last_error = exc
-            time.sleep(0.4 * (attempt + 1))
+            if attempt + 1 < attempts:
+                time.sleep(min(0.5 * (attempt + 1), 1.5))
     raise last_error
 
 
@@ -142,7 +145,12 @@ def release_connection(key, conn) -> None:
     if conn is None or getattr(conn, "closed", False):
         return
     try:
-        if not conn.autocommit:
+        # begin_immediate can open an explicit transaction on an autocommit
+        # connection. Never return one to the pool while it still owns locks,
+        # and avoid a no-op ROLLBACK when it is already idle.
+        from psycopg.pq import TransactionStatus
+
+        if conn.info.transaction_status is not TransactionStatus.IDLE:
             conn.rollback()
     except Exception:
         try:

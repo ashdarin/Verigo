@@ -17,7 +17,7 @@ from app.core.prospecting_protection import (
     is_confirmed_smtp_sample,
     is_suspicious_recipient_rejection,
 )
-from app.db.pg_compat import as_datetime, as_json
+from app.db.pg_compat import as_datetime, as_json, postgres_active
 from app.db.sqlite import begin_immediate, connect
 
 
@@ -582,6 +582,7 @@ class ProspectingStore:
         with closing(self._connect()) as connection:
             begin_immediate(connection)
             try:
+                maximum = "GREATEST" if postgres_active() else "MAX"
                 candidate_emails = [row[1] for row in rows]
                 placeholders = ", ".join("?" for _ in candidate_emails)
                 existing = {
@@ -591,7 +592,7 @@ class ProspectingStore:
                         [run.owner_id, *candidate_emails],
                     ).fetchall()
                 }
-                connection.executemany("""
+                connection.executemany(f"""
                     INSERT INTO prospecting_saved_contacts(
                         owner_id, email, domain, category, pattern, source, run_id, saved_at,
                         last_verified_at, verification_method, verification_detail, confidence
@@ -602,22 +603,22 @@ class ProspectingStore:
                         last_verified_at=excluded.last_verified_at,
                         verification_method=excluded.verification_method,
                         verification_detail=excluded.verification_detail,
-                        confidence=MAX(prospecting_saved_contacts.confidence, excluded.confidence)
+                        confidence={maximum}(prospecting_saved_contacts.confidence, excluded.confidence)
                 """, rows)
                 # Count ownership rows only; platform facts and audit events must
                 # not inflate the number reported as newly saved contacts.
                 inserted = len(set(candidate_emails) - existing)
-                connection.executemany("""
+                connection.executemany(f"""
                     INSERT INTO prospecting_verified_contacts(
                         email, domain, category, pattern, last_verified_at,
                         verification_method, verification_detail, confidence
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(email) DO UPDATE SET
                         domain=excluded.domain, category=excluded.category, pattern=excluded.pattern,
-                        last_verified_at=MAX(prospecting_verified_contacts.last_verified_at, excluded.last_verified_at),
+                        last_verified_at={maximum}(prospecting_verified_contacts.last_verified_at, excluded.last_verified_at),
                         verification_method=excluded.verification_method,
                         verification_detail=excluded.verification_detail,
-                        confidence=MAX(prospecting_verified_contacts.confidence, excluded.confidence)
+                        confidence={maximum}(prospecting_verified_contacts.confidence, excluded.confidence)
                 """, [
                     (row[1], row[2], row[3], row[4], row[8], row[9], row[10], row[11])
                     for row in rows
@@ -786,7 +787,7 @@ class ProspectingStore:
             total = int(connection.execute(f"""
                 SELECT COUNT(*) FROM (
                     SELECT domain FROM prospecting_saved_contacts WHERE {where} GROUP BY domain
-                )
+                ) AS matching_domains
             """, parameters).fetchone()[0])
             rows = connection.execute(f"""
                 SELECT domain, COUNT(*) AS contact_count, MAX(saved_at) AS latest_saved_at
@@ -1010,6 +1011,11 @@ class ProspectingStore:
         with closing(self._connect()) as connection:
             begin_immediate(connection)
             try:
+                existing_count = (
+                    "prospecting_owner_domain_profiles.confirmed_count"
+                    if postgres_active()
+                    else "confirmed_count"
+                )
                 marker = connection.execute(
                     "SELECT profiles_recorded_at FROM prospecting_runs WHERE id=?", (run.id,)
                 ).fetchone()
@@ -1019,12 +1025,12 @@ class ProspectingStore:
                 for pattern in patterns:
                     if not pattern:
                         continue
-                    connection.execute("""
+                    connection.execute(f"""
                         INSERT INTO prospecting_owner_domain_profiles(
                             owner_id, domain, pattern, confirmed_count, last_confirmed_at
                         ) VALUES (?, ?, ?, 1, ?)
                         ON CONFLICT(owner_id, domain, pattern) DO UPDATE SET
-                            confirmed_count=confirmed_count + 1, last_confirmed_at=excluded.last_confirmed_at
+                            confirmed_count={existing_count} + 1, last_confirmed_at=excluded.last_confirmed_at
                     """, (run.owner_id, run.domain, pattern, now))
                 connection.execute(
                     "UPDATE prospecting_runs SET profiles_recorded_at=? WHERE id=?", (now, run.id)

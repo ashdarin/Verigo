@@ -380,9 +380,16 @@ connection.close()
 
 # Prospecting tasks can fill a larger first batch and ramp faster after stable
 # SMTP outcomes. Receiver pressure still cancels the discovery-specific floor.
-connection = store._connect()
-connection.execute("CREATE TABLE prospecting_runs (verification_job_id TEXT PRIMARY KEY)")
-connection.close()
+def register_prospecting_run(connection, job_id: str) -> None:
+    connection.execute(
+        """INSERT INTO prospecting_runs(
+            id, owner_id, domain, verification_job_id, candidate_count,
+            profile_patterns_json, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (f"run-{job_id}", "smoke-owner", "example.test", job_id, 0, "[]", utc_now().isoformat()),
+    )
+
+
 previous_prospecting_initial = settings.prospecting_scheduler_initial_domain_concurrency
 previous_prospecting_step = settings.prospecting_scheduler_successes_per_step
 previous_prospecting_size = settings.prospecting_scheduler_step_size
@@ -397,9 +404,7 @@ prospecting_fast = Job(
 )
 store.add(prospecting_fast)
 connection = store._connect()
-connection.execute(
-    "INSERT INTO prospecting_runs(verification_job_id) VALUES (?)", (prospecting_fast.id,)
-)
+register_prospecting_run(connection, prospecting_fast.id)
 connection.close()
 prospecting_lease = store.claim_remote_lease("prospecting-a", "profile-test", shard_size=25)
 assert prospecting_lease is not None and len(prospecting_lease.pending_indices) == 16
@@ -423,9 +428,7 @@ shared_discovery = Job(
 )
 store.add(shared_discovery)
 connection = store._connect()
-connection.execute(
-    "INSERT INTO prospecting_runs(verification_job_id) VALUES (?)", (shared_discovery.id,)
-)
+register_prospecting_run(connection, shared_discovery.id)
 connection.close()
 local_discovery_lease = store.claim_remote_lease(
     "local-discovery", "local", shard_size=25, prospecting_shard_size=4,
@@ -460,9 +463,7 @@ prospecting_pressure = Job(
 )
 store.add(prospecting_pressure)
 connection = store._connect()
-connection.execute(
-    "INSERT INTO prospecting_runs(verification_job_id) VALUES (?)", (prospecting_pressure.id,)
-)
+register_prospecting_run(connection, prospecting_pressure.id)
 connection.close()
 pressure_lease = store.claim_remote_lease("prospecting-b", "profile-test", shard_size=25)
 assert pressure_lease is not None and len(pressure_lease.pending_indices) == 8
@@ -479,9 +480,7 @@ prospecting_after_pressure = Job(
 )
 store.add(prospecting_after_pressure)
 connection = store._connect()
-connection.execute(
-    "INSERT INTO prospecting_runs(verification_job_id) VALUES (?)", (prospecting_after_pressure.id,)
-)
+register_prospecting_run(connection, prospecting_after_pressure.id)
 connection.execute(
     "UPDATE scheduler_domain_profiles SET cooldown_until=? "
     "WHERE scheduler_key='domain:prospecting-pressure.test'",
@@ -568,10 +567,16 @@ quota_child = Job(
     id="quota-child", emails=["child@quota.test"], worker_count=1,
     parent_id=quota_parent.id,
 )
-quota_store.add(quota_parent, max_active=1)
+with quota_store._connect() as connection:
+    active_before = connection.execute(
+        """SELECT COUNT(*) FROM jobs WHERE status IN ('queued', 'running')
+        AND parent_id IS NULL AND retry_parent_id IS NULL"""
+    ).fetchone()[0]
+quota_limit = int(active_before) + 1
+quota_store.add(quota_parent, max_active=quota_limit)
 quota_store.add(quota_child)
 try:
-    quota_store.add(Job(id="quota-next", emails=["next@quota.test"], worker_count=1), max_active=1)
+    quota_store.add(Job(id="quota-next", emails=["next@quota.test"], worker_count=1), max_active=quota_limit)
 except RuntimeError:
     pass
 else:
@@ -584,12 +589,17 @@ race_first = JobStore()
 race_second = JobStore()
 race_first.initialize()
 race_second.initialize()
+with race_first._connect() as connection:
+    race_limit = int(connection.execute(
+        """SELECT COUNT(*) FROM jobs WHERE status IN ('queued', 'running')
+        AND parent_id IS NULL AND retry_parent_id IS NULL"""
+    ).fetchone()[0]) + 1
 barrier = Barrier(2)
 
 def race_submit(store: JobStore, job_id: str) -> str:
     barrier.wait()
     try:
-        store.add(Job(id=job_id, emails=[f"{job_id}@quota.test"], worker_count=1), max_active=1)
+        store.add(Job(id=job_id, emails=[f"{job_id}@quota.test"], worker_count=1), max_active=race_limit)
     except RuntimeError:
         return "rejected"
     return "accepted"
@@ -601,7 +611,10 @@ with ThreadPoolExecutor(max_workers=2) as executor:
     ))
 assert sorted(outcomes) == ["accepted", "rejected"]
 with race_first._connect() as connection:
-    assert connection.execute("SELECT COUNT(*) FROM jobs").fetchone()[0] == 1
+    assert connection.execute(
+        """SELECT COUNT(*) FROM jobs WHERE status IN ('queued', 'running')
+        AND parent_id IS NULL AND retry_parent_id IS NULL"""
+    ).fetchone()[0] == race_limit
 object.__setattr__(settings, "database_path", original_database_path)
 
 print("job store refactor smoke: ok")

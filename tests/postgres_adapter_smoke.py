@@ -15,6 +15,7 @@ from app.db.pg_compat import (  # noqa: E402
     dialect_nocase_eq,
     rewrite_sql,
 )
+from app.db.postgresql import dsn_uses_local_tunnel  # noqa: E402
 
 
 def test_placeholder_rewrite() -> None:
@@ -56,6 +57,14 @@ def test_insert_or_replace() -> None:
     assert "%s" in sql
 
 
+def test_boolean_literal_assignments_rewrite() -> None:
+    sql = rewrite_sql(
+        "UPDATE users SET email_verified=1, onboarding_required=0 WHERE id=?"
+    )
+    assert "email_verified = TRUE" in sql
+    assert "onboarding_required = FALSE" in sql
+
+
 def test_json_and_dt_helpers() -> None:
     assert as_json('{"a":1}') == {"a": 1}
     assert as_json({"a": 1}) == {"a": 1}
@@ -68,6 +77,12 @@ def test_json_and_dt_helpers() -> None:
 
 def test_dialect_nocase() -> None:
     assert "COLLATE" in dialect_nocase_eq("email")
+
+
+def test_local_tunnel_detection() -> None:
+    assert dsn_uses_local_tunnel("postgresql://u:p@127.0.0.1:15432/db")
+    assert dsn_uses_local_tunnel("postgresql://u:p@localhost:15433/db")
+    assert not dsn_uses_local_tunnel("postgresql://u:p@127.0.0.1:5432/db")
 
 
 def test_stores_import_with_sqlite_default() -> None:
@@ -91,8 +106,10 @@ def main() -> int:
         test_sum_eq_rewrite,
         test_insert_or_ignore,
         test_insert_or_replace,
+        test_boolean_literal_assignments_rewrite,
         test_json_and_dt_helpers,
         test_dialect_nocase,
+        test_local_tunnel_detection,
         test_stores_import_with_sqlite_default,
     ):
         try:

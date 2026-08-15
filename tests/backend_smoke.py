@@ -195,7 +195,8 @@ assert gmail_target(["person@gmail.com"], "other@example.com") == "local"
 assert gmail_target(["person@outlook.com"], "smoke@example.com") == "gmail"
 assert gmail_target(["person@company.de"], "smoke@example.com") == "gmail"
 assert gmail_target(["person@example.com"], "smoke@example.com") == "gmail"
-assert remote_worker_count("tencent_qq", 8) == 4
+assert remote_worker_count("tencent_qq", 8) == 6
+assert remote_worker_count("tencent_qq", 1) == 6
 assert remote_worker_count("gmail", 8) == 8
 assert remote_worker_count("codearts", 32) == 16
 object.__setattr__(settings, "cloudstudio_domestic_worker_enabled", True)
@@ -356,10 +357,12 @@ ordinary_temporary = normalize_result({
     "smtp_result": "452 temporary SMTP failure",
 })
 finalize_temporary_smtp_results([ordinary_temporary])
-assert ordinary_temporary["deliverable"] is False
-assert ordinary_temporary["valid"] is False
+assert ordinary_temporary["deliverable"] is None
+assert ordinary_temporary["valid"] is True
 assert ordinary_temporary["temporary_retries_exhausted"] is True
-assert "连续 3 次" in ordinary_temporary["smtp_result"]
+assert ordinary_temporary["retry_policy"] == "never"
+assert not is_retryable_smtp_result(ordinary_temporary)
+assert "自动复核已结束" in ordinary_temporary["smtp_result"]
 
 mailbox_full = normalize_result({
     "email": "full@gmail.com", "deliverable": None,
@@ -503,6 +506,8 @@ assert failed_retry_parent is not None
 assert failed_retry_parent.results[0]["deliverable"] is None
 assert failed_retry_parent.results[0]["retry_state"] == "failed"
 assert "retry_at" not in failed_retry_parent.results[0]
+assert failed_retry_parent.results[0]["retry_policy"] == "never"
+assert not is_retryable_smtp_result(failed_retry_parent.results[0])
 
 completed_retry_notice = Job(
     id="smoketemp004", emails=["confirmed@example.com"], worker_count=1,
@@ -667,10 +672,9 @@ mixed_tencent_children = [
     child for child in mixed_children if child.execution_target == "tencent_qq"
 ]
 assert [child.emails for child in mixed_tencent_children] == [
-    ["first@qq.com", "third@foxmail.com"],
-    ["fourth@163.com"],
+    ["first@qq.com", "third@foxmail.com", "fourth@163.com"],
 ]
-assert [child.worker_count for child in mixed_tencent_children] == [1, 2]
+assert [child.worker_count for child in mixed_tencent_children] == [6]
 assert [child for child in mixed_children if child.execution_target == "local"][0].emails == [
     "second@example.com"
 ]
@@ -750,7 +754,7 @@ assert [
     (child.emails, child.worker_count)
     for child in stopped_continuation_children
     if child.execution_target == "tencent_qq"
-] == [(["stop@qq.com"], 1), (["stop@163.com"], 3)]
+] == [(["stop@qq.com", "stop@163.com"], 6)]
 assert job_store.stop(stopped_continuation.id).status == "stopped"
 object.__setattr__(
     settings, "tencent_qq_worker_allowed_emails", frozenset({"smoke@example.com"})
@@ -869,6 +873,14 @@ with TestClient(app) as guest:
     )
     assert guest_qq.status_code == 202, guest_qq.text
     assert guest.post("/api/workers/tencent-qq/claim").status_code == 401
+    assert guest.get("/api/workers/tencent-qq/bootstrap").status_code == 401
+    bootstrap = guest.get(
+        "/api/workers/tencent-qq/bootstrap?processes=2",
+        headers={"X-Verigo-Worker-Token": "smoke-tencent-worker-token"},
+    )
+    assert bootstrap.status_code == 200, bootstrap.text
+    assert "for slot in 1 2" in bootstrap.text
+    assert "app.tencent_qq_worker" in bootstrap.text
     worker_claim = guest.post(
         "/api/workers/tencent-qq/claim?wait_seconds=0",
         headers={
@@ -878,7 +890,7 @@ with TestClient(app) as guest:
     )
     assert worker_claim.status_code == 200, worker_claim.text
     assert worker_claim.json()["job"]["id"] == guest_qq.json()["id"]
-    assert worker_claim.json()["job"]["worker_count"] == 1
+    assert worker_claim.json()["job"]["worker_count"] == settings.qq_worker_max_workers
     assert job_store.worker_runtime("tencent_qq").worker_id == "smoke-cloudstudio"
     stopped_qq_job = guest.post(
         f"/api/jobs/{guest_qq.json()['id']}/stop",
@@ -905,8 +917,13 @@ with TestClient(app) as guest:
     )
     assert parallel_claim.status_code == 200, parallel_claim.text
     assert parallel_claim.json()["job"]["id"] == remote_parallel_job.id
-    assert parallel_claim.json()["job"]["worker_count"] == 4
+    assert parallel_claim.json()["job"]["worker_count"] == settings.qq_worker_max_workers
     assert job_store.stop(remote_parallel_job.id).status == "stopped"
+    # This API-level claim uses an unregistered synthetic worker. Rotation is
+    # covered by cloudshell_coordinator_smoke; disable it here so the route
+    # contract is tested independently of a deployment account manifest.
+    previous_cloudshell_coordinator_enabled = settings.cloudshell_coordinator_enabled
+    object.__setattr__(settings, "cloudshell_coordinator_enabled", False)
     cloudshell_fast_job = verification_tasks.submit(
         ["fast@company.de"],
         8,
@@ -925,6 +942,9 @@ with TestClient(app) as guest:
     assert cloudshell_claim.json()["job"]["id"] == cloudshell_fast_job.id
     assert cloudshell_claim.json()["job"]["worker_count"] == 8
     assert job_store.stop(cloudshell_fast_job.id).status == "stopped"
+    object.__setattr__(
+        settings, "cloudshell_coordinator_enabled", previous_cloudshell_coordinator_enabled
+    )
 
 
 auth_store.check_rate_limit("persistent-rate-limit-smoke", limit=1, window_seconds=3600)
@@ -1268,9 +1288,9 @@ with auth_store._connect() as connection:
     connection.execute(
         """
         INSERT INTO users(id, username, email, email_verified, credits, password_hash, created_at)
-        VALUES (?, ?, NULL, 0, 7, ?, '2026-01-01T00:00:00+00:00')
+        VALUES (?, ?, NULL, ?, 7, ?, '2026-01-01T00:00:00+00:00')
         """,
-        (legacy_id, "legacy_user", hash_password("legacy-password")),
+        (legacy_id, "legacy_user", False, hash_password("legacy-password")),
     )
 
 with TestClient(app) as legacy_account:
@@ -1351,7 +1371,7 @@ config = verifier.get_consumer_fix_strategy("qq.com")
 assert config["use_data_command"] is False
 assert config["max_attempts"] == 1
 assert config["max_mx_hosts"] == 1
-assert legacy.smtp_gate_capacity("mx1.qq.com") == 1
+assert legacy.smtp_gate_capacity("mx1.qq.com") == 6
 assert verifier._handle_qq_response(250, b"OK", config, 0)[0] is True
 assert verifier._handle_qq_response(550, b"Mailbox not found", config, 0)[0] is False
 assert verifier._handle_qq_response(550, b"Access denied by policy", config, config["max_attempts"] - 1)[0] is False

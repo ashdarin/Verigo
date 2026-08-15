@@ -242,6 +242,7 @@ class JobStore:
                 connection.execute("CREATE INDEX IF NOT EXISTS idx_job_results_pending ON job_results(job_id, progress_state, original_index)")
                 connection.execute("CREATE INDEX IF NOT EXISTS idx_job_results_filter ON job_results(job_id, deliverability, is_skipped, original_index)")
                 connection.execute("CREATE INDEX IF NOT EXISTS idx_job_results_email ON job_results(job_id, email COLLATE NOCASE, original_index)")
+                connection.execute("CREATE INDEX IF NOT EXISTS idx_job_results_updated ON job_results(updated_at)")
                 connection.execute("""
                     CREATE TABLE IF NOT EXISTS result_objects (
                         id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, task_id TEXT NOT NULL,
@@ -411,6 +412,33 @@ class JobStore:
             ).fetchone()
         return str(row[0]) if row and row[0] in {"active", "draining"} else "active"
 
+    def service_state_value(self, name: str) -> str | None:
+        """Read a small durable coordination value shared by all workers."""
+        self.initialize()
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                "SELECT value FROM service_state WHERE name=?", (name,)
+            ).fetchone()
+        return str(row[0]) if row and row[0] is not None else None
+
+    def set_service_state_value(self, name: str, value: str) -> None:
+        """Upsert a small durable coordination value without a schema migration."""
+        self.initialize()
+        with self._lock, closing(self._connect()) as connection:
+            connection.execute(
+                """INSERT INTO service_state(name, value, updated_at) VALUES (?, ?, ?)
+                ON CONFLICT(name) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at""",
+                (name, value, _sql_ts(utc_now())),
+            )
+            connection.commit()
+
+    def database_ready(self) -> bool:
+        """Check database reachability without scanning active result rows."""
+        self.initialize()
+        with closing(self._connect()) as connection:
+            connection.execute("SELECT 1").fetchone()
+        return True
+
     def health_summary(self) -> dict[str, object]:
         """Return inexpensive readiness signals without hydrating task payloads."""
         self.initialize()
@@ -490,21 +518,123 @@ class JobStore:
                 ).fetchall()
             ]
             profile_rows = connection.execute(
-                "SELECT scheduler_key, current_limit, cooldown_until FROM scheduler_domain_profiles"
+                """SELECT scheduler_key, current_limit, success_streak, pressure_events,
+                          cooldown_until
+                   FROM scheduler_domain_profiles"""
             ).fetchall()
+            public_profile_rows = connection.execute(
+                """SELECT scheduler_key, current_limit, success_streak, pressure_events,
+                          cooldown_until
+                   FROM scheduler_domain_profiles
+                   WHERE scheduler_key IN ('gmail', 'microsoft')"""
+            ).fetchall()
+            recent_cutoff = _sql_ts(now - timedelta(seconds=60))
+            recent_rows = connection.execute(
+                """SELECT email, result_json
+                   FROM job_results
+                   WHERE progress_state IN ('completed', 'failed')
+                     AND updated_at >= ?""",
+                (recent_cutoff,),
+            ).fetchall()
+            active_slots = {
+                str(key): int(slots or 0)
+                for key, slots in connection.execute(
+                    """SELECT mx_key, SUM(slots)
+                       FROM mx_scheduler_leases
+                       WHERE expires_at >= ? AND mx_key IN ('gmail', 'microsoft')
+                       GROUP BY mx_key""",
+                    (_sql_ts(now),),
+                )
+            }
+            lease_ages: dict[str, list[float]] = {"gmail": [], "microsoft": []}
+            for key, claimed_at in connection.execute(
+                """SELECT mx.mx_key, lease.claimed_at
+                   FROM mx_scheduler_leases mx
+                   JOIN job_leases lease ON lease.id=mx.lease_id
+                   WHERE mx.expires_at >= ? AND lease.completed_at IS NULL
+                     AND mx.mx_key IN ('gmail', 'microsoft')""",
+                (_sql_ts(now),),
+            ):
+                claimed = _dt(claimed_at)
+                if claimed is not None:
+                    lease_ages[str(key)].append(max(0.0, (now - claimed).total_seconds()))
         mode = str(mode_row[0]) if mode_row and mode_row[0] in {"active", "draining"} else "active"
         scheduler_profiles = {
             "tracked": len(profile_rows),
             "restricted": sum(
                 int(limit) < self._scheduler_mx_capacity(str(key))
-                for key, limit, _cooldown in profile_rows
+            for key, limit, _streak, _pressure, _cooldown in profile_rows
             ),
             "cooling": sum(
                 1
-                for _key, _limit, cooldown in profile_rows
+            for _key, _limit, _streak, _pressure, cooldown in profile_rows
                 if (parsed := _dt(cooldown)) is not None and parsed > now
             ),
         }
+        profile_by_key = {
+            str(key): {
+                "limit": int(limit),
+                "configured_limit": self._scheduler_mx_capacity(str(key)),
+                "success_streak": int(streak),
+                "pressure_events": int(pressure),
+                "cooldown_until": _dt(cooldown).isoformat() if _dt(cooldown) else None,
+            }
+            for key, limit, streak, pressure, cooldown in public_profile_rows
+        }
+        recent_outcomes = {
+            key: {"completed": 0, "pressure": 0, "timings": {}}
+            for key in ("gmail", "microsoft")
+        }
+        for email, raw_result in recent_rows:
+            key = self._scheduler_mx_key(str(email))
+            if key not in recent_outcomes:
+                continue
+            recent_outcomes[key]["completed"] += 1
+            try:
+                result = _json_load(raw_result)
+            except (TypeError, json.JSONDecodeError):
+                result = None
+            if isinstance(result, dict) and self._scheduler_pressure_signal(result):
+                recent_outcomes[key]["pressure"] += 1
+            timings = result.get("timings_ms") if isinstance(result, dict) else None
+            if isinstance(timings, dict):
+                for name, raw_value in timings.items():
+                    if not isinstance(raw_value, (int, float)) or raw_value < 0:
+                        continue
+                    recent_outcomes[key]["timings"].setdefault(str(name), []).append(float(raw_value))
+
+        def timing_summary(values: list[float]) -> dict[str, float | int]:
+            ordered = sorted(values)
+            p50_index = ((len(ordered) * 50 + 99) // 100) - 1
+            p95_index = ((len(ordered) * 95 + 99) // 100) - 1
+            return {
+                "count": len(ordered),
+                "p50": round(ordered[p50_index], 2),
+                "p95": round(ordered[p95_index], 2),
+            }
+
+        scheduler_runtime = {}
+        for key in ("gmail", "microsoft"):
+            ages = sorted(lease_ages[key])
+            p95 = ages[((len(ages) * 95 + 99) // 100) - 1] if ages else None
+            scheduler_runtime[key] = {
+                **profile_by_key.get(key, {
+                    "limit": self._scheduler_mx_capacity(key),
+                    "configured_limit": self._scheduler_mx_capacity(key),
+                    "success_streak": 0,
+                    "pressure_events": 0,
+                    "cooldown_until": None,
+                }),
+                "completed_last_60_seconds": recent_outcomes[key]["completed"],
+                "pressure_last_60_seconds": recent_outcomes[key]["pressure"],
+                "timings_ms_last_60_seconds": {
+                    name: timing_summary(values)
+                    for name, values in recent_outcomes[key]["timings"].items()
+                    if values
+                },
+                "active_slots": active_slots.get(key, 0),
+                "active_lease_age_p95_seconds": round(p95, 2) if p95 is not None else None,
+            }
         return {
             "service_mode": mode,
             "queued_jobs": int(job_counts[0]),
@@ -514,6 +644,7 @@ class JobStore:
             "stale_leases": int(stale_leases),
             "unhealthy_targets": unhealthy_targets,
             "scheduler_profiles": scheduler_profiles,
+            "scheduler_runtime": scheduler_runtime,
         }
 
     def set_service_mode(self, mode: str) -> None:
@@ -632,14 +763,13 @@ class JobStore:
                     result["email"] = str(result.get("email") or email)
                     result["original_index"] = index
                     rows.append(self._result_row(job_id, index, result, now))
-                before = connection.total_changes
-                connection.executemany("""
+                cursor = connection.executemany("""
                     INSERT INTO job_results(job_id, original_index, email, progress_state, result_json, updated_at,
                         deliverability, is_valid, is_skipped, is_catch_all, retry_at, retry_updated, query_fields_ready)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(job_id, original_index) DO NOTHING
                 """, rows)
-                migrated_rows += connection.total_changes - before
+                migrated_rows += max(0, cursor.rowcount)
 
             parents = connection.execute(
                 "SELECT id, emails_json FROM jobs WHERE execution_target='aggregate'"
@@ -668,12 +798,11 @@ class JobStore:
                         if offset < len(candidates):
                             links.append((child_id, child_index, parent_id, candidates[offset]))
                             consumed[key] = offset + 1
-                before = connection.total_changes
-                connection.executemany("""
+                cursor = connection.executemany("""
                     INSERT INTO job_result_links(child_job_id, child_index, parent_job_id, parent_index)
                     VALUES (?, ?, ?, ?) ON CONFLICT(child_job_id, child_index) DO NOTHING
                 """, links)
-                linked_rows += connection.total_changes - before
+                linked_rows += max(0, cursor.rowcount)
             connection.execute(
                 "INSERT OR REPLACE INTO schema_migrations(name, applied_at) VALUES ('legacy_result_rows_v1', ?)",
                 (now,),
@@ -693,9 +822,9 @@ class JobStore:
             return connection.execute(
                 """
                 UPDATE jobs SET deferred_retry_at = NULL, temporary_retry_attempts = 0
-                WHERE status = 'queued' AND deferred_retry_at IS NOT NULL
-                    AND error LIKE '%自动复核%'
-                """
+                WHERE status = 'queued' AND deferred_retry_at IS NOT NULL AND error LIKE ?
+                """,
+                ("%自动复核%",),
             ).rowcount
 
     def clear_completed_retry_notices(self) -> int:
@@ -705,8 +834,9 @@ class JobStore:
             return connection.execute(
                 """
                 UPDATE jobs SET error = NULL
-                WHERE status = 'completed' AND error LIKE '检测到未完成的 SMTP 临时结果%'
-                """
+                WHERE status = 'completed' AND error LIKE ?
+                """,
+                ("检测到未完成的 SMTP 临时结果%",),
             ).rowcount
 
     def clear_dns_negative_cache(self) -> int:
@@ -1141,10 +1271,15 @@ class JobStore:
         domains = catch_all_domains(results)
         if domains:
             placeholders = ", ".join("?" for _ in domains)
+            domain_expression = (
+                "lower(split_part(email, '@', 2))"
+                if postgres_active()
+                else "lower(substr(email, instr(email, '@') + 1))"
+            )
             evidence_rows = connection.execute(
                 f"""SELECT result_json FROM job_results
                 WHERE deliverability=0
-                AND lower(substr(email, instr(email, '@') + 1)) IN ({placeholders})""",
+                AND {domain_expression} IN ({placeholders})""",
                 tuple(sorted(domains)),
             ).fetchall()
             evidence: list[dict[str, Any]] = []
@@ -1289,11 +1424,12 @@ class JobStore:
         """Return standalone single-address jobs eligible for a narrow repair pass."""
         self.initialize()
         emails_like = "emails_json::text" if postgres_active() else "emails_json"
+        list_separator_pattern = "'%%,%%'" if postgres_active() else "'%,%'"
         with closing(self._connect()) as connection:
             rows = connection.execute(
                 f"""SELECT {self._select_columns()} FROM jobs
                 WHERE status='completed' AND parent_id IS NULL AND execution_target != 'aggregate'
-                    AND retry_parent_id IS NULL AND created_at >= ? AND {emails_like} NOT LIKE '%,%'
+                    AND retry_parent_id IS NULL AND created_at >= ? AND {emails_like} NOT LIKE {list_separator_pattern}
                 ORDER BY created_at""",
                 (since.isoformat(),),
             ).fetchall()
@@ -1382,7 +1518,6 @@ class JobStore:
         stale_before = now - timedelta(seconds=settings.worker_lease_seconds)
         with self._lock, closing(self._connect()) as connection:
             begin_immediate(connection)
-            self._release_orphaned_results(connection, _sql_ts(stale_before))
             connection.execute(
                 """
                 UPDATE jobs SET status = 'queued', worker_id = NULL, heartbeat_at = NULL,
@@ -1448,7 +1583,17 @@ class JobStore:
         stale = now - timedelta(seconds=settings.worker_lease_seconds)
         with self._lock, closing(self._connect()) as connection:
             begin_immediate(connection)
-            self._release_orphaned_results(connection, _sql_ts(stale))
+            if postgres_active():
+                advisory = connection.execute(
+                    "SELECT pg_try_advisory_xact_lock(hashtext(?), hashtext(?))",
+                    (execution_target, worker_id),
+                ).fetchone()
+                if not advisory or not bool(advisory[0]):
+                    connection.rollback()
+                    return None
+            # Expired leases are released precisely below. Avoid a global
+            # result scan on every long-poll claim while holding this write
+            # transaction; the maintenance path retains the orphan sweep.
             expired = connection.execute("""
                 SELECT id, job_id, indices_json FROM job_leases
                 WHERE completed_at IS NULL AND heartbeat_at < ?
@@ -1544,16 +1689,59 @@ class JobStore:
                     if candidate_is_prospecting and prospecting_shard_size is not None
                     else max(1, shard_size)
                 )
-                for index, email in connection.execute("""
+                # Resolve scheduler routes and profiles in batches. Per-email
+                # lookups keep a PostgreSQL write transaction open for one
+                # round trip per pending address.
+                candidate_scan_limit = max(256, candidate_shard_size * 8)
+                pending_rows = connection.execute("""
                     SELECT original_index, email FROM job_results WHERE job_id=?
-                        AND progress_state='pending' ORDER BY original_index
-                """, (candidate.id,)):
-                    mx_key = self._scheduler_key_for_email(connection, str(email))
+                        AND progress_state='pending' ORDER BY original_index LIMIT ?
+                """, (candidate.id, candidate_scan_limit)).fetchall()
+                domains = {
+                    self._scheduler_domain(str(email))
+                    for _index, email in pending_rows
+                    if self._scheduler_mx_key(str(email)) not in {"gmail", "microsoft", "qq"}
+                }
+                route_by_domain: dict[str, str] = {}
+                if domains:
+                    route_placeholders = ", ".join("?" for _ in domains)
+                    route_by_domain = {
+                        str(domain): str(scheduler_key)
+                        for domain, scheduler_key in connection.execute(
+                            f"SELECT domain, scheduler_key FROM scheduler_domain_routes "
+                            f"WHERE domain IN ({route_placeholders})",
+                            tuple(domains),
+                        )
+                    }
+                pending_with_keys: list[tuple[int, str]] = []
+                scheduler_keys: set[str] = set()
+                for index, email in pending_rows:
+                    email_text = str(email)
+                    mx_key = self._scheduler_mx_key(email_text)
+                    if mx_key not in {"gmail", "microsoft", "qq"}:
+                        mx_key = route_by_domain.get(self._scheduler_domain(email_text), mx_key)
+                    pending_with_keys.append((int(index), mx_key))
+                    scheduler_keys.add(mx_key)
+                profiles: dict[str, tuple[object, object, object]] = {}
+                if scheduler_keys:
+                    profile_placeholders = ", ".join("?" for _ in scheduler_keys)
+                    profiles = {
+                        str(key): (current_limit, pressure_events, cooldown_until)
+                        for key, current_limit, pressure_events, cooldown_until in connection.execute(
+                            "SELECT scheduler_key, current_limit, pressure_events, cooldown_until "
+                            f"FROM scheduler_domain_profiles WHERE scheduler_key IN ({profile_placeholders})",
+                            tuple(scheduler_keys),
+                        )
+                    }
+                for index, mx_key in pending_with_keys:
+                    profile = profiles.get(mx_key)
                     if (
                         index in leased
-                        or self._scheduler_profile_is_cooling_down(connection, mx_key, now)
-                        or candidate_load.get(mx_key, 0) >= self._scheduler_profile_limit(
-                            connection, mx_key, now,
+                        or self._scheduler_profile_is_cooling_down_value(
+                            profile[2] if profile else None, now
+                        )
+                        or candidate_load.get(mx_key, 0) >= self._scheduler_profile_limit_from_row(
+                            mx_key, profile, now,
                             prospecting=candidate_is_prospecting,
                         )
                     ):
@@ -1614,6 +1802,8 @@ class JobStore:
             return "gmail"
         if domain in {"outlook.com", "hotmail.com", "live.com", "msn.com"}:
             return "microsoft"
+        if domain in {"qq.com", "vip.qq.com", "foxmail.com"}:
+            return "qq"
         return f"domain:{domain}"
 
     @staticmethod
@@ -1627,11 +1817,13 @@ class JobStore:
             return "gmail"
         if host.endswith(".protection.outlook.com"):
             return "microsoft"
+        if host.endswith((".qq.com", ".foxmail.com")):
+            return "qq"
         return f"mx:{host}"
 
     def _scheduler_key_for_email(self, connection: sqlite3.Connection, email: str) -> str:
         base_key = self._scheduler_mx_key(email)
-        if base_key in {"gmail", "microsoft"}:
+        if base_key in {"gmail", "microsoft", "qq"}:
             return base_key
         domain = self._scheduler_domain(email)
         row = connection.execute(
@@ -1643,7 +1835,7 @@ class JobStore:
         self, connection: sqlite3.Connection, email: str, result: dict[str, Any], now: datetime
     ) -> str:
         base_key = self._scheduler_mx_key(email)
-        if base_key in {"gmail", "microsoft"}:
+        if base_key in {"gmail", "microsoft", "qq"}:
             return base_key
         mx_records = result.get("mx_records")
         if isinstance(mx_records, list):
@@ -1668,14 +1860,26 @@ class JobStore:
             return settings.scheduler_gmail_concurrency
         if provider == "microsoft":
             return settings.scheduler_microsoft_concurrency
+        if provider == "qq":
+            return settings.qq_worker_max_workers
         return settings.scheduler_default_domain_concurrency
 
     @classmethod
     def _scheduler_profile_bounds(cls, mx_key: str) -> tuple[int, int]:
         initial = cls._scheduler_mx_capacity(mx_key)
-        if mx_key in {"gmail", "microsoft"}:
+        if mx_key in {"gmail", "microsoft", "qq"}:
             return 1, initial
         return 1, max(initial, settings.scheduler_domain_max_concurrency)
+
+    @staticmethod
+    def _scheduler_successes_per_step(mx_key: str, *, prospecting: bool) -> int:
+        if prospecting:
+            return settings.prospecting_scheduler_successes_per_step
+        if mx_key == "gmail":
+            return settings.scheduler_gmail_successes_per_step
+        if mx_key == "microsoft":
+            return settings.scheduler_microsoft_successes_per_step
+        return settings.scheduler_successes_per_step
 
     @classmethod
     def _ensure_scheduler_profile(
@@ -1704,9 +1908,26 @@ class JobStore:
             "SELECT current_limit, pressure_events, cooldown_until FROM scheduler_domain_profiles "
             "WHERE scheduler_key=?", (mx_key,)
         ).fetchone()
+        return cls._scheduler_profile_limit_from_row(
+            mx_key, row, now, prospecting=prospecting
+        )
+
+    @classmethod
+    def _scheduler_profile_limit_from_row(
+        cls,
+        mx_key: str,
+        row: tuple[object, object, object] | None,
+        now: datetime,
+        *,
+        prospecting: bool = False,
+    ) -> int:
         _minimum, maximum = cls._scheduler_profile_bounds(mx_key)
         if row is None:
-            current = maximum if mx_key in {"gmail", "microsoft"} else cls._scheduler_mx_capacity(mx_key)
+            current = (
+                maximum
+                if mx_key in {"gmail", "microsoft", "qq"}
+                else cls._scheduler_mx_capacity(mx_key)
+            )
             pressure_events = 0
             cooldown_until = None
         else:
@@ -1714,7 +1935,7 @@ class JobStore:
             pressure_events = int(row[1])
             cooldown_until = str(row[2]) if row[2] else None
         limit = max(1, min(current, maximum))
-        if not prospecting or mx_key in {"gmail", "microsoft"} or pressure_events:
+        if not prospecting or mx_key in {"gmail", "microsoft", "qq"} or pressure_events:
             return limit
         if cooldown_until:
             try:
@@ -1748,10 +1969,14 @@ class JobStore:
         row = connection.execute(
             "SELECT cooldown_until FROM scheduler_domain_profiles WHERE scheduler_key=?", (mx_key,)
         ).fetchone()
-        if row is None or not row[0]:
+        return JobStore._scheduler_profile_is_cooling_down_value(row[0] if row else None, now)
+
+    @staticmethod
+    def _scheduler_profile_is_cooling_down_value(cooldown_until: object, now: datetime) -> bool:
+        if not cooldown_until:
             return False
         try:
-            parsed = _dt(row[0])
+            parsed = _dt(cooldown_until)
             return parsed is not None and parsed > now
         except ValueError:
             return False
@@ -1772,6 +1997,15 @@ class JobStore:
             "connection failed", "server disconnected", "too many connections",
             "rate limit", "rate limited", "throttl",
         ))
+
+    @staticmethod
+    def _scheduler_receiver_cooldown_seconds(result: dict[str, Any]) -> int:
+        """Use the retry classifier's receiver cooldown when it is available."""
+        try:
+            requested = int(result.get("receiver_cooldown_seconds") or 0)
+        except (TypeError, ValueError):
+            requested = 0
+        return max(settings.scheduler_cooldown_seconds, min(requested, 6 * 60 * 60))
 
     @staticmethod
     def _scheduler_success_signal(mx_key: str, result: dict[str, Any]) -> bool:
@@ -1800,9 +2034,15 @@ class JobStore:
             if not isinstance(result, dict):
                 continue
             mx_key = self._scheduler_key_for_result(connection, str(email), result, now)
-            outcome = grouped.setdefault(mx_key, {"success": 0, "pressure": 0})
+            outcome = grouped.setdefault(
+                mx_key, {"success": 0, "pressure": 0, "cooldown_seconds": 0}
+            )
             if self._scheduler_pressure_signal(result):
                 outcome["pressure"] += 1
+                outcome["cooldown_seconds"] = max(
+                    outcome["cooldown_seconds"],
+                    self._scheduler_receiver_cooldown_seconds(result),
+                )
             elif self._scheduler_success_signal(mx_key, result):
                 outcome["success"] += 1
 
@@ -1827,7 +2067,7 @@ class JobStore:
                 if not cooldown_active:
                     current = max(minimum, (current + 1) // 2)
                     next_cooldown = _sql_ts(
-                        now + timedelta(seconds=settings.scheduler_cooldown_seconds)
+                        now + timedelta(seconds=outcome["cooldown_seconds"])
                     )
                     adjusted_at = _sql_ts(now)
             elif outcome["success"]:
@@ -1835,9 +2075,8 @@ class JobStore:
                     streak = 0
                 else:
                     streak += outcome["success"]
-                    successes_per_step = (
-                        settings.prospecting_scheduler_successes_per_step
-                        if prospecting else settings.scheduler_successes_per_step
+                    successes_per_step = self._scheduler_successes_per_step(
+                        mx_key, prospecting=prospecting
                     )
                     step_size = settings.prospecting_scheduler_step_size if prospecting else 1
                     if streak >= successes_per_step and current < maximum:
@@ -2336,6 +2575,17 @@ class JobStore:
                 """,
                 (target, worker_id, now),
             )
+
+    def mark_worker_offline(self, target: str, worker_id: str) -> None:
+        """Immediately retire a node deliberately stopped by its lifecycle."""
+        self.initialize()
+        with closing(self._connect()) as connection:
+            connection.execute(
+                """UPDATE worker_nodes SET health='offline'
+                   WHERE target=? AND worker_id=?""",
+                (target, worker_id),
+            )
+            connection.commit()
 
     def reconcile_worker_nodes(self, now: datetime | None = None) -> dict[str, int]:
         """Derive stale/offline node state from durable heartbeats."""

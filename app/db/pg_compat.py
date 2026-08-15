@@ -327,11 +327,6 @@ class PgConnection:
             connect_timeout=20,
             autocommit=True,
         )
-        # Cap runaway queries (health/metrics) so one worker cannot hang forever.
-        try:
-            self._raw.execute("SET statement_timeout = '15000'")
-        except Exception:
-            pass
         self.row_factory = None
 
     def _reopen(self) -> None:
@@ -350,10 +345,6 @@ class PgConnection:
             connect_timeout=20,
             autocommit=True,
         )
-        try:
-            self._raw.execute("SET statement_timeout = '15000'")
-        except Exception:
-            pass
 
     def execute(self, sql: str, params: Sequence[Any] | None = None) -> PgCursor:
         try:

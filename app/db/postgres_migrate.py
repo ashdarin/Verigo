@@ -119,10 +119,40 @@ def summarize_sqlite_table(
     }
 
 
+def schema_creation_order(tables: Iterable[str]) -> tuple[str, ...]:
+    """Return a stable parent-before-child order for registered tables.
+
+    A partial migration may intentionally omit an already-existing parent, so
+    only dependencies in the requested table set constrain its order.
+    """
+    remaining = {str(name) for name in tables}
+    for name in remaining:
+        require_registered(name)
+    ordered: list[str] = []
+    while remaining:
+        ready = [
+            name
+            for name in sorted(remaining)
+            if {
+                foreign_key.ref_table
+                for foreign_key in require_registered(name).foreign_keys
+                if foreign_key.ref_table in remaining
+            }.issubset(ordered)
+        ]
+        if not ready:
+            # PostgreSQL needs at least one side of a cyclic dependency to
+            # exist first; retain deterministic behavior for that rare case.
+            ordered.extend(sorted(remaining))
+            break
+        ordered.extend(ready)
+        remaining.difference_update(ready)
+    return tuple(ordered)
+
+
 def ensure_schema(pg_dsn: str, tables: Iterable[str], *, recreate: bool = False) -> None:
     with pg_connection(pg_dsn) as conn:
         with conn.cursor() as cur:
-            for name in tables:
+            for name in schema_creation_order(tables):
                 table = require_registered(name)
                 if recreate:
                     cur.execute(f'DROP TABLE IF EXISTS "{table.name}" CASCADE')

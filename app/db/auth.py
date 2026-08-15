@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 
 from app.config import settings
 from app.core.security import hash_password, new_token, token_hash, verify_password
-from app.db.pg_compat import IntegrityError, PgConnection, as_bool, as_iso, postgres_active
+from app.db.pg_compat import IntegrityError, PgConnection, as_bool, as_datetime, as_iso, postgres_active
 from app.db.sqlite import begin_immediate, connect as connect_sqlite
 from app.db.jobs import utc_now
 
@@ -500,8 +500,8 @@ class AuthStore:
                 connection.rollback()
                 raise ValueError("该验证任务不属于当前激活流程")
             connection.execute(
-                "UPDATE users SET activation_completed_at=?, onboarding_required=0 WHERE id=? AND activation_completed_at IS NULL",
-                (utc_now().isoformat(), user_id),
+                "UPDATE users SET activation_completed_at=?, onboarding_required=? WHERE id=? AND activation_completed_at IS NULL",
+                (utc_now().isoformat(), False, user_id),
             )
             refreshed = connection.execute(
                 "SELECT id, username, email, email_verified, credits, created_at FROM users WHERE id=?", (user_id,)
@@ -520,8 +520,11 @@ class AuthStore:
         try:
             with closing(self._connect()) as connection:
                 connection.execute(
-                    "INSERT INTO users (id, username, email, password_hash, created_at, onboarding_required) VALUES (?, ?, ?, ?, ?, 1)",
-                    (user.id, user.username, user.email, hash_password(password), user.created_at),
+                    "INSERT INTO users (id, username, email, password_hash, created_at, onboarding_required) VALUES (?, ?, ?, ?, ?, ?)",
+                    (
+                        user.id, user.username, user.email, hash_password(password),
+                        user.created_at, user.onboarding_required,
+                    ),
                 )
         except IntegrityError as exc:
             raise ValueError("账号或邮箱已被注册") from exc
@@ -627,20 +630,22 @@ class AuthStore:
     def confirm_email_binding(self, user_id: str, code: str) -> User:
         """Persist a verified email for a legacy account without granting new credits."""
         self.initialize()
-        now = utc_now().isoformat()
+        now = utc_now()
         with closing(self._connect()) as connection:
             begin_immediate(connection)
             binding = connection.execute(
                 "SELECT email, code_hash, expires_at, attempts FROM email_bindings WHERE user_id=?",
                 (user_id,),
             ).fetchone()
+            expires_at = as_datetime(binding[2]) if binding is not None else None
             if (
                 binding is None
-                or binding[2] <= now
+                or expires_at is None
+                or expires_at <= now
                 or binding[3] >= 5
                 or not hmac.compare_digest(binding[1], token_hash(code))
             ):
-                if binding is not None and binding[2] > now:
+                if binding is not None and expires_at is not None and expires_at > now:
                     connection.execute(
                         "UPDATE email_bindings SET attempts=attempts+1 WHERE user_id=?",
                         (user_id,),
@@ -660,8 +665,8 @@ class AuthStore:
                 raise ValueError("该账号已绑定邮箱")
             try:
                 connection.execute(
-                    "UPDATE users SET email=?, email_verified=1 WHERE id=?",
-                    (binding[0], user_id),
+                    "UPDATE users SET email=?, email_verified=? WHERE id=?",
+                    (binding[0], True, user_id),
                 )
             except IntegrityError as exc:
                 connection.rollback()
@@ -683,8 +688,9 @@ class AuthStore:
             begin_immediate(connection)
             row = connection.execute("SELECT code_hash, expires_at, attempts FROM email_verifications WHERE user_id = ?", (user_id,)).fetchone()
             now_value = now.isoformat()
-            if row is None or row[1] <= now_value or row[2] >= 5 or not hmac.compare_digest(row[0], token_hash(code)):
-                if row is not None and row[1] > now_value:
+            expires_at = as_datetime(row[1]) if row is not None else None
+            if row is None or expires_at is None or expires_at <= now or row[2] >= 5 or not hmac.compare_digest(row[0], token_hash(code)):
+                if row is not None and expires_at is not None and expires_at > now:
                     connection.execute("UPDATE email_verifications SET attempts=attempts+1 WHERE user_id=?", (user_id,))
                     connection.commit()
                 else: connection.rollback()
@@ -695,7 +701,7 @@ class AuthStore:
             if was_verified is None:
                 connection.rollback()
                 raise ValueError("账号不存在")
-            connection.execute("UPDATE users SET email_verified=1 WHERE id=?", (user_id,))
+            connection.execute("UPDATE users SET email_verified=? WHERE id=?", (True, user_id))
             grant_trial = not was_verified[0]
             if grant_trial and network_hash:
                 window_start = (now - timedelta(days=settings.trial_network_window_days)).isoformat()
@@ -1550,11 +1556,21 @@ class AuthStore:
                 "prospecting_saved_contacts",
                 "prospecting_runs",
             )
-            existing_tables = {
-                str(row[0]) for row in connection.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table'"
-                ).fetchall()
-            }
+            if postgres_active():
+                existing_tables = {
+                    str(row[0])
+                    for row in connection.execute(
+                        "SELECT table_name FROM information_schema.tables "
+                        "WHERE table_schema='public'"
+                    ).fetchall()
+                }
+            else:
+                existing_tables = {
+                    str(row[0])
+                    for row in connection.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table'"
+                    ).fetchall()
+                }
             for table in prospecting_tables:
                 if table in existing_tables:
                     connection.execute(f"DELETE FROM {table} WHERE owner_id=?", (user_id,))

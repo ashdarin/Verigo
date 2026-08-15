@@ -301,6 +301,102 @@ def test_no_sqlite_only_control_left() -> None:
         assert "COLLATE" not in out
 
 
+def test_remote_claim_batches_scheduler_lookups() -> None:
+    """The long-poll write transaction must not query once per email."""
+    import inspect
+
+    from app.db.jobs import JobStore
+
+    source = inspect.getsource(JobStore.claim_remote_lease)
+    assert "_release_orphaned_results" not in source
+    assert "_scheduler_key_for_email(connection" not in source
+    assert "_scheduler_profile_is_cooling_down(connection" not in source
+    assert "_scheduler_profile_limit(connection" not in source
+    assert "FROM scheduler_domain_routes" in source
+    assert "FROM scheduler_domain_profiles" in source
+    assert "candidate_scan_limit" in source
+    assert "_release_orphaned_results" not in inspect.getsource(JobStore.claim_next)
+
+
+def test_public_mailbox_scheduler_recovers_on_its_own_threshold() -> None:
+    import inspect
+
+    from app.config import settings
+    from app.db.jobs import JobStore
+
+    assert JobStore._scheduler_successes_per_step("gmail", prospecting=False) == (
+        settings.scheduler_gmail_successes_per_step
+    )
+    assert JobStore._scheduler_successes_per_step("microsoft", prospecting=False) == (
+        settings.scheduler_microsoft_successes_per_step
+    )
+    assert JobStore._scheduler_successes_per_step("domain:example.com", prospecting=False) == (
+        settings.scheduler_successes_per_step
+    )
+    summary = inspect.getsource(JobStore.health_summary)
+    assert "scheduler_runtime" in summary
+    assert "completed_last_60_seconds" in summary
+    assert "timings_ms_last_60_seconds" in summary
+    assert "active_lease_age_p95_seconds" in summary
+
+
+def test_postgres_session_timeout_is_set_at_connect() -> None:
+    """A pooled checkout must not send a session SET round trip."""
+    import inspect
+
+    from app.db.pg_compat import PgConnection
+    from app.db.postgresql import connect
+
+    assert "statement_timeout=15000" in inspect.getsource(connect)
+    assert "SET statement_timeout" not in inspect.getsource(PgConnection)
+
+
+def test_remote_claim_long_poll_is_database_bounded() -> None:
+    source = (ROOT / "app" / "api" / "routes.py").read_text(encoding="utf-8")
+    assert "await asyncio.sleep(wait_seconds)" in source
+    assert "await asyncio.sleep(min(2.0, remaining))" in source
+    assert "min(0.25" not in source
+
+
+def test_background_workers_use_dedicated_postgres_tunnel() -> None:
+    worker_unit = (ROOT / "deploy" / "verigo-worker@.service").read_text(encoding="utf-8")
+    supervisor_unit = (ROOT / "deploy" / "verigo-supervisor.service").read_text(encoding="utf-8")
+    tunnel_unit = (
+        ROOT / "deploy" / "verigo-postgres-worker-tunnel.service"
+    ).read_text(encoding="utf-8")
+    release = (ROOT / "deploy" / "release.sh").read_text(encoding="utf-8")
+    assert "verigo-postgres-worker-tunnel.service" in worker_unit
+    assert "EnvironmentFile=/etc/verigo/verigo-worker.env" in worker_unit
+    assert "verigo-postgres-worker-tunnel.service" in supervisor_unit
+    assert "127.0.0.1:15433:127.0.0.1:5432" in tunnel_unit
+    assert "write_worker_env" in release
+    assert "127.0.0.1:15433" in release
+
+
+def test_cloudshell_manifest_sync_is_batched_and_throttled() -> None:
+    import inspect
+
+    from app.core.cloudshell_coordinator import CloudShellCoordinator
+
+    sync_source = inspect.getsource(CloudShellCoordinator.sync_accounts)
+    refresh_source = inspect.getsource(CloudShellCoordinator.refresh_pool)
+    assert "account_placeholders" in sync_source
+    assert "db.executemany" not in sync_source
+    assert "_accounts_synced_at >= 60" in refresh_source
+    assert "_pool_refreshed_at < 60" in refresh_source
+    assert "self._pool_refreshed_at = now_monotonic" in refresh_source
+
+
+def test_cloudshell_reservation_commit_does_not_try_global_lock() -> None:
+    import inspect
+
+    from app.core.cloudshell_coordinator import CloudShellCoordinator
+
+    source = inspect.getsource(CloudShellCoordinator.commit)
+    assert "begin_immediate(db)" in source
+    assert "_begin_write" not in source
+
+
 def main() -> int:
     tests = [
         test_claim_next_stop_on_deliverable_true,
@@ -313,6 +409,12 @@ def main() -> int:
         test_abandon_lease,
         test_worker_node_timestamps_bind_via_sql_ts,
         test_no_sqlite_only_control_left,
+        test_remote_claim_batches_scheduler_lookups,
+        test_postgres_session_timeout_is_set_at_connect,
+        test_remote_claim_long_poll_is_database_bounded,
+        test_background_workers_use_dedicated_postgres_tunnel,
+        test_cloudshell_manifest_sync_is_batched_and_throttled,
+        test_cloudshell_reservation_commit_does_not_try_global_lock,
     ]
     failed = 0
     for fn in tests:
