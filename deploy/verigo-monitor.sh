@@ -20,6 +20,7 @@ postgres_tunnel_port=${VERIGO_MONITOR_POSTGRES_TUNNEL_PORT:-15433}
 postgres_tunnel_unit=${VERIGO_MONITOR_POSTGRES_TUNNEL_UNIT:-verigo-postgres-worker-tunnel}
 check_local_backup=${VERIGO_MONITOR_CHECK_LOCAL_BACKUP:-0}
 asset_marker=${VERIGO_MONITOR_ASSET_MARKER:-risk-signals-v3}
+database_env_file=${VERIGO_MONITOR_DATABASE_ENV_FILE:-/etc/verigo/verigo-worker.env}
 mkdir -p "$state_dir"
 
 issues=()
@@ -110,7 +111,9 @@ PY
     fi
 fi
 
-if ! set -a; source /etc/verigo/verigo.env; set +a; PYTHONPATH=/opt/verigo/current /opt/verigo/.venv/bin/python - <<'PY'
+if [[ ! -r "$database_env_file" ]]; then
+    issues+=("database environment file is unavailable")
+elif ! set -a; source "$database_env_file"; set +a; PYTHONPATH=/opt/verigo/current /opt/verigo/.venv/bin/python - <<'PY'
 from app.db.backend_ops import database_write_probe, postgres_enabled
 
 ok = database_write_probe()

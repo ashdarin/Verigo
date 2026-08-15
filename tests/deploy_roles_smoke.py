@@ -24,6 +24,7 @@ assert "VERIGO_MONITOR_READINESS_URL" in monitor
 assert "VERIGO_MONITOR_POSTGRES_TUNNEL_UNIT" in monitor
 assert "verigo-monitor-probe/results" in monitor
 assert "VERIGO_MONITOR_ASSET_MARKER" in monitor
+assert "VERIGO_MONITOR_DATABASE_ENV_FILE" in monitor
 assert "OnUnitActiveSec=1m" in (deploy / "verigo-monitor.timer").read_text(encoding="utf-8")
 
 assert "disable_units caddy verigo-monitor.timer" in release
