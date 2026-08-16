@@ -61,12 +61,17 @@ async function mockApi(page) {
       payload = {
         days: 14,
         generated_at: "2026-08-16T08:15:00+00:00",
+        sampler: { mode: "burnin", target_per_day: 5000, scheduled_today: 730 },
         daily: Array.from({ length: 14 }, (_, index) => ({
           day: `2026-08-${String(index + 3).padStart(2, "0")}`,
           checks: index % 4,
         })),
         totals: {
           checks: 42,
+          sources: {
+            user_search: { checks: 8 }, scheduled_refresh: { checks: 4 },
+            daily_sample: { checks: 30 },
+          },
           transitions: { hidden_to_visible: 9, visible_to_hidden: 3, net_public: 6 },
           queue_wait: { average_ms: 820, samples: 12 },
           review_duration: { average_ms: 2400, samples: 42 },
@@ -206,7 +211,7 @@ async function checkViewport(browser, name, viewport) {
     evidence: document.querySelector("#company-catalog-quality-evidence")?.textContent || "",
     bars: document.querySelectorAll(".company-catalog-quality-bar").length,
   }));
-  if (!quality.metrics.includes("14 天复核42") || !quality.metrics.includes("当前公开389")
+  if (!quality.metrics.includes("14 天复核42自然 12 · 抽样 30 · 今日 730/5,000") || !quality.metrics.includes("当前公开389")
     || !quality.metrics.includes("公开净变化+6") || !quality.metrics.includes("平均排队820 毫秒")
     || !quality.metrics.includes("平均检查2.4 秒")) {
     throw new Error(`${name}: quality summary is incomplete: ${quality.metrics}`);

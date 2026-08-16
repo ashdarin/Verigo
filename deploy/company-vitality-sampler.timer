@@ -1,0 +1,12 @@
+[Unit]
+Description=Run Company Finder vitality sampling every 15 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=15min
+RandomizedDelaySec=30s
+AccuracySec=10s
+Unit=company-vitality-sampler.service
+
+[Install]
+WantedBy=timers.target

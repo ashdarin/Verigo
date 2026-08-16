@@ -90,6 +90,7 @@ LEGACY_RECHECK_PRIORITY = 35
 ACTIVE_RECHECK_PRIORITY = 50
 UNCERTAIN_RECHECK_PRIORITY = 80
 INACTIVE_RECHECK_PRIORITY = 120
+SAMPLE_PRIORITY = 200
 
 _PUBLIC_STATES = frozenset({"active_verified", "recently_observed"})
 _QUALITY_STATES = ("active_verified", "recently_observed", "uncertain", "inactive")
@@ -97,6 +98,7 @@ _QUALITY_EVIDENCE = (
     "official_website_legal", "official_website_title", "official_website_content",
     "official_website_domain", "legacy_website_identity", "none",
 )
+_QUALITY_SOURCES = ("user_search", "scheduled_refresh", "daily_sample")
 
 
 def utc_now() -> datetime:
@@ -244,11 +246,39 @@ class VitalityStore:
                     domain TEXT NOT NULL,
                     normalized_name TEXT NOT NULL DEFAULT '',
                     country TEXT NOT NULL DEFAULT '',
+                    source TEXT NOT NULL DEFAULT 'scheduled_refresh',
                     priority INTEGER NOT NULL DEFAULT 100,
                     attempts INTEGER NOT NULL DEFAULT 0,
                     available_at TEXT NOT NULL,
                     claimed_at TEXT,
                     created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+            """)
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS vitality_daily_sources (
+                    day TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    checks INTEGER NOT NULL DEFAULT 0,
+                    queue_wait_ms_total INTEGER NOT NULL DEFAULT 0,
+                    queue_wait_samples INTEGER NOT NULL DEFAULT 0,
+                    review_duration_ms_total INTEGER NOT NULL DEFAULT 0,
+                    review_duration_samples INTEGER NOT NULL DEFAULT 0,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (day, source)
+                )
+            """)
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS vitality_sample_days (
+                    day TEXT PRIMARY KEY,
+                    scheduled INTEGER NOT NULL DEFAULT 0,
+                    updated_at TEXT NOT NULL
+                )
+            """)
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS vitality_sampler_meta (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 )
             """)
@@ -288,7 +318,10 @@ class VitalityStore:
                     ("evidence_kind", "TEXT NOT NULL DEFAULT ''"),
                     ("evidence_strength", "TEXT NOT NULL DEFAULT ''"),
                 ),
-                "vitality_queue": (("country", "TEXT NOT NULL DEFAULT ''"),),
+                "vitality_queue": (
+                    ("country", "TEXT NOT NULL DEFAULT ''"),
+                    ("source", "TEXT NOT NULL DEFAULT 'scheduled_refresh'"),
+                ),
             }.items():
                 for name, definition in columns:
                     if name not in table_columns[table]:
@@ -299,12 +332,46 @@ class VitalityStore:
                 WHERE evidence_kind='' AND state='active_verified'
                   AND reason='website_identity_match'"""
             )
+            connection.execute("""
+                INSERT INTO vitality_daily_sources (
+                    day, source, checks, queue_wait_ms_total, queue_wait_samples,
+                    review_duration_ms_total, review_duration_samples, updated_at
+                )
+                SELECT q.day, 'scheduled_refresh',
+                    MAX(0, q.checks - COALESCE(a.checks, 0)),
+                    MAX(0, q.queue_wait_ms_total - COALESCE(a.queue_wait_ms_total, 0)),
+                    MAX(0, q.queue_wait_samples - COALESCE(a.queue_wait_samples, 0)),
+                    MAX(0, q.review_duration_ms_total - COALESCE(a.review_duration_ms_total, 0)),
+                    MAX(0, q.review_duration_samples - COALESCE(a.review_duration_samples, 0)),
+                    q.updated_at
+                FROM vitality_daily_quality q
+                LEFT JOIN (
+                    SELECT day, SUM(checks) AS checks,
+                        SUM(queue_wait_ms_total) AS queue_wait_ms_total,
+                        SUM(queue_wait_samples) AS queue_wait_samples,
+                        SUM(review_duration_ms_total) AS review_duration_ms_total,
+                        SUM(review_duration_samples) AS review_duration_samples
+                    FROM vitality_daily_sources GROUP BY day
+                ) a ON a.day = q.day
+                WHERE q.checks > COALESCE(a.checks, 0)
+                ON CONFLICT(day, source) DO UPDATE SET
+                    checks = checks + excluded.checks,
+                    queue_wait_ms_total = queue_wait_ms_total + excluded.queue_wait_ms_total,
+                    queue_wait_samples = queue_wait_samples + excluded.queue_wait_samples,
+                    review_duration_ms_total = review_duration_ms_total + excluded.review_duration_ms_total,
+                    review_duration_samples = review_duration_samples + excluded.review_duration_samples,
+                    updated_at = excluded.updated_at
+            """)
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS vitality_due_idx ON company_vitality(next_check_at)"
             )
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS vitality_queue_ready_idx "
                 "ON vitality_queue(available_at, claimed_at, priority)"
+            )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS vitality_queue_source_idx "
+                "ON vitality_queue(source, claimed_at)"
             )
 
     @staticmethod
@@ -354,7 +421,8 @@ class VitalityStore:
                 if company_id in queued:
                     connection.execute(
                         """UPDATE vitality_queue SET domain=?, normalized_name=?, country=?,
-                            priority=MIN(priority, ?), updated_at=? WHERE company_id=?""",
+                            source='user_search', priority=MIN(priority, ?), updated_at=?
+                            WHERE company_id=?""",
                         (domain, name, country, requested_priority, now_text, company_id),
                     )
                 due_at = parse_time(row["next_check_at"]) if row else None
@@ -376,9 +444,9 @@ class VitalityStore:
                         """, (company_id, domain, name, country, now_text))
                     connection.execute("""
                         INSERT OR IGNORE INTO vitality_queue (
-                            company_id, domain, normalized_name, country, priority,
+                            company_id, domain, normalized_name, country, source, priority,
                             available_at, created_at, updated_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        ) VALUES (?, ?, ?, ?, 'user_search', ?, ?, ?, ?)
                     """, (
                         company_id, domain, name, country, requested_priority,
                         now_text, now_text, now_text,
@@ -535,6 +603,9 @@ class VitalityStore:
         evidence_values = {key: int(evidence_bucket == key) for key in _QUALITY_EVIDENCE}
         queue_wait_ms = max(0, int(task.get("queue_wait_ms") or 0))
         review_duration_ms = max(0, int(observation.get("review_duration_ms") or 0))
+        source = str(task.get("source") or "scheduled_refresh")
+        if source not in _QUALITY_SOURCES:
+            source = "scheduled_refresh"
         report_day = (parse_time(checked_at) or now).astimezone(timezone.utc).date().isoformat()
 
         with self.connect() as connection:
@@ -618,6 +689,22 @@ class VitalityStore:
                 queue_wait_ms, int("queue_wait_ms" in task),
                 review_duration_ms, int("review_duration_ms" in observation), iso_at(now),
             ))
+            connection.execute("""
+                INSERT INTO vitality_daily_sources (
+                    day, source, checks, queue_wait_ms_total, queue_wait_samples,
+                    review_duration_ms_total, review_duration_samples, updated_at
+                ) VALUES (?, ?, 1, ?, ?, ?, ?, ?)
+                ON CONFLICT(day, source) DO UPDATE SET
+                    checks = checks + excluded.checks,
+                    queue_wait_ms_total = queue_wait_ms_total + excluded.queue_wait_ms_total,
+                    queue_wait_samples = queue_wait_samples + excluded.queue_wait_samples,
+                    review_duration_ms_total = review_duration_ms_total + excluded.review_duration_ms_total,
+                    review_duration_samples = review_duration_samples + excluded.review_duration_samples,
+                    updated_at = excluded.updated_at
+            """, (
+                report_day, source, queue_wait_ms, int("queue_wait_ms" in task),
+                review_duration_ms, int("review_duration_ms" in observation), iso_at(now),
+            ))
 
     def enqueue_due(self, limit: int = 100) -> int:
         now_text = iso_at()
@@ -646,9 +733,9 @@ class VitalityStore:
             for row in rows:
                 connection.execute("""
                     INSERT OR IGNORE INTO vitality_queue (
-                        company_id, domain, normalized_name, country, priority,
+                        company_id, domain, normalized_name, country, source, priority,
                         available_at, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, 'scheduled_refresh', ?, ?, ?, ?)
                 """, (
                     row["company_id"], row["domain"], row["normalized_name"], row["country"],
                     refresh_priority(row["state"], row["country"], row["evidence_kind"]),
@@ -656,6 +743,202 @@ class VitalityStore:
                 ))
                 inserted += 1
         return inserted
+
+    def sampler_started_at(self) -> datetime:
+        now = utc_now()
+        now_text = iso_at(now)
+        with self.connect() as connection:
+            connection.execute(
+                """INSERT OR IGNORE INTO vitality_sampler_meta (key, value, updated_at)
+                VALUES ('started_at', ?, ?)""",
+                (now_text, now_text),
+            )
+            value = connection.execute(
+                "SELECT value FROM vitality_sampler_meta WHERE key='started_at'"
+            ).fetchone()[0]
+        return parse_time(value) or now
+
+    def sample_day_scheduled(self, day: str | None = None) -> int:
+        sample_day = day or utc_now().date().isoformat()
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT scheduled FROM vitality_sample_days WHERE day=?", (sample_day,)
+            ).fetchone()
+        return int(row[0]) if row else 0
+
+    def record_sampler_run(self, target: int, status: str, mode: str) -> None:
+        now_text = iso_at()
+        values = {
+            "target_per_day": str(max(0, int(target))),
+            "last_status": str(status or "unknown")[:40],
+            "mode": str(mode or "unknown")[:20],
+            "last_run_at": now_text,
+        }
+        with self.connect() as connection:
+            connection.executemany("""
+                INSERT INTO vitality_sampler_meta (key, value, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at
+            """, [(key, value, now_text) for key, value in values.items()])
+
+    def sampler_status(self) -> dict[str, object]:
+        with self.connect() as connection:
+            values = {
+                str(row["key"]): str(row["value"])
+                for row in connection.execute(
+                    "SELECT key, value FROM vitality_sampler_meta"
+                ).fetchall()
+            }
+        return {
+            "started_at": values.get("started_at", ""),
+            "last_run_at": values.get("last_run_at", ""),
+            "last_status": values.get("last_status", "not_started"),
+            "mode": values.get("mode", "not_started"),
+            "target_per_day": int(values.get("target_per_day") or 0),
+            "scheduled_today": self.sample_day_scheduled(),
+        }
+
+    def sample_cohort(
+        self,
+        states: tuple[str, ...],
+        limit: int,
+        minimum_age: timedelta,
+        *,
+        include_legacy: bool = False,
+    ) -> list[dict[str, object]]:
+        states = tuple(state for state in states if state in _QUALITY_STATES)
+        if not states or limit <= 0:
+            return []
+        placeholders = ",".join("?" for _ in states)
+        cutoff = iso_at(utc_now() - minimum_age)
+        legacy_clause = " OR evidence_kind='legacy_website_identity'" if include_legacy else ""
+        with self.connect() as connection:
+            rows = connection.execute(
+                f"""SELECT company_id, domain, normalized_name, country
+                FROM company_vitality
+                WHERE ((state IN ({placeholders})
+                        AND checked_at IS NOT NULL AND checked_at <= ?){legacy_clause})
+                  AND company_id NOT IN (SELECT company_id FROM vitality_queue)
+                ORDER BY checked_at ASC LIMIT ?""",
+                (*states, cutoff, limit),
+            ).fetchall()
+        return [{
+            "id": str(row["company_id"]),
+            "website_domain": str(row["domain"]),
+            "name_display": str(row["normalized_name"]),
+            "country": str(row["country"]),
+            "_sample_existing": True,
+        } for row in rows]
+
+    def enqueue_samples(
+        self,
+        items: list[dict[str, object]],
+        *,
+        daily_limit: int,
+        max_batch: int,
+        queue_limit: int = 500,
+    ) -> dict[str, int | str]:
+        now = utc_now()
+        now_text = iso_at(now)
+        day = now.date().isoformat()
+        identities: list[tuple[str, str, str, str, bool]] = []
+        seen: set[str] = set()
+        for item in items:
+            company_id, domain, name, country = self._item_identity(item)
+            if not company_id or not domain or company_id in seen:
+                continue
+            seen.add(company_id)
+            identities.append((company_id, domain, name, country, bool(item.get("_sample_existing"))))
+
+        connection = self.connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            queue_size = int(connection.execute("SELECT count(*) FROM vitality_queue").fetchone()[0])
+            sample_queued = int(connection.execute(
+                "SELECT count(*) FROM vitality_queue WHERE source='daily_sample'"
+            ).fetchone()[0])
+            row = connection.execute(
+                "SELECT scheduled FROM vitality_sample_days WHERE day=?", (day,)
+            ).fetchone()
+            scheduled = int(row[0]) if row else 0
+            allowance = min(
+                max(0, max_batch), max(0, daily_limit - scheduled),
+                max(0, queue_limit - queue_size), max(0, MAX_QUEUE_SIZE - queue_size),
+            )
+            if not allowance:
+                connection.commit()
+                return {
+                    "inserted": 0, "scheduled": scheduled, "queued": queue_size,
+                    "sample_queued": sample_queued, "reason": "limit_reached",
+                }
+
+            ids = [identity[0] for identity in identities]
+            existing: set[str] = set()
+            queued: set[str] = set()
+            if ids:
+                placeholders = ",".join("?" for _ in ids)
+                existing = {
+                    str(record[0]) for record in connection.execute(
+                        f"SELECT company_id FROM company_vitality WHERE company_id IN ({placeholders})",
+                        ids,
+                    ).fetchall()
+                }
+                queued = {
+                    str(record[0]) for record in connection.execute(
+                        f"SELECT company_id FROM vitality_queue WHERE company_id IN ({placeholders})",
+                        ids,
+                    ).fetchall()
+                }
+
+            inserted = 0
+            for company_id, domain, name, country, allow_existing in identities:
+                if inserted >= allowance or company_id in queued:
+                    continue
+                if company_id in existing and not allow_existing:
+                    continue
+                if company_id in existing:
+                    connection.execute(
+                        """UPDATE company_vitality SET domain=?, normalized_name=?, country=?
+                        WHERE company_id=?""",
+                        (domain, name, country, company_id),
+                    )
+                else:
+                    connection.execute("""
+                        INSERT INTO company_vitality (
+                            company_id, domain, normalized_name, country, state, reason, updated_at
+                        ) VALUES (?, ?, ?, ?, 'queued', 'not_checked', ?)
+                    """, (company_id, domain, name, country, now_text))
+                connection.execute("""
+                    INSERT INTO vitality_queue (
+                        company_id, domain, normalized_name, country, source, priority,
+                        available_at, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, 'daily_sample', ?, ?, ?, ?)
+                """, (
+                    company_id, domain, name, country, SAMPLE_PRIORITY,
+                    now_text, now_text, now_text,
+                ))
+                inserted += 1
+                queued.add(company_id)
+
+            if inserted:
+                connection.execute("""
+                    INSERT INTO vitality_sample_days (day, scheduled, updated_at)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(day) DO UPDATE SET
+                        scheduled = scheduled + excluded.scheduled,
+                        updated_at = excluded.updated_at
+                """, (day, inserted, now_text))
+            connection.commit()
+            return {
+                "inserted": inserted, "scheduled": scheduled + inserted,
+                "queued": queue_size + inserted, "sample_queued": sample_queued + inserted,
+                "reason": "scheduled" if inserted else "no_candidates",
+            }
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
 
     def stats(self) -> dict[str, object]:
         with self.connect() as connection:
@@ -682,9 +965,33 @@ class VitalityStore:
                     "SELECT priority, count(*) AS count FROM vitality_queue GROUP BY priority"
                 ).fetchall()
             }
+            sources = {
+                str(row["source"]): int(row["count"])
+                for row in connection.execute(
+                    "SELECT source, count(*) AS count FROM vitality_queue GROUP BY source"
+                ).fetchall()
+            }
         return {
             "enabled": True, "states": states, "queued": queued, "checking": checking,
-            "evidence": evidence, "queue_priorities": priorities,
+            "evidence": evidence, "queue_priorities": priorities, "queue_sources": sources,
+        }
+
+    @staticmethod
+    def _source_quality_row(row: dict[str, object]) -> dict[str, object]:
+        queue_samples = int(row.get("queue_wait_samples") or 0)
+        duration_samples = int(row.get("review_duration_samples") or 0)
+        return {
+            "checks": int(row.get("checks") or 0),
+            "queue_wait": {
+                "average_ms": round(int(row.get("queue_wait_ms_total") or 0) / queue_samples)
+                if queue_samples else 0,
+                "samples": queue_samples,
+            },
+            "review_duration": {
+                "average_ms": round(int(row.get("review_duration_ms_total") or 0) / duration_samples)
+                if duration_samples else 0,
+                "samples": duration_samples,
+            },
         }
 
     @staticmethod
@@ -732,6 +1039,13 @@ class VitalityStore:
                     (first_day.isoformat(),),
                 ).fetchall()
             }
+            source_rows = {
+                (str(row["day"]), str(row["source"])): dict(row)
+                for row in connection.execute(
+                    "SELECT * FROM vitality_daily_sources WHERE day >= ? ORDER BY day, source",
+                    (first_day.isoformat(),),
+                ).fetchall()
+            }
         daily: list[dict[str, object]] = []
         totals: dict[str, object] = {
             "day": "", "checks": 0,
@@ -742,18 +1056,39 @@ class VitalityStore:
             "review_duration_ms_total": 0, "review_duration_samples": 0,
         }
         numeric_keys = tuple(key for key in totals if key != "day")
+        source_totals = {
+            source: {
+                "checks": 0, "queue_wait_ms_total": 0, "queue_wait_samples": 0,
+                "review_duration_ms_total": 0, "review_duration_samples": 0,
+            }
+            for source in _QUALITY_SOURCES
+        }
+        source_numeric_keys = tuple(next(iter(source_totals.values())))
         for offset in range(days):
             day = (first_day + timedelta(days=offset)).isoformat()
             raw = {"day": day, **rows.get(day, {})}
-            daily.append(self._quality_row(raw))
+            daily_row = self._quality_row(raw)
+            daily_row["sources"] = {}
+            for source in _QUALITY_SOURCES:
+                source_raw = source_rows.get((day, source), {})
+                daily_row["sources"][source] = self._source_quality_row(source_raw)
+                for key in source_numeric_keys:
+                    source_totals[source][key] += int(source_raw.get(key) or 0)
+            daily.append(daily_row)
             for key in numeric_keys:
                 totals[key] = int(totals[key]) + int(raw.get(key) or 0)
+        total_payload = self._quality_row(totals)
+        total_payload["sources"] = {
+            source: self._source_quality_row(source_totals[source])
+            for source in _QUALITY_SOURCES
+        }
         return {
             "days": days,
             "generated_at": iso_at(),
             "daily": daily,
-            "totals": self._quality_row(totals),
+            "totals": total_payload,
             "current": self.stats(),
+            "sampler": self.sampler_status(),
         }
 
     def get(self, company_id: str) -> dict[str, object] | None:

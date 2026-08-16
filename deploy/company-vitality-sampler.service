@@ -1,0 +1,21 @@
+[Unit]
+Description=Verigo Company Finder paced vitality sampler
+After=company-finder.service company-vitality-worker.service
+Wants=company-finder.service company-vitality-worker.service
+
+[Service]
+Type=oneshot
+User=ubuntu
+Group=ubuntu
+EnvironmentFile=/etc/verigo-company-finder/service.env
+WorkingDirectory=/opt/verigo-company-finder
+ExecStart=/opt/verigo-company-finder/.venv/bin/python /opt/verigo-company-finder/company-vitality-sampler.py
+Nice=15
+CPUQuota=20%
+MemoryMax=320M
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+RestrictAddressFamilies=AF_UNIX
+ReadWritePaths=/opt/verigo-company-finder/data

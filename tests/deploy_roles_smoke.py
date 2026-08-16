@@ -54,6 +54,15 @@ for unit in (
 ):
     assert (deploy / unit).is_file(), unit
 
+for unit in ("company-vitality-sampler.service", "company-vitality-sampler.timer"):
+    assert (deploy / unit).is_file(), unit
+assert "OnUnitActiveSec=15min" in (
+    deploy / "company-vitality-sampler.timer"
+).read_text(encoding="utf-8")
+assert "CPUQuota=20%" in (
+    deploy / "company-vitality-sampler.service"
+).read_text(encoding="utf-8")
+
 worker_unit = (deploy / "verigo-worker@.service").read_text(encoding="utf-8")
 supervisor_unit = (deploy / "verigo-supervisor.service").read_text(encoding="utf-8")
 for text in (worker_unit, supervisor_unit):

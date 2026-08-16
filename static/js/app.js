@@ -2016,11 +2016,17 @@ function renderCompanyCatalogQuality(data) {
   const current = data.current || {};
   const states = current.states || {};
   const transitions = totals.transitions || {};
+  const sources = totals.sources || {};
+  const sampler = data.sampler || {};
+  const naturalChecks = Number(sources.user_search?.checks || 0) + Number(sources.scheduled_refresh?.checks || 0);
+  const sampleChecks = Number(sources.daily_sample?.checks || 0);
+  const samplerProgress = Number(sampler.target_per_day || 0)
+    ? ` · 今日 ${Number(sampler.scheduled_today || 0).toLocaleString("zh-CN")}/${Number(sampler.target_per_day).toLocaleString("zh-CN")}` : "";
   const publicCount = Number(states.active_verified || 0) + Number(states.recently_observed || 0);
   const currentCount = Object.values(states).reduce((sum, value) => sum + Number(value || 0), 0);
   const net = Number(transitions.net_public || 0);
   const entries = [
-    ["14 天复核", Number(totals.checks || 0).toLocaleString("zh-CN"), "已完成的网站检查"],
+    ["14 天复核", Number(totals.checks || 0).toLocaleString("zh-CN"), `自然 ${naturalChecks.toLocaleString("zh-CN")} · 抽样 ${sampleChecks.toLocaleString("zh-CN")}${samplerProgress}`],
     ["当前公开", publicCount.toLocaleString("zh-CN"), `共观测 ${currentCount.toLocaleString("zh-CN")} 家`],
     ["公开净变化", `${net > 0 ? "+" : ""}${net.toLocaleString("zh-CN")}`, `新增 ${Number(transitions.hidden_to_visible || 0)} · 停止展示 ${Number(transitions.visible_to_hidden || 0)}`],
     ["平均排队", companyCatalogDuration(totals.queue_wait?.average_ms), `${Number(totals.queue_wait?.samples || 0)} 次有效采样`],

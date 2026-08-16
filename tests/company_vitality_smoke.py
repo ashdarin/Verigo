@@ -36,6 +36,7 @@ with store.connect() as connection:
 
 task = store.claim_next()
 assert task and task["company_id"] == "company-1"
+assert task["source"] == "user_search"
 store.complete(task, {
     "state": "active_verified",
     "confidence": 0.94,
@@ -212,7 +213,7 @@ with legacy_store.connect() as connection:
     vitality_columns = {row[1] for row in connection.execute("PRAGMA table_info(company_vitality)")}
     queue_columns = {row[1] for row in connection.execute("PRAGMA table_info(vitality_queue)")}
 assert {"country", "evidence_kind", "evidence_strength"}.issubset(vitality_columns)
-assert "country" in queue_columns
+assert {"country", "source"}.issubset(queue_columns)
 
 quality_store = VitalityStore(temp_dir / "quality.sqlite")
 quality_items = [{
@@ -250,5 +251,43 @@ serialized_report = json.dumps(quality_report)
 assert "private-company-reference" not in serialized_report
 assert "private-example.test" not in serialized_report
 assert "Private Example" not in serialized_report
+with quality_store.connect() as connection:
+    connection.execute("DROP TABLE vitality_daily_sources")
+migrated_quality_store = VitalityStore(quality_store.path)
+assert migrated_quality_store.report(14)["totals"]["sources"]["scheduled_refresh"]["checks"] == 2
+
+sample_store = VitalityStore(temp_dir / "samples.sqlite")
+sample_items = [{
+    "id": f"sample-{index}", "name": f"Sample {index}",
+    "website_domain": f"sample-{index}.example", "country": "germany",
+} for index in range(3)]
+sample_result = sample_store.enqueue_samples(
+    sample_items, daily_limit=2, max_batch=2, queue_limit=10,
+)
+assert sample_result["inserted"] == 2
+assert sample_store.sample_day_scheduled() == 2
+with sample_store.connect() as connection:
+    assert {
+        tuple(row) for row in connection.execute(
+            "SELECT source, priority FROM vitality_queue"
+        ).fetchall()
+    } == {("daily_sample", 200)}
+sample_store.annotate_and_enqueue([sample_items[0]])
+with sample_store.connect() as connection:
+    assert tuple(connection.execute(
+        "SELECT source, priority FROM vitality_queue WHERE company_id='sample-0'"
+    ).fetchone()) == ("user_search", 5)
+while sample_task := sample_store.claim_next():
+    sample_store.complete(sample_task, {
+        "state": "active_verified", "reason": "website_title_identity_match",
+        "evidence_kind": "official_website_title", "evidence_strength": "strong",
+        "checked_at": iso_at(), "review_duration_ms": 900,
+    })
+sample_report = sample_store.report(1)
+assert sample_report["totals"]["sources"]["user_search"]["checks"] == 1
+assert sample_report["totals"]["sources"]["daily_sample"]["checks"] == 1
+assert sample_store.enqueue_samples(
+    [sample_items[2]], daily_limit=2, max_batch=1, queue_limit=10,
+)["inserted"] == 0
 
 print("company vitality smoke: ok")
