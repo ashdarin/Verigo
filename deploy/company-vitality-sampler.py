@@ -40,6 +40,9 @@ QUEUE_LIMIT = env_int("COMPANY_FINDER_SAMPLE_QUEUE_LIMIT", 500, 25, 2_000)
 HEALTHY_DURATION_MS = env_int(
     "COMPANY_FINDER_SAMPLE_HEALTHY_DURATION_MS", 8_000, 1_000, 30_000,
 )
+HEALTHY_MIN_SAMPLES = env_int(
+    "COMPANY_FINDER_SAMPLE_HEALTHY_MIN_SAMPLES", 500, 10, 10_000,
+)
 
 
 def _seed(day: str) -> int:
@@ -122,8 +125,12 @@ def run() -> dict[str, object]:
     stats = store.stats()
     sample_quality = store.report(1)["totals"]["sources"]["daily_sample"]
     average_duration = int(sample_quality["review_duration"]["average_ms"])
-    healthy = int(stats["queued"]) < QUEUE_LIMIT and (
-        average_duration == 0 or average_duration <= HEALTHY_DURATION_MS
+    duration_samples = int(sample_quality["review_duration"]["percentile_samples"])
+    p95_duration = int(sample_quality["review_duration"]["p95_ms"] or 0)
+    healthy = (
+        int(stats["queued"]) < QUEUE_LIMIT
+        and duration_samples >= HEALTHY_MIN_SAMPLES
+        and 0 < p95_duration <= HEALTHY_DURATION_MS
     )
     target = DAILY_TARGET if elapsed >= timedelta(hours=24) and healthy else BURNIN_TARGET
     mode = "stable" if target == DAILY_TARGET and elapsed >= timedelta(hours=24) else "burnin"
@@ -137,6 +144,7 @@ def run() -> dict[str, object]:
         return {
             "status": "paused", "target": target, "scheduled": scheduled,
             "queued": int(stats["queued"]), "average_duration_ms": average_duration,
+            "p95_duration_ms": p95_duration, "duration_samples": duration_samples,
         }
 
     uncertain_limit = math.floor(batch * 0.15)
@@ -166,6 +174,7 @@ def run() -> dict[str, object]:
         "inserted": result["inserted"], "scheduled": result["scheduled"],
         "queued": result["queued"], "sample_queued": result["sample_queued"],
         "average_duration_ms": average_duration,
+        "p95_duration_ms": p95_duration, "duration_samples": duration_samples,
     }
 
 

@@ -246,11 +246,31 @@ assert quality_report["totals"]["transitions"] == {
     "visible_to_hidden": 1, "hidden_to_visible": 1, "net_public": 0,
 }
 assert quality_report["totals"]["queue_wait"]["samples"] == 1
-assert quality_report["totals"]["review_duration"] == {"average_ms": 1250, "samples": 1}
+assert quality_report["totals"]["review_duration"] == {
+    "average_ms": 1250, "p95_ms": 2000, "p99_ms": 2000,
+    "percentile_samples": 1, "samples": 1,
+}
+assert quality_report["totals"]["sources"]["user_search"]["queue_wait"]["p95_ms"] is not None
+assert quality_report["totals"]["sources"]["user_search"]["review_duration"]["p99_ms"] == 2000
 serialized_report = json.dumps(quality_report)
 assert "private-company-reference" not in serialized_report
 assert "private-example.test" not in serialized_report
 assert "Private Example" not in serialized_report
+
+percentile_store = VitalityStore(temp_dir / "percentiles.sqlite")
+for index in range(100):
+    percentile_store.complete({
+        "company_id": f"percentile-{index}", "domain": f"percentile-{index}.test",
+        "normalized_name": "Percentile", "source": "daily_sample",
+    }, {
+        "state": "active_verified", "reason": "website_title_identity_match",
+        "checked_at": iso_at(), "review_duration_ms": 900 if index < 95 else 10_000,
+    })
+percentile_duration = percentile_store.report(1)["totals"]["review_duration"]
+assert percentile_duration["p95_ms"] == 1_000
+assert percentile_duration["p99_ms"] == 15_000
+assert percentile_duration["percentile_samples"] == 100
+
 with quality_store.connect() as connection:
     connection.execute("DROP TABLE vitality_daily_sources")
 migrated_quality_store = VitalityStore(quality_store.path)

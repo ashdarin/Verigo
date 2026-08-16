@@ -41,6 +41,7 @@ os.environ.update({
     "COMPANY_FINDER_SAMPLE_HARD_LIMIT": "1500",
     "COMPANY_FINDER_SAMPLE_INTERVAL_SECONDS": "900",
     "COMPANY_FINDER_SAMPLE_QUEUE_LIMIT": "100",
+    "COMPANY_FINDER_SAMPLE_HEALTHY_MIN_SAMPLES": "10",
 })
 sys.path.insert(0, str(root / "deploy"))
 script = root / "deploy" / "company-vitality-sampler.py"
@@ -81,7 +82,8 @@ report = store.report(1)
 assert report["totals"]["checks"] == 10
 assert report["totals"]["sources"]["daily_sample"]["checks"] == 10
 assert report["totals"]["sources"]["daily_sample"]["review_duration"] == {
-    "average_ms": 3_000, "samples": 10,
+    "average_ms": 3_000, "p95_ms": 3_000, "p99_ms": 3_000,
+    "percentile_samples": 10, "samples": 10,
 }
 serialized = json.dumps(report)
 assert "company-" not in serialized
@@ -95,6 +97,8 @@ with sqlite3.connect(vitality) as connection:
 sampler._seed = lambda _day: 1_234_567
 stable = sampler.run()
 assert stable["target"] == 1_000
+assert stable["p95_duration_ms"] == 3_000
+assert stable["duration_samples"] == 10
 assert stable["batch"] == 11
 assert stable["inserted"] == 11
 stable_status = store.report(1)["sampler"]

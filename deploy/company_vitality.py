@@ -99,6 +99,11 @@ _QUALITY_EVIDENCE = (
     "official_website_domain", "legacy_website_identity", "none",
 )
 _QUALITY_SOURCES = ("user_search", "scheduled_refresh", "daily_sample")
+_DURATION_BUCKETS_MS = (
+    100, 250, 500, 1_000, 2_000, 3_000, 5_000, 8_000,
+    15_000, 30_000, 60_000, 120_000, 300_000,
+)
+_HISTOGRAM_METRICS = ("queue_wait", "review_duration")
 
 
 def utc_now() -> datetime:
@@ -118,6 +123,27 @@ def parse_time(value: object) -> datetime | None:
     except ValueError:
         return None
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def _duration_bucket(value_ms: int) -> int:
+    value_ms = max(0, int(value_ms))
+    return next(
+        (upper_bound for upper_bound in _DURATION_BUCKETS_MS if value_ms <= upper_bound),
+        _DURATION_BUCKETS_MS[-1],
+    )
+
+
+def _histogram_percentile(histogram: dict[int, int], percentile: float) -> int | None:
+    samples = sum(max(0, int(count)) for count in histogram.values())
+    if not samples:
+        return None
+    rank = max(1, int(samples * percentile + 0.999999))
+    seen = 0
+    for upper_bound in sorted(histogram):
+        seen += max(0, int(histogram[upper_bound]))
+        if seen >= rank:
+            return int(upper_bound)
+    return int(max(histogram))
 
 
 def normalize_domain(value: object) -> str:
@@ -276,6 +302,17 @@ class VitalityStore:
                 )
             """)
             connection.execute("""
+                CREATE TABLE IF NOT EXISTS vitality_daily_histograms (
+                    day TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    metric TEXT NOT NULL,
+                    upper_bound_ms INTEGER NOT NULL,
+                    samples INTEGER NOT NULL DEFAULT 0,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (day, source, metric, upper_bound_ms)
+                )
+            """)
+            connection.execute("""
                 CREATE TABLE IF NOT EXISTS vitality_sampler_meta (
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL,
@@ -372,6 +409,10 @@ class VitalityStore:
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS vitality_queue_source_idx "
                 "ON vitality_queue(source, claimed_at)"
+            )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS vitality_histogram_day_idx "
+                "ON vitality_daily_histograms(day, source, metric)"
             )
 
     @staticmethod
@@ -705,6 +746,25 @@ class VitalityStore:
                 report_day, source, queue_wait_ms, int("queue_wait_ms" in task),
                 review_duration_ms, int("review_duration_ms" in observation), iso_at(now),
             ))
+            histogram_rows = []
+            if "queue_wait_ms" in task:
+                histogram_rows.append((
+                    report_day, source, "queue_wait", _duration_bucket(queue_wait_ms), iso_at(now),
+                ))
+            if "review_duration_ms" in observation:
+                histogram_rows.append((
+                    report_day, source, "review_duration",
+                    _duration_bucket(review_duration_ms), iso_at(now),
+                ))
+            if histogram_rows:
+                connection.executemany("""
+                    INSERT INTO vitality_daily_histograms (
+                        day, source, metric, upper_bound_ms, samples, updated_at
+                    ) VALUES (?, ?, ?, ?, 1, ?)
+                    ON CONFLICT(day, source, metric, upper_bound_ms) DO UPDATE SET
+                        samples = samples + excluded.samples,
+                        updated_at = excluded.updated_at
+                """, histogram_rows)
 
     def enqueue_due(self, limit: int = 100) -> int:
         now_text = iso_at()
@@ -977,29 +1037,44 @@ class VitalityStore:
         }
 
     @staticmethod
-    def _source_quality_row(row: dict[str, object]) -> dict[str, object]:
-        queue_samples = int(row.get("queue_wait_samples") or 0)
-        duration_samples = int(row.get("review_duration_samples") or 0)
+    def _duration_quality(
+        row: dict[str, object], metric: str, histogram: dict[int, int] | None = None,
+    ) -> dict[str, object]:
+        sample_key = "queue_wait_samples" if metric == "queue_wait" else "review_duration_samples"
+        total_key = "queue_wait_ms_total" if metric == "queue_wait" else "review_duration_ms_total"
+        samples = int(row.get(sample_key) or 0)
+        histogram = histogram or {}
+        percentile_samples = sum(max(0, int(count)) for count in histogram.values())
         return {
-            "checks": int(row.get("checks") or 0),
-            "queue_wait": {
-                "average_ms": round(int(row.get("queue_wait_ms_total") or 0) / queue_samples)
-                if queue_samples else 0,
-                "samples": queue_samples,
-            },
-            "review_duration": {
-                "average_ms": round(int(row.get("review_duration_ms_total") or 0) / duration_samples)
-                if duration_samples else 0,
-                "samples": duration_samples,
-            },
+            "average_ms": round(int(row.get(total_key) or 0) / samples) if samples else 0,
+            "p95_ms": _histogram_percentile(histogram, 0.95),
+            "p99_ms": _histogram_percentile(histogram, 0.99),
+            "percentile_samples": percentile_samples,
+            "samples": samples,
         }
 
-    @staticmethod
-    def _quality_row(row: dict[str, object]) -> dict[str, object]:
-        queue_samples = int(row.get("queue_wait_samples") or 0)
-        duration_samples = int(row.get("review_duration_samples") or 0)
+    @classmethod
+    def _source_quality_row(
+        cls, row: dict[str, object], histograms: dict[str, dict[int, int]] | None = None,
+    ) -> dict[str, object]:
+        histograms = histograms or {}
+        return {
+            "checks": int(row.get("checks") or 0),
+            "queue_wait": cls._duration_quality(
+                row, "queue_wait", histograms.get("queue_wait"),
+            ),
+            "review_duration": cls._duration_quality(
+                row, "review_duration", histograms.get("review_duration"),
+            ),
+        }
+
+    @classmethod
+    def _quality_row(
+        cls, row: dict[str, object], histograms: dict[str, dict[int, int]] | None = None,
+    ) -> dict[str, object]:
         hidden_to_visible = int(row.get("hidden_to_visible") or 0)
         visible_to_hidden = int(row.get("visible_to_hidden") or 0)
+        histograms = histograms or {}
         return {
             "day": str(row.get("day") or ""),
             "checks": int(row.get("checks") or 0),
@@ -1015,16 +1090,12 @@ class VitalityStore:
                 "hidden_to_visible": hidden_to_visible,
                 "net_public": hidden_to_visible - visible_to_hidden,
             },
-            "queue_wait": {
-                "average_ms": round(int(row.get("queue_wait_ms_total") or 0) / queue_samples)
-                if queue_samples else 0,
-                "samples": queue_samples,
-            },
-            "review_duration": {
-                "average_ms": round(int(row.get("review_duration_ms_total") or 0) / duration_samples)
-                if duration_samples else 0,
-                "samples": duration_samples,
-            },
+            "queue_wait": cls._duration_quality(
+                row, "queue_wait", histograms.get("queue_wait"),
+            ),
+            "review_duration": cls._duration_quality(
+                row, "review_duration", histograms.get("review_duration"),
+            ),
         }
 
     def report(self, days: int = 14) -> dict[str, object]:
@@ -1046,6 +1117,30 @@ class VitalityStore:
                     (first_day.isoformat(),),
                 ).fetchall()
             }
+            histogram_rows = connection.execute(
+                """SELECT day, source, metric, upper_bound_ms, samples
+                FROM vitality_daily_histograms WHERE day >= ?
+                ORDER BY day, source, metric, upper_bound_ms""",
+                (first_day.isoformat(),),
+            ).fetchall()
+        histograms: dict[tuple[str, str, str], dict[int, int]] = {}
+        for row in histogram_rows:
+            key = (str(row["day"]), str(row["source"]), str(row["metric"]))
+            histograms.setdefault(key, {})[int(row["upper_bound_ms"])] = int(row["samples"])
+
+        def histogram_for(day: str, source: str) -> dict[str, dict[int, int]]:
+            return {
+                metric: histograms.get((day, source, metric), {})
+                for metric in _HISTOGRAM_METRICS
+            }
+
+        def merge_histograms(
+            target: dict[str, dict[int, int]], addition: dict[str, dict[int, int]],
+        ) -> None:
+            for metric in _HISTOGRAM_METRICS:
+                for upper_bound, count in addition.get(metric, {}).items():
+                    metric_target = target.setdefault(metric, {})
+                    metric_target[upper_bound] = metric_target.get(upper_bound, 0) + count
         daily: list[dict[str, object]] = []
         totals: dict[str, object] = {
             "day": "", "checks": 0,
@@ -1064,22 +1159,37 @@ class VitalityStore:
             for source in _QUALITY_SOURCES
         }
         source_numeric_keys = tuple(next(iter(source_totals.values())))
+        total_histograms = {metric: {} for metric in _HISTOGRAM_METRICS}
+        source_histogram_totals = {
+            source: {metric: {} for metric in _HISTOGRAM_METRICS}
+            for source in _QUALITY_SOURCES
+        }
         for offset in range(days):
             day = (first_day + timedelta(days=offset)).isoformat()
             raw = {"day": day, **rows.get(day, {})}
-            daily_row = self._quality_row(raw)
+            daily_histograms = {metric: {} for metric in _HISTOGRAM_METRICS}
+            for source in _QUALITY_SOURCES:
+                merge_histograms(daily_histograms, histogram_for(day, source))
+            daily_row = self._quality_row(raw, daily_histograms)
             daily_row["sources"] = {}
             for source in _QUALITY_SOURCES:
                 source_raw = source_rows.get((day, source), {})
-                daily_row["sources"][source] = self._source_quality_row(source_raw)
+                source_histograms = histogram_for(day, source)
+                daily_row["sources"][source] = self._source_quality_row(
+                    source_raw, source_histograms,
+                )
                 for key in source_numeric_keys:
                     source_totals[source][key] += int(source_raw.get(key) or 0)
+                merge_histograms(source_histogram_totals[source], source_histograms)
             daily.append(daily_row)
             for key in numeric_keys:
                 totals[key] = int(totals[key]) + int(raw.get(key) or 0)
-        total_payload = self._quality_row(totals)
+            merge_histograms(total_histograms, daily_histograms)
+        total_payload = self._quality_row(totals, total_histograms)
         total_payload["sources"] = {
-            source: self._source_quality_row(source_totals[source])
+            source: self._source_quality_row(
+                source_totals[source], source_histogram_totals[source],
+            )
             for source in _QUALITY_SOURCES
         }
         return {
