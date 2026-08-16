@@ -470,6 +470,14 @@
       </section>
       <section class="admin-redemption-card company-catalog-card" aria-labelledby="company-catalog-heading">
         <div><p class="eyebrow">Company Finder</p><h2 id="company-catalog-heading">公司目录筛选</h2><p>按公司、国家、地区、行业和人员规模查找公司。目录信息已统一清理，原始数据仅用于追溯。</p></div>
+        <section class="company-catalog-quality-band" aria-labelledby="company-catalog-quality-heading">
+          <div class="company-catalog-quality-heading"><div><h3 id="company-catalog-quality-heading">目录质量观测</h3><p>最近 14 天公开证据复核与队列运行情况</p></div><span id="company-catalog-quality-updated">正在读取</span></div>
+          <div id="company-catalog-quality-metrics" class="company-catalog-quality-metrics" aria-live="polite"><span class="company-catalog-quality-loading">正在读取质量数据…</span></div>
+          <div class="company-catalog-quality-detail">
+            <div><h4>每日复核量</h4><div id="company-catalog-quality-chart" class="company-catalog-quality-chart" role="img" aria-label="最近 14 天公司公开证据复核量"></div></div>
+            <div><h4>当前证据分布</h4><div id="company-catalog-quality-evidence" class="company-catalog-quality-evidence"></div></div>
+          </div>
+        </section>
         <form id="company-catalog-form" class="admin-company-catalog-form">
           <label>公司名称或关键词<input id="company-catalog-query" type="search" maxlength="120" placeholder="例如：公司名称或关键词"></label>
           <label>国家/地区<select id="company-catalog-country"><option value="">全部国家/地区</option></select></label>

@@ -91,6 +91,13 @@ ACTIVE_RECHECK_PRIORITY = 50
 UNCERTAIN_RECHECK_PRIORITY = 80
 INACTIVE_RECHECK_PRIORITY = 120
 
+_PUBLIC_STATES = frozenset({"active_verified", "recently_observed"})
+_QUALITY_STATES = ("active_verified", "recently_observed", "uncertain", "inactive")
+_QUALITY_EVIDENCE = (
+    "official_website_legal", "official_website_title", "official_website_content",
+    "official_website_domain", "legacy_website_identity", "none",
+)
+
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
@@ -242,6 +249,30 @@ class VitalityStore:
                     available_at TEXT NOT NULL,
                     claimed_at TEXT,
                     created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+            """)
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS vitality_daily_quality (
+                    day TEXT PRIMARY KEY,
+                    checks INTEGER NOT NULL DEFAULT 0,
+                    outcome_active_verified INTEGER NOT NULL DEFAULT 0,
+                    outcome_recently_observed INTEGER NOT NULL DEFAULT 0,
+                    outcome_uncertain INTEGER NOT NULL DEFAULT 0,
+                    outcome_inactive INTEGER NOT NULL DEFAULT 0,
+                    evidence_official_website_legal INTEGER NOT NULL DEFAULT 0,
+                    evidence_official_website_title INTEGER NOT NULL DEFAULT 0,
+                    evidence_official_website_content INTEGER NOT NULL DEFAULT 0,
+                    evidence_official_website_domain INTEGER NOT NULL DEFAULT 0,
+                    evidence_legacy_website_identity INTEGER NOT NULL DEFAULT 0,
+                    evidence_none INTEGER NOT NULL DEFAULT 0,
+                    evidence_changes INTEGER NOT NULL DEFAULT 0,
+                    visible_to_hidden INTEGER NOT NULL DEFAULT 0,
+                    hidden_to_visible INTEGER NOT NULL DEFAULT 0,
+                    queue_wait_ms_total INTEGER NOT NULL DEFAULT 0,
+                    queue_wait_samples INTEGER NOT NULL DEFAULT 0,
+                    review_duration_ms_total INTEGER NOT NULL DEFAULT 0,
+                    review_duration_samples INTEGER NOT NULL DEFAULT 0,
                     updated_at TEXT NOT NULL
                 )
             """)
@@ -400,7 +431,11 @@ class VitalityStore:
                     (now_text, row["company_id"]),
                 )
             connection.commit()
-            return dict(row)
+            task = dict(row)
+            created_at = parse_time(row["created_at"])
+            if int(row["attempts"] or 0) == 0 and created_at is not None:
+                task["queue_wait_ms"] = max(0, round((now - created_at).total_seconds() * 1000))
+            return task
         except Exception:
             connection.rollback()
             raise
@@ -492,6 +527,16 @@ class VitalityStore:
             evidence_strength = previous_strength
             next_check = now + (RETRY_TTL if state == "recently_observed" else UNCERTAIN_TTL)
 
+        previous_state = str(task.get("state") or "unchecked")
+        previous_visible = previous_state in _PUBLIC_STATES
+        current_visible = state in _PUBLIC_STATES
+        outcome_values = {key: int(state == key) for key in _QUALITY_STATES}
+        evidence_bucket = evidence_kind if evidence_kind in _QUALITY_EVIDENCE else "none"
+        evidence_values = {key: int(evidence_bucket == key) for key in _QUALITY_EVIDENCE}
+        queue_wait_ms = max(0, int(task.get("queue_wait_ms") or 0))
+        review_duration_ms = max(0, int(observation.get("review_duration_ms") or 0))
+        report_day = (parse_time(checked_at) or now).astimezone(timezone.utc).date().isoformat()
+
         with self.connect() as connection:
             connection.execute("""
                 INSERT INTO company_vitality (
@@ -531,6 +576,48 @@ class VitalityStore:
                 failures, iso_at(next_check), iso_at(now),
             ))
             connection.execute("DELETE FROM vitality_queue WHERE company_id = ?", (company_id,))
+            connection.execute("""
+                INSERT INTO vitality_daily_quality (
+                    day, checks,
+                    outcome_active_verified, outcome_recently_observed,
+                    outcome_uncertain, outcome_inactive,
+                    evidence_official_website_legal, evidence_official_website_title,
+                    evidence_official_website_content, evidence_official_website_domain,
+                    evidence_legacy_website_identity, evidence_none, evidence_changes,
+                    visible_to_hidden, hidden_to_visible,
+                    queue_wait_ms_total, queue_wait_samples,
+                    review_duration_ms_total, review_duration_samples, updated_at
+                ) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(day) DO UPDATE SET
+                    checks = checks + excluded.checks,
+                    outcome_active_verified = outcome_active_verified + excluded.outcome_active_verified,
+                    outcome_recently_observed = outcome_recently_observed + excluded.outcome_recently_observed,
+                    outcome_uncertain = outcome_uncertain + excluded.outcome_uncertain,
+                    outcome_inactive = outcome_inactive + excluded.outcome_inactive,
+                    evidence_official_website_legal = evidence_official_website_legal + excluded.evidence_official_website_legal,
+                    evidence_official_website_title = evidence_official_website_title + excluded.evidence_official_website_title,
+                    evidence_official_website_content = evidence_official_website_content + excluded.evidence_official_website_content,
+                    evidence_official_website_domain = evidence_official_website_domain + excluded.evidence_official_website_domain,
+                    evidence_legacy_website_identity = evidence_legacy_website_identity + excluded.evidence_legacy_website_identity,
+                    evidence_none = evidence_none + excluded.evidence_none,
+                    evidence_changes = evidence_changes + excluded.evidence_changes,
+                    visible_to_hidden = visible_to_hidden + excluded.visible_to_hidden,
+                    hidden_to_visible = hidden_to_visible + excluded.hidden_to_visible,
+                    queue_wait_ms_total = queue_wait_ms_total + excluded.queue_wait_ms_total,
+                    queue_wait_samples = queue_wait_samples + excluded.queue_wait_samples,
+                    review_duration_ms_total = review_duration_ms_total + excluded.review_duration_ms_total,
+                    review_duration_samples = review_duration_samples + excluded.review_duration_samples,
+                    updated_at = excluded.updated_at
+            """, (
+                report_day,
+                *(outcome_values[key] for key in _QUALITY_STATES),
+                *(evidence_values[key] for key in _QUALITY_EVIDENCE),
+                int(previous_kind != evidence_kind),
+                int(previous_visible and not current_visible),
+                int(not previous_visible and current_visible),
+                queue_wait_ms, int("queue_wait_ms" in task),
+                review_duration_ms, int("review_duration_ms" in observation), iso_at(now),
+            ))
 
     def enqueue_due(self, limit: int = 100) -> int:
         now_text = iso_at()
@@ -598,6 +685,75 @@ class VitalityStore:
         return {
             "enabled": True, "states": states, "queued": queued, "checking": checking,
             "evidence": evidence, "queue_priorities": priorities,
+        }
+
+    @staticmethod
+    def _quality_row(row: dict[str, object]) -> dict[str, object]:
+        queue_samples = int(row.get("queue_wait_samples") or 0)
+        duration_samples = int(row.get("review_duration_samples") or 0)
+        hidden_to_visible = int(row.get("hidden_to_visible") or 0)
+        visible_to_hidden = int(row.get("visible_to_hidden") or 0)
+        return {
+            "day": str(row.get("day") or ""),
+            "checks": int(row.get("checks") or 0),
+            "outcomes": {
+                key: int(row.get(f"outcome_{key}") or 0) for key in _QUALITY_STATES
+            },
+            "evidence": {
+                key: int(row.get(f"evidence_{key}") or 0) for key in _QUALITY_EVIDENCE
+            },
+            "evidence_changes": int(row.get("evidence_changes") or 0),
+            "transitions": {
+                "visible_to_hidden": visible_to_hidden,
+                "hidden_to_visible": hidden_to_visible,
+                "net_public": hidden_to_visible - visible_to_hidden,
+            },
+            "queue_wait": {
+                "average_ms": round(int(row.get("queue_wait_ms_total") or 0) / queue_samples)
+                if queue_samples else 0,
+                "samples": queue_samples,
+            },
+            "review_duration": {
+                "average_ms": round(int(row.get("review_duration_ms_total") or 0) / duration_samples)
+                if duration_samples else 0,
+                "samples": duration_samples,
+            },
+        }
+
+    def report(self, days: int = 14) -> dict[str, object]:
+        days = max(1, min(90, int(days)))
+        today = utc_now().date()
+        first_day = today - timedelta(days=days - 1)
+        with self.connect() as connection:
+            rows = {
+                str(row["day"]): dict(row)
+                for row in connection.execute(
+                    "SELECT * FROM vitality_daily_quality WHERE day >= ? ORDER BY day",
+                    (first_day.isoformat(),),
+                ).fetchall()
+            }
+        daily: list[dict[str, object]] = []
+        totals: dict[str, object] = {
+            "day": "", "checks": 0,
+            **{f"outcome_{key}": 0 for key in _QUALITY_STATES},
+            **{f"evidence_{key}": 0 for key in _QUALITY_EVIDENCE},
+            "evidence_changes": 0, "visible_to_hidden": 0, "hidden_to_visible": 0,
+            "queue_wait_ms_total": 0, "queue_wait_samples": 0,
+            "review_duration_ms_total": 0, "review_duration_samples": 0,
+        }
+        numeric_keys = tuple(key for key in totals if key != "day")
+        for offset in range(days):
+            day = (first_day + timedelta(days=offset)).isoformat()
+            raw = {"day": day, **rows.get(day, {})}
+            daily.append(self._quality_row(raw))
+            for key in numeric_keys:
+                totals[key] = int(totals[key]) + int(raw.get(key) or 0)
+        return {
+            "days": days,
+            "generated_at": iso_at(),
+            "daily": daily,
+            "totals": self._quality_row(totals),
+            "current": self.stats(),
         }
 
     def get(self, company_id: str) -> dict[str, object] | None:

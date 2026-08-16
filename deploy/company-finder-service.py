@@ -339,4 +339,14 @@ def vitality_stats(_: Annotated[None, Depends(require_token)]) -> dict[str, obje
     return vitality_store.stats()
 
 
+@app.get("/vitality/report")
+def vitality_report(
+    _: Annotated[None, Depends(require_token)],
+    days: int = Query(default=14, ge=1, le=90),
+) -> dict[str, object]:
+    if vitality_store is None:
+        return {"enabled": False}
+    return vitality_store.report(days)
+
+
 app.get("/search")(search)

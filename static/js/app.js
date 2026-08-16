@@ -282,6 +282,7 @@ function switchView(view) {
     loadAdminAccounts();
     loadAdminFeatureUsage();
     loadCompanyCatalogFacets();
+    loadCompanyCatalogQuality();
   } else if (systemHealth) {
     document.title = "系统监控 | Verigo";
     if (window.location.pathname !== "/admin/system") window.history.pushState({}, "", "/admin/system");
@@ -2000,6 +2001,77 @@ el("admin-redemption-form")?.addEventListener("submit", async (event) => {
 
 const COMPANY_CATALOG_MAX_WINDOW = 100;
 const companyCatalogState = { offset: 0, limit: 25, total: 0, hasMore: false, facetsLoaded: false };
+function companyCatalogDuration(milliseconds) {
+  const value = Math.max(0, Number(milliseconds || 0));
+  if (value < 1000) return `${Math.round(value)} 毫秒`;
+  if (value < 60000) return `${(value / 1000).toFixed(value < 10000 ? 1 : 0)} 秒`;
+  return `${(value / 60000).toFixed(1)} 分钟`;
+}
+function renderCompanyCatalogQuality(data) {
+  const metrics = el("company-catalog-quality-metrics");
+  const chart = el("company-catalog-quality-chart");
+  const evidence = el("company-catalog-quality-evidence");
+  if (!metrics || !chart || !evidence) return;
+  const totals = data.totals || {};
+  const current = data.current || {};
+  const states = current.states || {};
+  const transitions = totals.transitions || {};
+  const publicCount = Number(states.active_verified || 0) + Number(states.recently_observed || 0);
+  const currentCount = Object.values(states).reduce((sum, value) => sum + Number(value || 0), 0);
+  const net = Number(transitions.net_public || 0);
+  const entries = [
+    ["14 天复核", Number(totals.checks || 0).toLocaleString("zh-CN"), "已完成的网站检查"],
+    ["当前公开", publicCount.toLocaleString("zh-CN"), `共观测 ${currentCount.toLocaleString("zh-CN")} 家`],
+    ["公开净变化", `${net > 0 ? "+" : ""}${net.toLocaleString("zh-CN")}`, `新增 ${Number(transitions.hidden_to_visible || 0)} · 停止展示 ${Number(transitions.visible_to_hidden || 0)}`],
+    ["平均排队", companyCatalogDuration(totals.queue_wait?.average_ms), `${Number(totals.queue_wait?.samples || 0)} 次有效采样`],
+    ["平均检查", companyCatalogDuration(totals.review_duration?.average_ms), `${Number(totals.review_duration?.samples || 0)} 次有效采样`],
+  ];
+  metrics.replaceChildren(...entries.map(([label, value, note]) => {
+    const item = document.createElement("div"); item.className = "company-catalog-quality-metric";
+    const caption = document.createElement("span"); caption.textContent = label;
+    const strong = document.createElement("strong"); strong.textContent = value;
+    const small = document.createElement("small"); small.textContent = note;
+    item.append(caption, strong, small); return item;
+  }));
+
+  const days = Array.isArray(data.daily) ? data.daily : [];
+  const maximum = Math.max(1, ...days.map((day) => Number(day.checks || 0)));
+  chart.replaceChildren(...days.map((day, index) => {
+    const item = document.createElement("span"); item.className = "company-catalog-quality-bar";
+    item.title = `${day.day || ""}：${Number(day.checks || 0).toLocaleString("zh-CN")} 次复核`;
+    const value = document.createElement("i"); value.style.height = `${Math.max(3, Number(day.checks || 0) / maximum * 100)}%`;
+    const label = document.createElement("small"); label.textContent = index % 3 === 0 || index === days.length - 1 ? String(day.day || "").slice(5).replace("-", "/") : "";
+    item.append(value, label); return item;
+  }));
+
+  const evidenceLabels = {
+    official_website_legal: "官网法律信息",
+    official_website_title: "官网标题",
+    official_website_content: "官网正文",
+    official_website_domain: "域名品牌",
+    legacy_website_identity: "历史官网证据",
+    none: "尚无公开证据",
+  };
+  const evidenceCounts = current.evidence || {};
+  evidence.replaceChildren(...Object.entries(evidenceLabels).map(([key, label]) => {
+    const row = document.createElement("div");
+    const caption = document.createElement("span"); caption.textContent = label;
+    const value = document.createElement("strong"); value.textContent = Number(evidenceCounts[key] || 0).toLocaleString("zh-CN");
+    row.append(caption, value); return row;
+  }));
+  const generated = new Date(data.generated_at || "");
+  el("company-catalog-quality-updated").textContent = Number.isNaN(generated.valueOf())
+    ? "最近 14 天" : `更新于 ${generated.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}`;
+}
+async function loadCompanyCatalogQuality() {
+  const metrics = el("company-catalog-quality-metrics");
+  try {
+    renderCompanyCatalogQuality(await api("/api/admin/company-catalog/quality?days=14"));
+  } catch (error) {
+    if (metrics) metrics.innerHTML = `<span class="company-catalog-quality-error">质量数据读取失败：${escapeHtml(error.message)}</span>`;
+    if (el("company-catalog-quality-updated")) el("company-catalog-quality-updated").textContent = "暂未更新";
+  }
+}
 function fillCompanyCatalogFacet(selectId, items, emptyLabel) {
   const select = el(selectId);
   if (!select) return;

@@ -35,6 +35,7 @@ def run() -> None:
                 task = store.claim_next()
                 if task is None:
                     break
+                task["probe_started_monotonic"] = time.monotonic()
                 futures[executor.submit(probe_company, task, PROBE_TIMEOUT)] = task
 
             if not futures:
@@ -48,6 +49,9 @@ def run() -> None:
                     observation = future.result()
                 except Exception:
                     observation = {"state": "uncertain", "reason": "worker_error"}
+                observation["review_duration_ms"] = max(
+                    0, round((time.monotonic() - float(task["probe_started_monotonic"])) * 1000),
+                )
                 store.complete(task, observation)
 
 

@@ -1009,6 +1009,17 @@ def company_catalog_status(_: Annotated[User, Depends(require_admin)]) -> dict[s
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
+@router.get("/admin/company-catalog/quality")
+def company_catalog_quality(
+    _: Annotated[User, Depends(require_admin)],
+    days: int = Query(default=14, ge=1, le=90),
+) -> dict[str, object]:
+    try:
+        return company_catalog.quality_report(days)
+    except company_catalog.CompanyCatalogUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
 @router.get("/admin/company-catalog/search", response_model=CompanyCatalogSearchResponse)
 def search_company_catalog(
     _: Annotated[User, Depends(require_admin)],

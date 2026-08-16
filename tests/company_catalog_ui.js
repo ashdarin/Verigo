@@ -34,6 +34,12 @@ const company = {
 
 async function mockApi(page) {
   const counters = { search: 0, publicSearch: 0, analytics: [] };
+  const applicationOrigin = new URL(baseUrl).origin;
+  await page.route("**/*", async (route) => {
+    const requestOrigin = new URL(route.request().url()).origin;
+    if (requestOrigin !== applicationOrigin) await route.abort();
+    else await route.continue();
+  });
   await page.route("**/api/**", async (route) => {
     const url = new URL(route.request().url());
     let payload = {};
@@ -50,6 +56,29 @@ async function mockApi(page) {
           company_linkedin_open: { count: 3, unique_users: 2 },
           company_domain_search_handoff: { count: 6, unique_users: 3 },
         } },
+      };
+    } else if (url.pathname === "/api/admin/company-catalog/quality") {
+      payload = {
+        days: 14,
+        generated_at: "2026-08-16T08:15:00+00:00",
+        daily: Array.from({ length: 14 }, (_, index) => ({
+          day: `2026-08-${String(index + 3).padStart(2, "0")}`,
+          checks: index % 4,
+        })),
+        totals: {
+          checks: 42,
+          transitions: { hidden_to_visible: 9, visible_to_hidden: 3, net_public: 6 },
+          queue_wait: { average_ms: 820, samples: 12 },
+          review_duration: { average_ms: 2400, samples: 42 },
+        },
+        current: {
+          states: { active_verified: 350, recently_observed: 39, uncertain: 333, inactive: 2 },
+          evidence: {
+            official_website_legal: 48, official_website_title: 226,
+            official_website_content: 76, official_website_domain: 38,
+            legacy_website_identity: 1, none: 335,
+          },
+        },
       };
     } else if (url.pathname === "/api/company-finder/analytics") {
       counters.analytics.push(route.request().postDataJSON().event);
@@ -165,11 +194,26 @@ async function checkViewport(browser, name, viewport) {
   await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
   await page.waitForFunction(() => document.querySelectorAll("#company-catalog-country option").length > 1);
   await page.waitForFunction(() => document.querySelector("#admin-company-finder-metrics")?.textContent.includes("12"));
+  await page.waitForFunction(() => document.querySelector("#company-catalog-quality-metrics")?.textContent.includes("389"));
   if (!await page.locator("#admin-company-finder-metrics").textContent().then((text) => text.includes("进入企业邮箱查找"))) {
     throw new Error(`${name}: Company Finder aggregate metrics are missing`);
   }
   if (await page.inputValue("#company-catalog-website") !== "true") {
     throw new Error(`${name}: website-only filter is not selected by default`);
+  }
+  const quality = await page.evaluate(() => ({
+    metrics: document.querySelector("#company-catalog-quality-metrics")?.textContent || "",
+    evidence: document.querySelector("#company-catalog-quality-evidence")?.textContent || "",
+    bars: document.querySelectorAll(".company-catalog-quality-bar").length,
+  }));
+  if (!quality.metrics.includes("14 天复核42") || !quality.metrics.includes("当前公开389")
+    || !quality.metrics.includes("公开净变化+6") || !quality.metrics.includes("平均排队820 毫秒")
+    || !quality.metrics.includes("平均检查2.4 秒")) {
+    throw new Error(`${name}: quality summary is incomplete: ${quality.metrics}`);
+  }
+  if (!quality.evidence.includes("官网法律信息48") || !quality.evidence.includes("官网标题226")
+    || quality.bars !== 14) {
+    throw new Error(`${name}: quality evidence or daily chart is incomplete`);
   }
   await page.click("#company-catalog-form button[type=submit]");
   await page.waitForFunction(() => document.querySelector("#company-catalog-status")?.textContent.includes("至少一个筛选条件"));
@@ -231,8 +275,10 @@ async function checkViewport(browser, name, viewport) {
     const results = [];
     results.push(await checkViewport(browser, "company-catalog-desktop", { width: 1440, height: 1000 }));
     results.push(await checkViewport(browser, "company-catalog-mobile", { width: 390, height: 844 }));
-    results.push(await checkPublicFinderViewport(browser, "company-finder-desktop", { width: 1440, height: 1000 }));
-    results.push(await checkPublicFinderViewport(browser, "company-finder-mobile", { width: 390, height: 844 }));
+    if (process.env.VERIGO_COMPANY_UI_ADMIN_ONLY !== "1") {
+      results.push(await checkPublicFinderViewport(browser, "company-finder-desktop", { width: 1440, height: 1000 }));
+      results.push(await checkPublicFinderViewport(browser, "company-finder-mobile", { width: 390, height: 844 }));
+    }
     console.log(JSON.stringify(results, null, 2));
   } finally {
     await browser.close();

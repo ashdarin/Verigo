@@ -7,6 +7,7 @@ import os
 import tempfile
 import sys
 from pathlib import Path
+from unittest.mock import Mock, patch
 
 import duckdb
 from fastapi import HTTPException
@@ -24,7 +25,7 @@ from app.core.company_catalog_normalization import (
 )
 from app.db import company_catalog
 from app.db.auth import User
-from app.api.routes import require_company_finder_user
+from app.api.routes import company_catalog_quality, require_company_finder_user
 
 
 assert len(INDUSTRY_LABELS) == 147
@@ -122,6 +123,8 @@ service_module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(service_module)
 with TestClient(service_module.app) as client:
     headers = {"Authorization": "Bearer catalogue-test-token"}
+    response = client.get("/vitality/report")
+    assert response.status_code == 401, response.text
     response = client.get("/search", headers=headers)
     assert response.status_code == 422, response.text
     response = client.get(
@@ -151,6 +154,12 @@ with TestClient(service_module.app) as client:
             "evidence_strength": "strong", "page_title": "Boost Your Sales",
         },
     )
+    response = client.get("/vitality/report", params={"days": 7}, headers=headers)
+    assert response.status_code == 200, response.text
+    assert response.json()["days"] == 7
+    assert response.json()["totals"]["checks"] == 1
+    assert "company-1" not in response.text
+    assert "boost-your-sales.eu" not in response.text
     response = client.get(
         "/search", params={"country": "germany", "visibility": "public"}, headers=headers,
     )
@@ -179,5 +188,26 @@ with TestClient(service_module.app) as client:
     )
     assert response.status_code == 200, response.text
     assert [item["id"] for item in response.json()["items"]] == ["company-1", "company-2"]
+
+quality_payload = {"days": 7, "daily": [], "totals": {}, "current": {}}
+quality_response = Mock()
+quality_response.raise_for_status.return_value = None
+quality_response.json.return_value = quality_payload
+previous_service_url = settings.company_catalog_service_url
+previous_service_token = settings.company_catalog_service_token
+try:
+    object.__setattr__(settings, "company_catalog_service_url", "http://catalogue.test")
+    object.__setattr__(settings, "company_catalog_service_token", "private-token")
+    with patch.object(company_catalog.httpx, "get", return_value=quality_response) as request:
+        assert company_catalog.quality_report(7) == quality_payload
+        assert request.call_args.kwargs["params"] == {"days": 7}
+        assert request.call_args.kwargs["headers"] == {"Authorization": "Bearer private-token"}
+finally:
+    object.__setattr__(settings, "company_catalog_service_url", previous_service_url)
+    object.__setattr__(settings, "company_catalog_service_token", previous_service_token)
+
+with patch.object(company_catalog, "quality_report", return_value=quality_payload) as quality:
+    assert company_catalog_quality(verified_user, days=7) == quality_payload
+    quality.assert_called_once_with(7)
 
 print("company catalogue smoke: ok")

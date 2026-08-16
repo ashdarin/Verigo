@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 import tempfile
 import sqlite3
@@ -212,5 +213,42 @@ with legacy_store.connect() as connection:
     queue_columns = {row[1] for row in connection.execute("PRAGMA table_info(vitality_queue)")}
 assert {"country", "evidence_kind", "evidence_strength"}.issubset(vitality_columns)
 assert "country" in queue_columns
+
+quality_store = VitalityStore(temp_dir / "quality.sqlite")
+quality_items = [{
+    "id": "private-company-reference", "name": "Private Example",
+    "website_domain": "private-example.test", "country": "germany",
+}]
+quality_store.annotate_and_enqueue(quality_items)
+quality_task = quality_store.claim_next()
+assert quality_task and "queue_wait_ms" in quality_task
+quality_store.complete(quality_task, {
+    "state": "active_verified", "confidence": 0.95,
+    "reason": "website_title_identity_match",
+    "evidence_kind": "official_website_title", "evidence_strength": "strong",
+    "checked_at": iso_at(), "review_duration_ms": 1250,
+})
+quality_store.complete({
+    "company_id": "private-company-reference", "domain": "private-example.test",
+    "normalized_name": "Private Example", "country": "germany",
+    "state": "active_verified", "last_evidence_kind": "official_website_title",
+    "last_evidence_strength": "strong", "last_public_evidence_at": iso_at(),
+}, {
+    "state": "inactive", "reason": "parked_domain", "checked_at": iso_at(),
+})
+quality_report = quality_store.report(14)
+assert len(quality_report["daily"]) == 14
+assert quality_report["totals"]["checks"] == 2
+assert quality_report["totals"]["outcomes"]["active_verified"] == 1
+assert quality_report["totals"]["outcomes"]["inactive"] == 1
+assert quality_report["totals"]["transitions"] == {
+    "visible_to_hidden": 1, "hidden_to_visible": 1, "net_public": 0,
+}
+assert quality_report["totals"]["queue_wait"]["samples"] == 1
+assert quality_report["totals"]["review_duration"] == {"average_ms": 1250, "samples": 1}
+serialized_report = json.dumps(quality_report)
+assert "private-company-reference" not in serialized_report
+assert "private-example.test" not in serialized_report
+assert "Private Example" not in serialized_report
 
 print("company vitality smoke: ok")

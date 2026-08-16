@@ -352,3 +352,23 @@ def status() -> dict[str, object]:
     with _connection() as connection:
         total = int(connection.execute("SELECT COUNT(*) FROM companies").fetchone()[0])
     return {"total": total, "backend": "duckdb"}
+
+
+def quality_report(days: int = 14) -> dict[str, object]:
+    """Read privacy-preserving vitality aggregates from the catalogue node."""
+    if not _service_enabled():
+        raise CompanyCatalogUnavailable("Company Finder quality report is temporarily unavailable")
+    try:
+        response = httpx.get(
+            f"{settings.company_catalog_service_url}/vitality/report",
+            params={"days": max(1, min(90, int(days)))},
+            headers={"Authorization": f"Bearer {settings.company_catalog_service_token}"},
+            timeout=settings.company_catalog_service_timeout_seconds,
+        )
+        response.raise_for_status()
+        payload: dict[str, Any] = response.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        raise CompanyCatalogUnavailable("Company Finder quality report is temporarily unavailable") from exc
+    if not isinstance(payload.get("daily"), list) or not isinstance(payload.get("totals"), dict):
+        raise CompanyCatalogUnavailable("Company Finder returned an invalid quality report")
+    return payload
