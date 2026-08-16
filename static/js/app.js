@@ -1032,45 +1032,22 @@ function detailSection(title, note = "") {
 
 function riskSignalStatus(presentation, signal) {
   if (signal.detected === true) return { value: presentation.detected, className: `risk-${presentation.level}` };
-  if (signal.detected === false) return { value: "未发现该特征", className: "risk-clear" };
-  return { value: "本次未检测", className: "risk-unknown" };
+  // An unconfirmed disposable-domain result must not be presented as clear.
+  if (presentation.key === "disposable_provider") {
+    return { value: "暂无法确认", className: "risk-unknown" };
+  }
+  if (signal.detected === false) return { value: "未识别", className: "risk-clear" };
+  return { value: "暂无法确认", className: "risk-unknown" };
 }
 
 function riskSignalDetail(presentation, signal) {
-  if (signal.detected === false) return `本次检查未发现${presentation.label}相关特征，无需额外处理。`;
-  if (signal.detected !== true && presentation.key === "disposable_provider") {
-    return "本次结果未包含一次性邮箱来源检查，建议不要据此判断为长期可用地址。";
+  if (signal.detected !== true) {
+    if (presentation.key === "disposable_provider") {
+      return "当前无法确认该地址是否来自一次性邮箱服务。建议不要将其作为长期联系人地址。";
+    }
+    return signal.detected === false ? "本次未发现该特征，无需额外处理。" : "当前无法确认该特征，不影响已显示的验证结果。";
   }
-  if (signal.detected !== true) return `本次结果未包含${presentation.label}检查，不影响当前验证结论。`;
   return presentation.detail;
-}
-
-function userFacingConclusion(item) {
-  if (item.progress_state === "pending" || item.progress_state === "verifying") {
-    return ["正在验证该邮箱", "正在检查地址格式、域名和邮件服务器，请稍候。"];
-  }
-  if (item.progress_state === "failed") {
-    return ["本次验证未完成", "验证过程提前结束，重新提交后可获得完整结论。"];
-  }
-  if (item.skipped) {
-    return ["验证已停止", "当前没有形成完整结论，可在需要时重新验证。"];
-  }
-  if (item.deliverable === true) {
-    return ["该邮箱可以使用", "已通过当前可用的投递检查，可按正常节奏联系。"];
-  }
-  if (item.risk_signals?.mailbox_full?.detected === true) {
-    return ["该邮箱当前不建议发送", "收件箱容量已满，待对方清理空间后再联系。"];
-  }
-  if (item.failure_reason === "domain_nxdomain") {
-    return ["该邮箱暂不可用", "域名不存在，请检查拼写或更换联系地址。"];
-  }
-  if (item.failure_reason === "mx_missing") {
-    return ["该邮箱暂不可用", "该域名没有配置邮件接收服务，请更换联系地址。"];
-  }
-  if (item.deliverable === false) {
-    return ["该邮箱不可投递", "邮件服务器没有接受该地址，建议更换或删除。"];
-  }
-  return ["投递状态尚未确定", "邮件服务器本次没有给出明确的投递结论，可稍后再次验证。"];
 }
 
 function openResultDetails(item) {
@@ -1086,19 +1063,10 @@ function openResultDetails(item) {
   const checkClass = (value) => value === true ? "check-good" : value === false ? "check-bad" : "check-pending";
   const content = el("result-detail-content");
   content.replaceChildren();
-  content.append(detailSection("验证结论"));
-  const [conclusionTitle, conclusionDetail] = userFacingConclusion(item);
-  const conclusion = document.createElement("div");
-  conclusion.className = "detail-conclusion-summary";
-  const conclusionHeading = document.createElement("strong");
-  conclusionHeading.textContent = conclusionTitle;
-  const conclusionCopy = document.createElement("span");
-  conclusionCopy.textContent = conclusionDetail;
-  conclusion.append(conclusionHeading, conclusionCopy);
-  content.append(conclusion);
+  content.append(detailSection("验证结论", "先确认当前结论和建议，再查看检查项与技术信息。"));
   const fields = [
-    ["验证状态", statusLabel],
-    ["建议", consumerResultAction(item)],
+    ["邮箱状态", statusLabel],
+    ["下一步", consumerResultAction(item)],
   ];
   const reviewStatus = retryReviewStatus(item);
   if (reviewStatus) fields.push(["复核状态", reviewStatus]);
@@ -1127,7 +1095,7 @@ function openResultDetails(item) {
     !hasRiskSignals ? "该历史结果尚未提供风险信号。"
       : detectedRiskCount ? `已识别 ${detectedRiskCount} 项需要关注的特征。` : "本次未识别到需要特别关注的地址特征。",
   ));
-  const riskGrid = document.createElement("div"); riskGrid.className = "detail-check-grid detail-risk-grid";
+  const riskGrid = document.createElement("div"); riskGrid.className = "detail-check-grid";
   riskSignalPresentation.forEach((presentation) => {
     const signal = riskSignals[presentation.key] && typeof riskSignals[presentation.key] === "object" ? riskSignals[presentation.key] : {};
     const status = riskSignalStatus(presentation, signal);

@@ -364,12 +364,6 @@ body.product-surface { min-width: 320px; margin: 0; color: var(--product-ink); b
   min-width: 680px;
 }
 
-.product-surface .results-panel table th:nth-child(1) { width: 34%; }
-.product-surface .results-panel table th:nth-child(2) { width: 16%; }
-.product-surface .results-panel table th:nth-child(3) { width: auto; }
-.product-surface .results-panel table th:nth-child(4),
-.product-surface .results-panel table td:nth-child(4) { width: 76px; text-align: center; }
-
 .product-surface table thead th {
   position: sticky;
   top: 0;
@@ -505,16 +499,6 @@ body.product-surface:has(.result-detail-drawer.open)::before {
 .product-surface .detail-conclusion-field {
   border-color: #c7dfd1;
   background: #f2faf5;
-}
-
-.product-surface .detail-conclusion-summary {
-  border-color: #b7dbc6;
-  background: #edf8f1;
-}
-
-.product-surface .detail-conclusion-summary strong {
-  color: var(--product-green-dark);
-  font-size: 18px;
 }
 
 .product-surface .technical-details {
