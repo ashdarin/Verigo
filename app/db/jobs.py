@@ -3138,7 +3138,10 @@ class JobStore:
                             day, {', '.join(_CACHE_METRIC_NAMES)}, updated_at
                         ) VALUES (?, {', '.join('?' for _ in _CACHE_METRIC_NAMES)}, ?)
                         ON CONFLICT(day) DO UPDATE SET
-                            {', '.join(f'{name}={name}+excluded.{name}' for name in _CACHE_METRIC_NAMES)},
+                            {', '.join(
+                                f'{name}=verification_cache_days.{name}+excluded.{name}'
+                                for name in _CACHE_METRIC_NAMES
+                            )},
                             updated_at=excluded.updated_at
                     """, (
                         day_value, *(values[name] for name in _CACHE_METRIC_NAMES),

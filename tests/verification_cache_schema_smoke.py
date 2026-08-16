@@ -9,6 +9,7 @@ schema = (ROOT / "app/db/postgres_schema.py").read_text(encoding="utf-8")
 migration = (ROOT / "scripts/ensure_verification_cache_schema.py").read_text(encoding="utf-8")
 release = (ROOT / "deploy/release.sh").read_text(encoding="utf-8")
 retention = (ROOT / "app/db/retention.py").read_text(encoding="utf-8")
+jobs = (ROOT / "app/db/jobs.py").read_text(encoding="utf-8")
 
 for table in (
     "verification_probe_leases", "verification_probe_waiters", "verification_cache_days",
@@ -23,6 +24,7 @@ assert "strategy', ''))='outlook_http'" in migration
 assert "ensure_verification_cache_schema.py" in release
 assert release.index("ensure_verification_cache_schema.py") < release.rindex("systemctl restart")
 assert "COALESCE(stale_expires_at, expires_at)" in retention
+assert "verification_cache_days.{name}+excluded.{name}" in jobs
 
 import scripts.ensure_verification_cache_schema as migration_module  # noqa: E402
 
