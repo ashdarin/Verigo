@@ -259,6 +259,8 @@ if [[ "$deploy_role" == "shanghai-app" ]]; then
         "$release_path/scripts/ensure_quality_dashboard_schema.py"
     PYTHONPATH="$release_path" "$state_dir/.venv/bin/python" \
         "$release_path/scripts/ensure_company_finder_metrics_schema.py"
+    PYTHONPATH="$release_path" "$state_dir/.venv/bin/python" \
+        "$release_path/scripts/ensure_verification_cache_schema.py"
 
     worker_bundle_tmp=$(mktemp "$state_dir/data/.cloudstudio-worker.XXXXXX.tar.gz")
     tar -czf "$worker_bundle_tmp" -C "$release_path" app requirements.txt RELEASE_VERSION

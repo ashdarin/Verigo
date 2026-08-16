@@ -1,0 +1,94 @@
+/* Scoped overrides exported from verigo-verify-ui-parameters (1).json. */
+body.product-surface {
+  --accent: hsl(151 72% 30%);
+  --product-green: hsl(151 72% 30%);
+}
+
+@media (min-width: 981px) {
+  .product-surface .brand img {
+    width: 29px;
+    height: 29px;
+  }
+
+  .product-surface .product-nav {
+    gap: 4px;
+  }
+
+  .product-surface .nav-item {
+    font-size: 14px;
+  }
+
+  .product-surface .nav-item i {
+    font-size: 16px;
+  }
+}
+
+.product-surface #verify-workspace .control-panel input:not([type="radio"]):not([type="file"]),
+.product-surface #verify-workspace .control-panel select {
+  min-height: 45px;
+  height: 45px;
+}
+
+.product-surface #verify-workspace #email-input {
+  min-height: 220px;
+  height: 220px;
+}
+
+.product-surface #verify-workspace .verification-type-tabs {
+  height: 42px;
+}
+
+.product-surface #verify-workspace .verification-type-tabs .segment {
+  min-height: 0;
+  height: 100%;
+}
+
+.product-surface #verify-workspace .primary-action {
+  min-height: 45px;
+  height: 45px;
+}
+
+.product-surface #verify-workspace .progress-section {
+  margin: 22px 0 18px;
+  padding: 17px;
+  border: 1px solid var(--product-line);
+  border-radius: 6px;
+}
+
+.product-surface #verify-workspace .progress-track {
+  height: 10px;
+}
+
+.product-surface #verify-workspace .summary-grid {
+  margin-bottom: 22px;
+}
+
+.product-surface #verify-workspace .table-toolbar {
+  margin-top: 0;
+}
+
+.product-surface #verify-workspace #result-search {
+  width: 160px !important;
+}
+
+.product-surface #verify-workspace .status {
+  min-height: 29px;
+  display: inline-flex;
+  align-items: center;
+}
+
+.product-surface #verify-workspace .table-wrap tbody tr {
+  height: 52px;
+}
+
+.product-surface #verify-workspace > .results-panel > .pagination {
+  min-height: 64px;
+}
+
+.product-surface .auth-dialog {
+  width: min(430px, calc(100vw - 28px));
+}
+
+.product-surface .auth-dialog form {
+  padding: 30px;
+}

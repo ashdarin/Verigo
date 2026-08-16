@@ -165,6 +165,7 @@ def rewrite_sql(sql: str) -> str:
         "enabled",
         "active",
         "favorite",
+        "is_cache_refresh",
     ):
         text = re.sub(rf"\b{col}\s*=\s*1\b", f"{col} = TRUE", text, flags=re.I)
         text = re.sub(rf"\b{col}\s*=\s*0\b", f"{col} = FALSE", text, flags=re.I)

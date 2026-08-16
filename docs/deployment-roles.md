@@ -10,6 +10,8 @@ requires the same role and maps it to the expected host by default.
 - Keeps Caddy, external monitoring, all verification workers, worker database
   tunnels, CloudStudio keepalive, and the QQ worker disabled.
 - Publishes the CloudStudio worker bundle from `/opt/verigo/data`.
+- Applies the additive verification-cache schema and one-time history backfill
+  before restarting Web/API services.
 
 ## `hong-kong-edge-worker`
 
@@ -29,3 +31,5 @@ Examples:
 
 The edge role activates a release without restarting already-running workers.
 Use `-Maintenance` only when an immediate worker/supervisor restart is intended.
+Deploy `shanghai-app` first whenever a release changes shared PostgreSQL schema;
+deploy the edge worker role only after the Shanghai health and schema checks pass.

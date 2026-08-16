@@ -49,6 +49,8 @@ journalctl -t verigo-monitor -n 100 --no-pager
 
 远程验证调度以 Gmail、Microsoft 和企业域名为全局并发桶。企业域名从 `VERIGO_SCHEDULER_DEFAULT_DOMAIN_CONCURRENCY` 开始，连续稳定结果后逐步增加；出现临时 SMTP 限流或连接压力时立即减半并冷却。`/api/internal/readiness` 会返回画像汇总，供本机监控和容量校准使用。默认参数由 `VERIGO_SCHEDULER_*` 环境变量控制，发布脚本只会补齐缺失值，不会覆盖已经验证过的生产配置。
 
+邮箱验证结果采用置信度分层缓存和数据库探针租约。缓存策略、迁移顺序、指标与故障恢复详见 [`docs/verification-cache.md`](docs/verification-cache.md)。管理员指标接口的 `verification_cache` 字段仅包含按天聚合计数，不包含邮箱地址。
+
 ## 日常排障
 
 ```bash

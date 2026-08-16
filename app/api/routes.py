@@ -5,13 +5,14 @@ import csv
 import hashlib
 import hmac
 import json
+import logging
 import time
 import uuid
 import re
 from datetime import datetime, time as datetime_time, timedelta, timezone
 from zoneinfo import ZoneInfo
 from io import StringIO
-from typing import Annotated
+from typing import Annotated, Any
 from urllib.parse import quote
 
 from fastapi import APIRouter, Body, Depends, File, Header, HTTPException, Query, Request, UploadFile
@@ -98,9 +99,12 @@ from app.db.prospecting import ProspectingRun, prospecting_store
 from app.db import company_catalog
 from app.db.result_objects import result_object_store
 from app.tasks.verification import (
+    cancel_job_probes,
     clean_emails,
+    cache_and_release_probe_results,
     job_progress,
     normalize_result,
+    notify_probe_waiter_jobs,
     finalize_temporary_smtp_results,
     finish_background_retry,
     finish_background_retry_failure,
@@ -325,7 +329,16 @@ def submit_routed_job(
     stop_on_deliverable: bool = False,
     job_id: str | None = None,
     list_name: str | None = None,
+    is_cache_refresh: bool = False,
 ) -> Job:
+    cached_by_email = (
+        {} if is_cache_refresh or stop_on_deliverable
+        else job_store.cached_results(emails, claim_refresh=True)
+    )
+    refresh_emails: list[str] = []
+    for email, result in cached_by_email.items():
+        if result.pop("_cache_refresh_due", False):
+            refresh_emails.append(email)
     targets: dict[tuple[str, int], list[str]] = {}
     for email in emails:
         target = (
@@ -342,7 +355,7 @@ def submit_routed_job(
         )
         targets.setdefault((target, child_worker_count), []).append(email)
 
-    immediate_results = {
+    immediate_results: dict[str, list[dict[str, Any]]] = {
         "unsupported": [
             yahoo_unsupported_result(email, index)
             for index, email in enumerate(
@@ -350,12 +363,16 @@ def submit_routed_job(
             )
         ]
     }
+    for (target, _child_worker_count), target_emails in targets.items():
+        hits = [dict(cached_by_email[email.lower()]) for email in target_emails if email.lower() in cached_by_email]
+        if hits:
+            immediate_results.setdefault(target, []).extend(hits)
 
     partitions = partition_target_emails(targets)
     # Candidate discovery must preserve its input order and stop as soon as it
     # confirms a deliverable address, so it cannot be processed concurrently.
     if not stop_on_deliverable and len(partitions) > 1:
-        return verification_tasks.submit_partitioned(
+        job = verification_tasks.submit_partitioned(
             emails,
             worker_count,
             partitions,
@@ -363,7 +380,11 @@ def submit_routed_job(
             job_id=job_id,
             immediate_results_by_target=immediate_results,
             list_name=list_name,
+            is_cache_refresh=is_cache_refresh,
         )
+        if refresh_emails:
+            _schedule_cache_refreshes(refresh_emails, owner_email)
+        return job
 
     if stop_on_deliverable:
         # This mode must stop globally after the first deliverable result. It
@@ -377,12 +398,13 @@ def submit_routed_job(
             job_id=job_id,
             execution_target="local",
             list_name=list_name,
+            is_cache_refresh=is_cache_refresh,
         )
 
     execution_target, child_worker_count = (
         next(iter(targets)) if len(targets) == 1 else ("local", worker_count)
     )
-    return verification_tasks.submit(
+    job = verification_tasks.submit(
         emails,
         child_worker_count,
         owner_id=owner_id,
@@ -391,7 +413,29 @@ def submit_routed_job(
         execution_target=execution_target,
         list_name=list_name,
         immediate_results=immediate_results.get(execution_target),
+        is_cache_refresh=is_cache_refresh,
     )
+    if refresh_emails:
+        _schedule_cache_refreshes(refresh_emails, owner_email)
+    return job
+
+
+def _schedule_cache_refreshes(emails: list[str], owner_email: str | None) -> None:
+    """Queue bounded refresh work behind every user-submitted verification job."""
+    bounded = clean_emails(emails)[:settings.verification_cache_refresh_max_per_request]
+    if not bounded:
+        return
+    try:
+        submit_routed_job(
+            bounded,
+            1,
+            owner_id=None,
+            owner_email=owner_email,
+            list_name="__verification_cache_refresh__",
+            is_cache_refresh=True,
+        )
+    except Exception:  # noqa: BLE001
+        logging.getLogger(__name__).exception("Could not schedule verification cache refresh")
 
 
 def submit_stopped_job_continuation(job: Job) -> Job:
@@ -403,6 +447,10 @@ def submit_stopped_job_continuation(job: Job) -> Job:
         raise ValueError("该任务没有可继续验证的邮箱")
 
     for queued_job in queued_jobs:
+        queued_job = job_store.get(queued_job.id) or queued_job
+        probe_status = job_store.register_probe_candidates(queued_job.id, queued_job.results)
+        if not probe_status["owned"]:
+            continue
         if queued_job.execution_target == TENCENT_QQ_TARGET:
             worker_lifecycle.notify_job_queued()
         elif queued_job.execution_target == DOMESTIC_CLOUDSTUDIO_TARGET:
@@ -803,6 +851,7 @@ def complete_tencent_qq_job(
     worker_name = (worker_id or "").strip()
     job = require_remote_job(job_id, worker_name, execution_target, payload.lease_id)
     normalized = merge_worker_results(job, payload.results)
+    lease_indices = job_store.lease_indices(job.id, worker_name, payload.lease_id or "")
     if not payload.lease_id or not job_store.complete_lease_with_results(
         job.id, worker_name, payload.lease_id, normalized, execution_target=execution_target,
     ):
@@ -815,6 +864,12 @@ def complete_tencent_qq_job(
         sync_parent_job(protected)
         return serialize_job(protected)
     if job_store.pending_count(job.id):
+        completed_indices = set(lease_indices)
+        completed_results = [
+            result for result in refreshed.results
+            if int(result.get("original_index", -1)) in completed_indices
+        ]
+        cache_and_release_probe_results(completed_results, owner_job_id=job.id)
         sync_parent_job(job)
         return serialize_job(refreshed)
     job = refreshed
@@ -844,8 +899,11 @@ def fail_tencent_qq_job(
         return serialize_job(job)
     worker_name = (worker_id or "").strip()
     job = require_remote_job(job_id, worker_name, execution_target, payload.lease_id)
+    probe_emails = job_store.lease_emails(job.id, worker_name, payload.lease_id)
     if not job_store.abandon_lease(job.id, worker_name, payload.lease_id):
         raise HTTPException(status_code=409, detail="Remote worker lease is no longer active")
+    resumed = job_store.release_probe_leases(job.id, probe_emails)
+    notify_probe_waiter_jobs(resumed)
     if execution_target == GMAIL_TARGET:
         cloudshell_coordinator.record_failure(worker_name, payload.error)
     job.error = f"{remote_worker_label(execution_target)} will retry: {payload.error}"
@@ -869,7 +927,10 @@ def record_analytics_engagement(
 
 @router.get("/admin/metrics")
 def admin_metrics(_: Annotated[User, Depends(require_admin)]) -> dict[str, object]:
-    return metrics_store.snapshot()
+    return {
+        **metrics_store.snapshot(),
+        "verification_cache": job_store.cache_report(),
+    }
 
 
 @router.post("/admin/credits/grant", response_model=AdminCreditAdjustmentResponse)
@@ -1422,11 +1483,13 @@ def submit_prospecting_run(
         prospecting_store.release_candidate_claim(claim_token)
         if job is not None:
             job_store.stop(job.id)
+            cancel_job_probes(job.id)
         raise HTTPException(status_code=429, detail=str(exc)) from exc
     except Exception:
         prospecting_store.release_candidate_claim(claim_token)
         if job is not None:
             job_store.stop(job.id)
+            cancel_job_probes(job.id)
         raise
     return serialize_prospecting_run(run)
 
@@ -1689,6 +1752,7 @@ def stop_prospecting_run(
     stopped_job = job_store.stop(run.verification_job_id)
     if stopped_job is None:
         raise HTTPException(status_code=404, detail="Verification job no longer exists")
+    cancel_job_probes(run.verification_job_id)
     return serialize_prospecting_run(run)
 
 
@@ -1885,6 +1949,7 @@ def stop_job(
         raise HTTPException(status_code=404, detail="任务不存在")
     if job.status != "stopped":
         raise HTTPException(status_code=409, detail="任务已结束，无法停止")
+    cancel_job_probes(job_id)
     if job.results:
         write_csv(job)
         job_store.persist(job)

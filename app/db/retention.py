@@ -133,7 +133,7 @@ def _run_sqlite(
 
         begin_immediate(connection)
         connection.execute(
-            "DELETE FROM verification_cache WHERE expires_at <= ?",
+            "DELETE FROM verification_cache WHERE COALESCE(stale_expires_at, expires_at) <= ?",
             (now.isoformat(),),
         )
         metrics_table_exists = connection.execute(
@@ -224,7 +224,7 @@ def _run_postgres(
                 deleted += len(job_ids)
 
             cur.execute(
-                "DELETE FROM verification_cache WHERE expires_at <= %s",
+                "DELETE FROM verification_cache WHERE COALESCE(stale_expires_at, expires_at) <= %s",
                 (now,),
             )
             cur.execute(

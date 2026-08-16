@@ -13,8 +13,21 @@ from typing import Any
 
 from app.config import settings
 from app.core.result_retry import is_recipient_mailbox_full, smtp_temporary_status
+from app.core.verification_cache_policy import (
+    cache_decision, is_cache_excluded, sanitize_cached_result,
+)
 from app.db.pg_compat import PgConnection, as_bool, as_datetime, as_json, postgres_active
 from app.db.sqlite import begin_immediate, connect as connect_sqlite
+
+
+_CACHE_METRIC_NAMES = (
+    "lookups", "fresh_hits", "misses", "stale_seen",
+    "writes_deliverable", "writes_permanent_invalid", "writes_mailbox_full",
+    "coalesced_waiters", "refresh_scheduled",
+)
+_CACHE_METRICS_LOCK = threading.Lock()
+_CACHE_METRICS_PENDING: dict[str, dict[str, int]] = {}
+_CACHE_METRICS_FLUSHING = False
 
 
 def _dt(value: Any) -> datetime | None:
@@ -79,6 +92,7 @@ class Job:
     pending_indices: list[int] = field(default_factory=list)
     lease_id: str | None = None
     list_name: str | None = None
+    is_cache_refresh: bool = False
 
 
 @dataclass(frozen=True)
@@ -124,7 +138,7 @@ class JobStore:
         "started_at", "finished_at", "error", "results_json", "csv_path",
         "owner_id", "guest_token_hash", "worker_id", "heartbeat_at", "stop_on_deliverable",
         "execution_target", "parent_id", "retry_parent_id",
-        "deferred_retry_at", "temporary_retry_attempts", "list_name",
+        "deferred_retry_at", "temporary_retry_attempts", "list_name", "is_cache_refresh",
     )
 
     def __init__(self, keep: int = 100) -> None:
@@ -166,6 +180,7 @@ class JobStore:
             deferred_retry_at=as_datetime(row["deferred_retry_at"]),
             temporary_retry_attempts=int(row["temporary_retry_attempts"] or 0),
             list_name=row["list_name"],
+            is_cache_refresh=as_bool(row["is_cache_refresh"]),
         )
 
     def initialize(self) -> None:
@@ -200,12 +215,13 @@ class JobStore:
                         retry_parent_id TEXT,
                         deferred_retry_at TEXT,
                         temporary_retry_attempts INTEGER NOT NULL DEFAULT 0,
-                        list_name TEXT
+                        list_name TEXT,
+                        is_cache_refresh INTEGER NOT NULL DEFAULT 0
                     )
                     """
                 )
                 existing = {row[1] for row in connection.execute("PRAGMA table_info(jobs)")}
-                for name, kind in (("owner_id", "TEXT"), ("guest_token_hash", "TEXT"), ("worker_id", "TEXT"), ("heartbeat_at", "TEXT"), ("stop_on_deliverable", "INTEGER NOT NULL DEFAULT 0"), ("execution_target", "TEXT NOT NULL DEFAULT 'local'"), ("parent_id", "TEXT"), ("retry_parent_id", "TEXT"), ("deferred_retry_at", "TEXT"), ("temporary_retry_attempts", "INTEGER NOT NULL DEFAULT 0"), ("list_name", "TEXT")):
+                for name, kind in (("owner_id", "TEXT"), ("guest_token_hash", "TEXT"), ("worker_id", "TEXT"), ("heartbeat_at", "TEXT"), ("stop_on_deliverable", "INTEGER NOT NULL DEFAULT 0"), ("execution_target", "TEXT NOT NULL DEFAULT 'local'"), ("parent_id", "TEXT"), ("retry_parent_id", "TEXT"), ("deferred_retry_at", "TEXT"), ("temporary_retry_attempts", "INTEGER NOT NULL DEFAULT 0"), ("list_name", "TEXT"), ("is_cache_refresh", "INTEGER NOT NULL DEFAULT 0")):
                     if name not in existing:
                         connection.execute(f"ALTER TABLE jobs ADD COLUMN {name} {kind}")
                 connection.execute("CREATE INDEX IF NOT EXISTS idx_jobs_queue ON jobs(status, created_at)")
@@ -358,7 +374,13 @@ class JobStore:
                         email TEXT PRIMARY KEY,
                         result_json TEXT NOT NULL,
                         expires_at TEXT NOT NULL,
-                        updated_at TEXT NOT NULL
+                        updated_at TEXT NOT NULL,
+                        outcome_class TEXT NOT NULL DEFAULT 'legacy',
+                        verified_at TEXT,
+                        stale_expires_at TEXT,
+                        hit_count INTEGER NOT NULL DEFAULT 0,
+                        last_hit_at TEXT,
+                        refresh_requested_at TEXT
                     )
                     """
                 )
@@ -368,9 +390,62 @@ class JobStore:
                         email TEXT PRIMARY KEY,
                         first_confirmed_at TEXT NOT NULL,
                         last_confirmed_at TEXT NOT NULL,
-                        result_json TEXT NOT NULL
+                        result_json TEXT NOT NULL,
+                        confirmation_count INTEGER NOT NULL DEFAULT 1
                     )
                     """
+                )
+                cache_columns = {
+                    row[1] for row in connection.execute("PRAGMA table_info(verification_cache)")
+                }
+                for name, kind in (
+                    ("outcome_class", "TEXT NOT NULL DEFAULT 'legacy'"),
+                    ("verified_at", "TEXT"), ("stale_expires_at", "TEXT"),
+                    ("hit_count", "INTEGER NOT NULL DEFAULT 0"), ("last_hit_at", "TEXT"),
+                    ("refresh_requested_at", "TEXT"),
+                ):
+                    if name not in cache_columns:
+                        connection.execute(
+                            f"ALTER TABLE verification_cache ADD COLUMN {name} {kind}"
+                        )
+                verified_columns = {
+                    row[1] for row in connection.execute("PRAGMA table_info(verified_emails)")
+                }
+                if "confirmation_count" not in verified_columns:
+                    connection.execute(
+                        "ALTER TABLE verified_emails ADD COLUMN confirmation_count "
+                        "INTEGER NOT NULL DEFAULT 1"
+                    )
+                connection.execute("""
+                    CREATE TABLE IF NOT EXISTS verification_probe_leases (
+                        email TEXT PRIMARY KEY, owner_job_id TEXT NOT NULL,
+                        acquired_at TEXT NOT NULL, expires_at TEXT NOT NULL
+                    )
+                """)
+                connection.execute("""
+                    CREATE TABLE IF NOT EXISTS verification_probe_waiters (
+                        job_id TEXT NOT NULL, result_index INTEGER NOT NULL,
+                        email TEXT NOT NULL, owner_job_id TEXT NOT NULL,
+                        created_at TEXT NOT NULL, expires_at TEXT NOT NULL,
+                        PRIMARY KEY(job_id, result_index)
+                    )
+                """)
+                connection.execute("""
+                    CREATE TABLE IF NOT EXISTS verification_cache_days (
+                        day TEXT PRIMARY KEY, lookups INTEGER NOT NULL DEFAULT 0,
+                        fresh_hits INTEGER NOT NULL DEFAULT 0, misses INTEGER NOT NULL DEFAULT 0,
+                        stale_seen INTEGER NOT NULL DEFAULT 0,
+                        writes_deliverable INTEGER NOT NULL DEFAULT 0,
+                        writes_permanent_invalid INTEGER NOT NULL DEFAULT 0,
+                        writes_mailbox_full INTEGER NOT NULL DEFAULT 0,
+                        coalesced_waiters INTEGER NOT NULL DEFAULT 0,
+                        refresh_scheduled INTEGER NOT NULL DEFAULT 0,
+                        updated_at TEXT NOT NULL
+                    )
+                """)
+                connection.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_verification_probe_waiters_email "
+                    "ON verification_probe_waiters(email)"
                 )
                 connection.execute(
                     """
@@ -908,6 +983,7 @@ class JobStore:
             _sql_ts(job.deferred_retry_at),
             job.temporary_retry_attempts,
             job.list_name,
+            bool(job.is_cache_refresh),
         )
     def _persist_metadata(self, connection: sqlite3.Connection, job: Job) -> None:
         connection.execute(
@@ -916,8 +992,8 @@ class JobStore:
                 id, emails_json, worker_count, status, created_at, started_at, finished_at,
                 error, results_json, csv_path, owner_id, guest_token_hash, worker_id, heartbeat_at,
                 stop_on_deliverable, execution_target, parent_id, retry_parent_id, deferred_retry_at,
-                temporary_retry_attempts, list_name
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                temporary_retry_attempts, list_name, is_cache_refresh
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 emails_json=excluded.emails_json, worker_count=excluded.worker_count,
                 status=excluded.status, started_at=excluded.started_at,
@@ -930,7 +1006,8 @@ class JobStore:
                 retry_parent_id=excluded.retry_parent_id,
                 deferred_retry_at=excluded.deferred_retry_at,
                 temporary_retry_attempts=excluded.temporary_retry_attempts,
-                list_name=excluded.list_name
+                list_name=excluded.list_name,
+                is_cache_refresh=excluded.is_cache_refresh
             WHERE jobs.status != 'stopped' OR excluded.status = 'stopped'
             """,
             self._job_values(job),
@@ -964,8 +1041,18 @@ class JobStore:
             active = connection.execute(
                 """SELECT COUNT(*) FROM jobs
                 WHERE status IN ('queued', 'running')
-                    AND parent_id IS NULL AND retry_parent_id IS NULL"""
+                    AND parent_id IS NULL AND retry_parent_id IS NULL
+                    AND is_cache_refresh = 0"""
             ).fetchone()[0]
+            if job.is_cache_refresh and job.parent_id is None:
+                refresh_active = connection.execute("""
+                    SELECT COUNT(*) FROM jobs
+                    WHERE status IN ('queued', 'running') AND is_cache_refresh = 1
+                        AND parent_id IS NULL
+                """).fetchone()[0]
+                if refresh_active >= settings.verification_cache_refresh_max_queued:
+                    connection.rollback()
+                    raise RuntimeError("Verification cache refresh queue is full")
             if max_active is not None and active >= max_active:
                 connection.rollback()
                 raise RuntimeError("任务队列已满，请等待已有任务完成")
@@ -1590,7 +1677,7 @@ class JobStore:
                 WHERE status = 'queued' AND execution_target = ?
                     {stop_clause}
                     AND (deferred_retry_at IS NULL OR deferred_retry_at <= ?)
-                ORDER BY created_at LIMIT 1""",
+                ORDER BY is_cache_refresh ASC, created_at LIMIT 1""",
                 (execution_target, _sql_ts(now)),
             ).fetchone()
             if row is None:
@@ -1699,13 +1786,21 @@ class JobStore:
                     AND j.stop_on_deliverable = 0
                     AND (j.deferred_retry_at IS NULL OR j.deferred_retry_at <= ?)
                     AND EXISTS (SELECT 1 FROM job_results r WHERE r.job_id=j.id
-                        AND r.progress_state='pending')
-                ORDER BY CASE WHEN j.execution_target=? THEN 0 ELSE 1 END,
+                        AND r.progress_state='pending'
+                        AND NOT EXISTS (
+                            SELECT 1 FROM verification_probe_waiters waiter
+                            WHERE waiter.job_id=r.job_id
+                                AND waiter.result_index=r.original_index
+                                AND waiter.expires_at>?
+                        ))
+                ORDER BY j.is_cache_refresh ASC,
+                    CASE WHEN j.execution_target=? THEN 0 ELSE 1 END,
                     COALESCE(turn.last_claimed_at, {epoch}), j.created_at
                 LIMIT ?
             """, (
                 execution_target,
                 *claim_targets,
+                _sql_ts(now),
                 _sql_ts(now),
                 execution_target,
                 settings.scheduler_claim_scan_limit,
@@ -1750,8 +1845,15 @@ class JobStore:
                 candidate_scan_limit = max(256, candidate_shard_size * 8)
                 pending_rows = connection.execute("""
                     SELECT original_index, email FROM job_results WHERE job_id=?
-                        AND progress_state='pending' ORDER BY original_index LIMIT ?
-                """, (candidate.id, candidate_scan_limit)).fetchall()
+                        AND progress_state='pending'
+                        AND NOT EXISTS (
+                            SELECT 1 FROM verification_probe_waiters waiter
+                            WHERE waiter.job_id=job_results.job_id
+                                AND waiter.result_index=job_results.original_index
+                                AND waiter.expires_at>?
+                        )
+                    ORDER BY original_index LIMIT ?
+                """, (candidate.id, _sql_ts(now), candidate_scan_limit)).fetchall()
                 domains = {
                     self._scheduler_domain(str(email))
                     for _index, email in pending_rows
@@ -2202,6 +2304,7 @@ class JobStore:
                     (_sql_ts(now + timedelta(seconds=settings.worker_lease_seconds)), lease_id),
                 )
                 connection.execute("UPDATE jobs SET heartbeat_at=? WHERE id=?", (_sql_ts(now), job_id))
+                self._renew_probe_leases_in_connection(connection, job_id, now)
         return bool(changed)
 
     def report_lease_results(
@@ -2249,6 +2352,7 @@ class JobStore:
                 (_sql_ts(now + timedelta(seconds=settings.worker_lease_seconds)), lease_id),
             )
             connection.execute("UPDATE jobs SET heartbeat_at=? WHERE id=?", (_sql_ts(now), job_id))
+            self._renew_probe_leases_in_connection(connection, job_id, now)
             connection.commit()
         return True
 
@@ -2392,10 +2496,12 @@ class JobStore:
     def heartbeat(self, job: Job) -> None:
         job.heartbeat_at = utc_now()
         with closing(self._connect()) as connection:
-            connection.execute(
+            changed = connection.execute(
                 "UPDATE jobs SET heartbeat_at = ? WHERE id = ? AND worker_id = ? AND status = 'running'",
                 (_sql_ts(job.heartbeat_at), job.id, job.worker_id),
-            )
+            ).rowcount
+            if changed:
+                self._renew_probe_leases_in_connection(connection, job.id, job.heartbeat_at)
 
     def requeue_stale_jobs(self) -> int:
         """Return expired leases to their original execution-target queue."""
@@ -2979,93 +3085,577 @@ class JobStore:
                 "SELECT COUNT(*) FROM jobs WHERE status = 'queued' AND created_at <= ?", (row[1],)
             ).fetchone()[0]
 
-    def cached_results(self, emails: list[str]) -> dict[str, dict[str, Any]]:
-        self.initialize()
-        now = utc_now().isoformat()
-        found: dict[str, dict[str, Any]] = {}
-        with closing(self._connect()) as connection:
-            for start in range(0, len(emails), 900):
-                batch = [email.lower() for email in emails[start : start + 900]]
-                placeholders = ", ".join("?" for _ in batch)
-                rows = connection.execute(
-                    f"SELECT email, result_json FROM verification_cache WHERE expires_at > ? AND email IN ({placeholders})",
-                    (now, *batch),
-                ).fetchall()
-                for email, result_json in rows:
-                    result = _json_load(result_json)
-                    result["cache_hit"] = True
-                    found[email] = result
-            cutoff = (utc_now() - timedelta(days=settings.verified_email_recheck_days)).isoformat()
-            unresolved = [email.lower() for email in emails if email.lower() not in found]
-            for start in range(0, len(unresolved), 900):
-                batch = unresolved[start : start + 900]
-                if not batch:
-                    continue
-                placeholders = ", ".join("?" for _ in batch)
-                rows = connection.execute(
-                    f"SELECT email, result_json FROM verified_emails WHERE last_confirmed_at > ? AND email IN ({placeholders})",
-                    (cutoff, *batch),
-                ).fetchall()
-                for email, result_json in rows:
-                    result = _json_load(result_json)
-                    result["cache_hit"] = True
-                    result["verified_record"] = True
-                    found[email] = result
-        return found
+    def _record_cache_metrics(self, _connection=None, **counters: int) -> None:
+        """Aggregate telemetry off the request path and flush it in one small write."""
+        values = {
+            name: max(0, int(counters.get(name, 0))) for name in _CACHE_METRIC_NAMES
+        }
+        if not any(values.values()):
+            return
+        day = utc_now().date().isoformat()
+        global _CACHE_METRICS_FLUSHING
+        with _CACHE_METRICS_LOCK:
+            pending = _CACHE_METRICS_PENDING.setdefault(
+                day, {name: 0 for name in _CACHE_METRIC_NAMES},
+            )
+            for name, value in values.items():
+                pending[name] += value
+            if _CACHE_METRICS_FLUSHING:
+                return
+            _CACHE_METRICS_FLUSHING = True
+        threading.Thread(
+            target=self._cache_metrics_flush_loop,
+            name="verification-cache-metrics",
+            daemon=True,
+        ).start()
 
-    def cache_results(self, results: list[dict[str, Any]]) -> None:
+    def _cache_metrics_flush_loop(self) -> None:
+        global _CACHE_METRICS_FLUSHING
+        while True:
+            time.sleep(settings.verification_cache_metrics_flush_seconds)
+            self.flush_cache_metrics()
+            with _CACHE_METRICS_LOCK:
+                if _CACHE_METRICS_PENDING:
+                    continue
+                _CACHE_METRICS_FLUSHING = False
+                return
+
+    def flush_cache_metrics(self) -> bool:
+        """Persist buffered counters; failures are retried without blocking verification."""
+        with _CACHE_METRICS_LOCK:
+            snapshots = {
+                day: dict(values) for day, values in _CACHE_METRICS_PENDING.items()
+            }
+            _CACHE_METRICS_PENDING.clear()
+        if not snapshots:
+            return True
+        try:
+            with closing(self._connect()) as connection:
+                for day, values in snapshots.items():
+                    day_value = datetime.fromisoformat(day).date() if postgres_active() else day
+                    connection.execute(f"""
+                        INSERT INTO verification_cache_days(
+                            day, {', '.join(_CACHE_METRIC_NAMES)}, updated_at
+                        ) VALUES (?, {', '.join('?' for _ in _CACHE_METRIC_NAMES)}, ?)
+                        ON CONFLICT(day) DO UPDATE SET
+                            {', '.join(f'{name}={name}+excluded.{name}' for name in _CACHE_METRIC_NAMES)},
+                            updated_at=excluded.updated_at
+                    """, (
+                        day_value, *(values[name] for name in _CACHE_METRIC_NAMES),
+                        _sql_ts(utc_now()),
+                    ))
+        except Exception:  # noqa: BLE001 - telemetry must not fail verification
+            with _CACHE_METRICS_LOCK:
+                for day, values in snapshots.items():
+                    pending = _CACHE_METRICS_PENDING.setdefault(
+                        day, {name: 0 for name in _CACHE_METRIC_NAMES},
+                    )
+                    for name, value in values.items():
+                        pending[name] += value
+            return False
+        return True
+
+    @staticmethod
+    def _cache_policy_kwargs() -> dict[str, int]:
+        return {
+            "deliverable_first_days": settings.verification_cache_deliverable_first_days,
+            "deliverable_repeat_days": settings.verification_cache_deliverable_repeat_days,
+            "deliverable_stable_days": settings.verification_cache_deliverable_stable_days,
+            "permanent_days": settings.verification_cache_permanent_days,
+            "mailbox_full_hours": settings.verification_cache_mailbox_full_hours,
+            "stale_days": settings.verification_cache_stale_days,
+        }
+
+    def cached_results(
+        self, emails: list[str], *, claim_refresh: bool = False,
+    ) -> dict[str, dict[str, Any]]:
         self.initialize()
         now = utc_now()
-        rows: list[tuple[str, str, str, str]] = []
-        verified_rows: list[tuple[str, str, str, str]] = []
-        for result in results:
-            checks = result.get("checks") or {}
-            detail = str(result.get("smtp_result") or "")
-            cacheable = result.get("deliverable") is True
-            cacheable = cacheable or (
-                result.get("deliverable") is False
-                and ("RCPT TO" in detail or "邮箱不存在" in detail)
-            )
-            if cacheable and result.get("email"):
-                rows.append(
-                    (
-                        str(result["email"]).lower(),
-                        json.dumps(result, ensure_ascii=False, default=str),
-                        (now + timedelta(hours=settings.verification_cache_hours)).isoformat(),
-                        _sql_ts(now),
-                    )
-                )
-            if result.get("deliverable") is True and result.get("email"):
-                verified_rows.append(
-                    (
-                        str(result["email"]).lower(),
-                        _sql_ts(now),
-                        _sql_ts(now),
-                        json.dumps(result, ensure_ascii=False, default=str),
-                    )
-                )
-        if not rows and not verified_rows:
-            return
+        keys = list(dict.fromkeys(
+            str(email).strip().lower() for email in emails if str(email).strip()
+        ))
+        found: dict[str, dict[str, Any]] = {}
+        stale_seen = 0
+        refresh_candidates: list[tuple[datetime, str]] = []
         with closing(self._connect()) as connection:
-            if rows:
-                connection.executemany(
-                    """
-                    INSERT INTO verification_cache(email, result_json, expires_at, updated_at) VALUES (?, ?, ?, ?)
-                    ON CONFLICT(email) DO UPDATE SET result_json=excluded.result_json,
-                        expires_at=excluded.expires_at, updated_at=excluded.updated_at
-                    """,
-                    rows,
-                )
+            for start in range(0, len(keys), 800):
+                batch = keys[start : start + 800]
+                placeholders = ", ".join("?" for _ in batch)
+                rows = connection.execute(f"""
+                    SELECT email, result_json, expires_at, updated_at, outcome_class,
+                        verified_at, stale_expires_at, hit_count, refresh_requested_at
+                    FROM verification_cache WHERE email IN ({placeholders})
+                        AND outcome_class IN ('deliverable', 'permanent_invalid', 'mailbox_full')
+                """, tuple(batch)).fetchall()
+                fresh_keys: list[str] = []
+                for row in rows:
+                    email = str(row[0]).lower()
+                    expires_at = _dt(row[2])
+                    stale_expires_at = _dt(row[6])
+                    if expires_at is None or expires_at <= now:
+                        if stale_expires_at is not None and stale_expires_at > now:
+                            stale_seen += 1
+                        continue
+                    result = dict(_json_load(row[1], default={}) or {})
+                    verified_at = _dt(row[5]) or _dt(row[3]) or now
+                    result.update({
+                        "cache_hit": True,
+                        "cache_age_seconds": max(0, round((now - verified_at).total_seconds())),
+                        "cache_outcome": str(row[4] or "legacy"),
+                        "progress_state": "completed",
+                    })
+                    found[email] = result
+                    fresh_keys.append(email)
+                    if (
+                        claim_refresh
+                        and str(row[4] or "") == "deliverable"
+                        and expires_at <= now + timedelta(
+                            hours=settings.verification_cache_refresh_ahead_hours
+                        )
+                        and int(row[7] or 0) + 1 >= settings.verification_cache_refresh_min_hits
+                    ):
+                        requested_at = _dt(row[8])
+                        if requested_at is None or requested_at <= now - timedelta(
+                            hours=settings.verification_cache_refresh_cooldown_hours
+                        ):
+                            refresh_candidates.append((expires_at, email))
+                if fresh_keys:
+                    fresh_placeholders = ", ".join("?" for _ in fresh_keys)
+                    connection.execute(f"""
+                        UPDATE verification_cache
+                        SET hit_count=hit_count+1, last_hit_at=?
+                        WHERE email IN ({fresh_placeholders})
+                    """, (_sql_ts(now), *fresh_keys))
+
+            refresh_due: set[str] = set()
+            refresh_limit = settings.verification_cache_refresh_max_per_request
+            for _expires_at, email in sorted(refresh_candidates)[:refresh_limit]:
+                changed = connection.execute("""
+                    UPDATE verification_cache SET refresh_requested_at=?
+                    WHERE email=? AND expires_at>? AND outcome_class='deliverable'
+                        AND hit_count>=?
+                        AND (refresh_requested_at IS NULL OR refresh_requested_at<=?)
+                """, (
+                    _sql_ts(now), email, _sql_ts(now),
+                    settings.verification_cache_refresh_min_hits,
+                    _sql_ts(now - timedelta(
+                        hours=settings.verification_cache_refresh_cooldown_hours
+                    )),
+                )).rowcount
+                if changed:
+                    refresh_due.add(email)
+            for email in refresh_due:
+                found[email]["_cache_refresh_due"] = True
+            self._record_cache_metrics(
+                connection,
+                lookups=len(keys), fresh_hits=len(found), misses=max(0, len(keys) - len(found)),
+                stale_seen=stale_seen, refresh_scheduled=len(refresh_due),
+            )
+        return found
+
+    def cache_results(
+        self, results: list[dict[str, Any]], *, owner_job_id: str | None = None,
+    ) -> list[str]:
+        self.initialize()
+        now = utc_now()
+        by_email = {
+            str(result.get("email") or "").strip().lower(): dict(result)
+            for result in results
+            if str(result.get("email") or "").strip() and not result.get("cache_hit")
+        }
+        deliverable_keys = [
+            email for email, result in by_email.items()
+            if result.get("deliverable") is True and not is_cache_excluded(result)
+        ]
+        history: dict[str, tuple[datetime, datetime, int]] = {}
+        with closing(self._connect()) as connection:
+            for start in range(0, len(deliverable_keys), 800):
+                batch = deliverable_keys[start : start + 800]
+                placeholders = ", ".join("?" for _ in batch)
+                for email, first, last, count in connection.execute(f"""
+                    SELECT email, first_confirmed_at, last_confirmed_at, confirmation_count
+                    FROM verified_emails WHERE email IN ({placeholders})
+                """, tuple(batch)).fetchall():
+                    history[str(email)] = (_dt(first) or now, _dt(last) or now, int(count or 1))
+
+        cache_rows = []
+        verified_rows = []
+        decisions: dict[str, str] = {}
+        payloads: dict[str, dict[str, Any]] = {}
+        for email, raw_result in by_email.items():
+            payload = sanitize_cached_result(raw_result)
+            prior = history.get(email)
+            first = prior[0] if prior else now
+            last = prior[1] if prior else None
+            confirmation_count = prior[2] if prior else 0
+            if raw_result.get("deliverable") is True and not is_cache_excluded(raw_result):
+                if last is None or now - last >= timedelta(hours=1):
+                    confirmation_count += 1
+                verified_rows.append((
+                    email, _sql_ts(first), _sql_ts(now),
+                    json.dumps(payload, ensure_ascii=False, default=str), confirmation_count,
+                ))
+            decision = cache_decision(
+                raw_result,
+                confirmation_count=confirmation_count,
+                first_confirmed_at=first,
+                now=now,
+                **self._cache_policy_kwargs(),
+            )
+            if decision is None:
+                continue
+            decisions[email] = decision.outcome_class
+            payloads[email] = payload
+            cache_rows.append((
+                email, json.dumps(payload, ensure_ascii=False, default=str),
+                _sql_ts(now + decision.fresh_for), _sql_ts(now), decision.outcome_class,
+                _sql_ts(now), _sql_ts(now + decision.stale_for),
+            ))
+
+        affected_jobs: set[str] = set()
+        with closing(self._connect()) as connection:
             if verified_rows:
-                connection.executemany(
-                    """
-                    INSERT INTO verified_emails(email, first_confirmed_at, last_confirmed_at, result_json)
-                    VALUES (?, ?, ?, ?)
-                    ON CONFLICT(email) DO UPDATE SET last_confirmed_at=excluded.last_confirmed_at,
-                        result_json=excluded.result_json
-                    """,
-                    verified_rows,
-                )
+                maximum = "GREATEST" if postgres_active() else "MAX"
+                connection.executemany(f"""
+                    INSERT INTO verified_emails(
+                        email, first_confirmed_at, last_confirmed_at, result_json,
+                        confirmation_count
+                    ) VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(email) DO UPDATE SET
+                        last_confirmed_at=excluded.last_confirmed_at,
+                        result_json=excluded.result_json,
+                        confirmation_count={maximum}(
+                            verified_emails.confirmation_count, excluded.confirmation_count
+                        )
+                """, verified_rows)
+            if cache_rows:
+                connection.executemany("""
+                    INSERT INTO verification_cache(
+                        email, result_json, expires_at, updated_at, outcome_class,
+                        verified_at, stale_expires_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(email) DO UPDATE SET
+                        result_json=excluded.result_json, expires_at=excluded.expires_at,
+                        updated_at=excluded.updated_at, outcome_class=excluded.outcome_class,
+                        verified_at=excluded.verified_at,
+                        stale_expires_at=excluded.stale_expires_at,
+                        refresh_requested_at=NULL
+                """, cache_rows)
+                for email, payload in payloads.items():
+                    if owner_job_id is None:
+                        continue
+                    owns_probe = connection.execute("""
+                        SELECT 1 FROM verification_probe_leases
+                        WHERE email=? AND owner_job_id=? AND expires_at>?
+                    """, (email, owner_job_id, _sql_ts(now))).fetchone()
+                    if owns_probe is None:
+                        continue
+                    waiters = connection.execute("""
+                        SELECT job_id, result_index FROM verification_probe_waiters
+                        WHERE email=? AND owner_job_id=? AND expires_at>?
+                    """, (email, owner_job_id, _sql_ts(now))).fetchall()
+                    for job_id, result_index in waiters:
+                        shared = dict(payload)
+                        shared.update({
+                            "email": email, "original_index": int(result_index),
+                            "progress_state": "completed", "cache_hit": True,
+                            "cache_age_seconds": 0, "cache_outcome": decisions[email],
+                        })
+                        self._upsert_results(connection, str(job_id), [shared])
+                        affected_jobs.add(str(job_id))
+                    connection.execute(
+                        "DELETE FROM verification_probe_waiters WHERE email=? AND owner_job_id=?",
+                        (email, owner_job_id),
+                    )
+                    connection.execute(
+                        "DELETE FROM verification_probe_leases WHERE email=? AND owner_job_id=?",
+                        (email, owner_job_id),
+                    )
+            self._record_cache_metrics(
+                connection,
+                writes_deliverable=sum(value == "deliverable" for value in decisions.values()),
+                writes_permanent_invalid=sum(
+                    value == "permanent_invalid" for value in decisions.values()
+                ),
+                writes_mailbox_full=sum(
+                    value == "mailbox_full" for value in decisions.values()
+                ),
+            )
+        return sorted(affected_jobs)
+
+    def register_probe_candidates(
+        self, job_id: str, results: list[dict[str, Any]],
+    ) -> dict[str, int]:
+        pending = [
+            (int(result.get("original_index", index)), str(result.get("email") or "").lower())
+            for index, result in enumerate(results)
+            if result.get("progress_state") == "pending" and result.get("email")
+        ]
+        if not pending:
+            return {"owned": 0, "waiting": 0}
+        now = utc_now()
+        expires = now + timedelta(seconds=settings.verification_probe_lease_seconds)
+        owned: set[str] = set()
+        waiting = 0
+        with self._lock, closing(self._connect()) as connection:
+            begin_immediate(connection)
+            connection.execute(
+                "DELETE FROM verification_probe_waiters WHERE expires_at<=?",
+                (_sql_ts(now),),
+            )
+            connection.execute(
+                "DELETE FROM verification_probe_leases WHERE expires_at<=?",
+                (_sql_ts(now),),
+            )
+            for start in range(0, len(pending), 200):
+                batch = pending[start : start + 200]
+                values = ", ".join("(?, ?, ?, ?)" for _ in batch)
+                parameters: list[Any] = []
+                for _index, email in batch:
+                    parameters.extend((email, job_id, _sql_ts(now), _sql_ts(expires)))
+                rows = connection.execute(f"""
+                    INSERT INTO verification_probe_leases(
+                        email, owner_job_id, acquired_at, expires_at
+                    ) VALUES {values}
+                    ON CONFLICT(email) DO UPDATE SET
+                        owner_job_id=excluded.owner_job_id,
+                        acquired_at=excluded.acquired_at,
+                        expires_at=excluded.expires_at
+                    WHERE verification_probe_leases.expires_at<=?
+                    RETURNING email
+                """, (*parameters, _sql_ts(now))).fetchall()
+                owned.update(str(row[0]) for row in rows)
+            for result_index, email in pending:
+                if email in owned:
+                    continue
+                lease = connection.execute("""
+                    SELECT owner_job_id, expires_at FROM verification_probe_leases
+                    WHERE email=? AND expires_at>?
+                """, (email, _sql_ts(now))).fetchone()
+                if lease is None or str(lease[0]) == job_id:
+                    continue
+                connection.execute("""
+                    INSERT INTO verification_probe_waiters(
+                        job_id, result_index, email, owner_job_id, created_at, expires_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(job_id, result_index) DO UPDATE SET
+                        email=excluded.email, owner_job_id=excluded.owner_job_id,
+                        created_at=excluded.created_at, expires_at=excluded.expires_at
+                """, (
+                    job_id, result_index, email, str(lease[0]),
+                    _sql_ts(now), lease[1],
+                ))
+                waiting += 1
+            self._record_cache_metrics(connection, coalesced_waiters=waiting)
+            connection.commit()
+        return {"owned": len(owned), "waiting": waiting}
+
+    @staticmethod
+    def _renew_probe_leases_in_connection(
+        connection, owner_job_id: str, now: datetime,
+    ) -> int:
+        expires = _sql_ts(
+            now + timedelta(seconds=settings.verification_probe_lease_seconds)
+        )
+        changed = connection.execute("""
+            UPDATE verification_probe_leases SET expires_at=?
+            WHERE owner_job_id=? AND expires_at>?
+        """, (expires, owner_job_id, _sql_ts(now))).rowcount
+        if changed:
+            connection.execute("""
+                UPDATE verification_probe_waiters SET expires_at=?
+                WHERE owner_job_id=? AND expires_at>?
+            """, (expires, owner_job_id, _sql_ts(now)))
+        return int(changed or 0)
+
+    def renew_probe_leases(self, owner_job_id: str) -> int:
+        now = utc_now()
+        with closing(self._connect()) as connection:
+            return self._renew_probe_leases_in_connection(connection, owner_job_id, now)
+
+    def complete_probe_leases(
+        self, owner_job_id: str, results: list[dict[str, Any]],
+    ) -> list[str]:
+        emails = list(dict.fromkeys(
+            str(result.get("email") or "").lower()
+            for result in results if result.get("email")
+        ))
+        if not emails:
+            return []
+        resumed: set[str] = set()
+        with self._lock, closing(self._connect()) as connection:
+            begin_immediate(connection)
+            for start in range(0, len(emails), 800):
+                batch = emails[start : start + 800]
+                placeholders = ", ".join("?" for _ in batch)
+                rows = connection.execute(f"""
+                    SELECT DISTINCT job_id FROM verification_probe_waiters
+                    WHERE owner_job_id=? AND email IN ({placeholders})
+                """, (owner_job_id, *batch)).fetchall()
+                resumed.update(str(row[0]) for row in rows)
+                connection.execute(f"""
+                    DELETE FROM verification_probe_waiters
+                    WHERE owner_job_id=? AND email IN ({placeholders})
+                """, (owner_job_id, *batch))
+                connection.execute(f"""
+                    DELETE FROM verification_probe_leases
+                    WHERE owner_job_id=? AND email IN ({placeholders})
+                """, (owner_job_id, *batch))
+            connection.commit()
+        return sorted(resumed)
+
+    def lease_indices(self, job_id: str, worker_id: str, lease_id: str) -> list[int]:
+        """Return the immutable result slots covered by one worker lease."""
+        with closing(self._connect()) as connection:
+            row = connection.execute("""
+                SELECT indices_json FROM job_leases
+                WHERE id=? AND job_id=? AND worker_id=?
+            """, (lease_id, job_id, worker_id)).fetchone()
+        if row is None:
+            return []
+        try:
+            return [int(index) for index in (_json_load(row[0]) or [])]
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return []
+
+    def lease_emails(self, job_id: str, worker_id: str, lease_id: str) -> list[str]:
+        """Return the addresses covered by one worker lease without hydrating the job."""
+        indices = self.lease_indices(job_id, worker_id, lease_id)
+        if not indices:
+            return []
+        with closing(self._connect()) as connection:
+            placeholders = ", ".join("?" for _ in indices)
+            rows = connection.execute(f"""
+                SELECT email FROM job_results WHERE job_id=?
+                    AND original_index IN ({placeholders})
+            """, (job_id, *indices)).fetchall()
+        return [str(item[0]).lower() for item in rows]
+
+    def release_probe_leases(
+        self, owner_job_id: str, emails: list[str] | None = None,
+    ) -> list[str]:
+        """Release an owner's probes so waiting tasks can be scheduled immediately."""
+        keys = list(dict.fromkeys(
+            str(email).strip().lower() for email in (emails or []) if str(email).strip()
+        ))
+        email_clause = ""
+        parameters: tuple[Any, ...] = (owner_job_id,)
+        if emails is not None:
+            if not keys:
+                return []
+            email_clause = f" AND email IN ({', '.join('?' for _ in keys)})"
+            parameters += tuple(keys)
+        resumed: set[str] = set()
+        with self._lock, closing(self._connect()) as connection:
+            begin_immediate(connection)
+            rows = connection.execute(f"""
+                SELECT DISTINCT job_id FROM verification_probe_waiters
+                WHERE owner_job_id=?{email_clause}
+            """, parameters).fetchall()
+            resumed.update(str(row[0]) for row in rows)
+            connection.execute(
+                f"DELETE FROM verification_probe_waiters WHERE owner_job_id=?{email_clause}",
+                parameters,
+            )
+            connection.execute(
+                f"DELETE FROM verification_probe_leases WHERE owner_job_id=?{email_clause}",
+                parameters,
+            )
+            connection.commit()
+        return sorted(resumed)
+
+    def probe_job_ids(self, job_id: str) -> list[str]:
+        """Return a visible task and any internal children that can own probes."""
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                "SELECT id FROM jobs WHERE id=? OR parent_id=?",
+                (job_id, job_id),
+            ).fetchall()
+        return [str(row[0]) for row in rows]
+
+    def cancel_probe_jobs(self, job_ids: list[str]) -> list[str]:
+        """Remove stopped tasks as owners and waiters, returning dependants to wake."""
+        keys = list(dict.fromkeys(str(job_id) for job_id in job_ids if job_id))
+        if not keys:
+            return []
+        placeholders = ", ".join("?" for _ in keys)
+        resumed: set[str] = set()
+        with self._lock, closing(self._connect()) as connection:
+            begin_immediate(connection)
+            rows = connection.execute(f"""
+                SELECT DISTINCT job_id FROM verification_probe_waiters
+                WHERE owner_job_id IN ({placeholders})
+                    AND job_id NOT IN ({placeholders})
+            """, (*keys, *keys)).fetchall()
+            resumed.update(str(row[0]) for row in rows)
+            connection.execute(f"""
+                DELETE FROM verification_probe_waiters
+                WHERE owner_job_id IN ({placeholders}) OR job_id IN ({placeholders})
+            """, (*keys, *keys))
+            connection.execute(f"""
+                DELETE FROM verification_probe_leases
+                WHERE owner_job_id IN ({placeholders})
+            """, tuple(keys))
+            connection.commit()
+        return sorted(resumed)
+
+    def release_expired_probe_waiters(self) -> list[str]:
+        now = _sql_ts(utc_now())
+        resumed: set[str] = set()
+        with self._lock, closing(self._connect()) as connection:
+            begin_immediate(connection)
+            rows = connection.execute("""
+                SELECT DISTINCT job_id FROM verification_probe_waiters WHERE expires_at<=?
+            """, (now,)).fetchall()
+            resumed.update(str(row[0]) for row in rows)
+            connection.execute(
+                "DELETE FROM verification_probe_waiters WHERE expires_at<=?", (now,)
+            )
+            connection.execute(
+                "DELETE FROM verification_probe_leases WHERE expires_at<=?", (now,)
+            )
+            connection.commit()
+        return sorted(resumed)
+
+    def cache_report(self, days: int = 7) -> dict[str, Any]:
+        self.flush_cache_metrics()
+        days = max(1, min(30, int(days)))
+        cutoff_date = utc_now().date() - timedelta(days=days - 1)
+        cutoff = cutoff_date if postgres_active() else cutoff_date.isoformat()
+        with closing(self._connect()) as connection:
+            rows = connection.execute(f"""
+                SELECT day, {', '.join(_CACHE_METRIC_NAMES)} FROM verification_cache_days
+                WHERE day>=? ORDER BY day
+            """, (cutoff,)).fetchall()
+            current = connection.execute("""
+                SELECT COUNT(*),
+                    COALESCE(SUM(CASE WHEN expires_at>? THEN 1 ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN outcome_class='deliverable' THEN 1 ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN outcome_class='permanent_invalid' THEN 1 ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN outcome_class='mailbox_full' THEN 1 ELSE 0 END), 0)
+                FROM verification_cache
+                WHERE COALESCE(stale_expires_at, expires_at)>?
+            """, (_sql_ts(utc_now()), _sql_ts(utc_now()))).fetchone()
+        totals = {name: 0 for name in _CACHE_METRIC_NAMES}
+        daily = []
+        for row in rows:
+            item = {"day": str(row[0])}
+            for index, name in enumerate(_CACHE_METRIC_NAMES, start=1):
+                item[name] = int(row[index] or 0)
+                totals[name] += item[name]
+            daily.append(item)
+        totals["hit_rate"] = round(
+            totals["fresh_hits"] / totals["lookups"] * 100, 2
+        ) if totals["lookups"] else 0.0
+        return {
+            "days": days, "daily": daily, "totals": totals,
+            "current": {
+                "retained": int(current[0] or 0), "fresh": int(current[1] or 0),
+                "deliverable": int(current[2] or 0),
+                "permanent_invalid": int(current[3] or 0),
+                "mailbox_full": int(current[4] or 0),
+            },
+        }
 
     def record_catch_all(self, job: Job) -> None:
         rows = []

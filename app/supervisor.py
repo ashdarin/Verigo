@@ -10,7 +10,7 @@ from app.core.cloudshell_lifecycle import GMAIL_TARGET, start_cloudshell_lifecyc
 from app.core.worker_lifecycle import DOMESTIC_CLOUDSTUDIO_TARGET, worker_lifecycle
 from app.config import settings
 from app.db.jobs import job_store
-from app.tasks.verification import reconcile_orphaned_background_retries
+from app.tasks.verification import notify_probe_waiter_jobs, reconcile_orphaned_background_retries
 
 
 stop_event = threading.Event()
@@ -32,6 +32,8 @@ def main() -> None:
             # the next pass rather than terminating the supervisor.
             try:
                 job_store.reconcile_worker_nodes()
+                resumed_probe_jobs = job_store.release_expired_probe_waiters()
+                notify_probe_waiter_jobs(resumed_probe_jobs)
                 for target, label in (
                     (DOMESTIC_CLOUDSTUDIO_TARGET, "Cloud Studio"),
                     ("codearts", "CodeArts"),

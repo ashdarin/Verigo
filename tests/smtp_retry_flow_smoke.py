@@ -23,8 +23,12 @@ class FakeStore:
     def persist(self, job: Job) -> None:
         assert job.id == self.parent.id
 
-    def cache_results(self, results: list[dict]) -> None:
+    def cache_results(self, results: list[dict], *, owner_job_id: str | None = None) -> list[str]:
         self.cached = results
+        return []
+
+    def complete_probe_leases(self, owner_job_id: str, results: list[dict]) -> list[str]:
+        return []
 
     def upsert_results(self, job_id: str, results: list[dict]) -> None:
         assert job_id == self.parent.id

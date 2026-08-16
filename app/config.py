@@ -507,8 +507,45 @@ class Settings:
     disposable_lookup_failure_cache_seconds: int = min(
         3600, max(1, int(os.getenv("VERIGO_DISPOSABLE_LOOKUP_FAILURE_CACHE_SECONDS", "300")))
     )
-    verification_cache_hours: int = int(os.getenv("VERIGO_VERIFICATION_CACHE_HOURS", "24"))
-    verified_email_recheck_days: int = int(os.getenv("VERIGO_VERIFIED_EMAIL_RECHECK_DAYS", "30"))
+    verification_cache_deliverable_first_days: int = min(
+        30, max(1, int(os.getenv("VERIGO_CACHE_DELIVERABLE_FIRST_DAYS", "7")))
+    )
+    verification_cache_deliverable_repeat_days: int = min(
+        45, max(1, int(os.getenv("VERIGO_CACHE_DELIVERABLE_REPEAT_DAYS", "14")))
+    )
+    verification_cache_deliverable_stable_days: int = min(
+        60, max(1, int(os.getenv("VERIGO_CACHE_DELIVERABLE_STABLE_DAYS", "30")))
+    )
+    verification_cache_permanent_days: int = min(
+        14, max(1, int(os.getenv("VERIGO_CACHE_PERMANENT_DAYS", "3")))
+    )
+    verification_cache_mailbox_full_hours: int = min(
+        24, max(1, int(os.getenv("VERIGO_CACHE_MAILBOX_FULL_HOURS", "2")))
+    )
+    verification_cache_stale_days: int = min(
+        180, max(30, int(os.getenv("VERIGO_CACHE_STALE_DAYS", "90")))
+    )
+    verification_cache_refresh_ahead_hours: int = min(
+        72, max(1, int(os.getenv("VERIGO_CACHE_REFRESH_AHEAD_HOURS", "24")))
+    )
+    verification_cache_refresh_min_hits: int = min(
+        100, max(2, int(os.getenv("VERIGO_CACHE_REFRESH_MIN_HITS", "3")))
+    )
+    verification_cache_refresh_cooldown_hours: int = min(
+        168, max(1, int(os.getenv("VERIGO_CACHE_REFRESH_COOLDOWN_HOURS", "24")))
+    )
+    verification_cache_refresh_max_per_request: int = min(
+        50, max(0, int(os.getenv("VERIGO_CACHE_REFRESH_MAX_PER_REQUEST", "10")))
+    )
+    verification_cache_refresh_max_queued: int = min(
+        1000, max(10, int(os.getenv("VERIGO_CACHE_REFRESH_MAX_QUEUED", "100")))
+    )
+    verification_probe_lease_seconds: int = min(
+        600, max(60, int(os.getenv("VERIGO_VERIFICATION_PROBE_LEASE_SECONDS", "180")))
+    )
+    verification_cache_metrics_flush_seconds: int = min(
+        60, max(1, int(os.getenv("VERIGO_CACHE_METRICS_FLUSH_SECONDS", "5")))
+    )
     mail_host: str = os.getenv("VERIGO_MAIL_HOST", "")
     mail_port: int = int(os.getenv("VERIGO_MAIL_PORT", "587"))
     mail_username: str = os.getenv("VERIGO_MAIL_USERNAME", "")

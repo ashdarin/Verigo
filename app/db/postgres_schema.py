@@ -458,6 +458,7 @@ TABLES["jobs"] = TableDef(
         _c("retry_parent_id", "text", True),
         _c("enrich_profiles", "bigint", False, "0"),
         _c("list_name", "text", True),
+        _c("is_cache_refresh", "boolean", False, "false"),
     ),
     primary_key=("id",),
     indexes=(
@@ -1018,8 +1019,18 @@ TABLES["verification_cache"] = TableDef(
         _c("result_json", "jsonb", False),
         _c("expires_at", "timestamptz", False),
         _c("updated_at", "timestamptz", False),
+        _c("outcome_class", "text", False, "'legacy'"),
+        _c("verified_at", "timestamptz", True),
+        _c("stale_expires_at", "timestamptz", True),
+        _c("hit_count", "bigint", False, "0"),
+        _c("last_hit_at", "timestamptz", True),
+        _c("refresh_requested_at", "timestamptz", True),
     ),
     primary_key=("email",),
+    indexes=(
+        IndexDef("idx_verification_cache_stale", ("stale_expires_at",), partial=False),
+        IndexDef("idx_verification_cache_refresh", ("expires_at", "hit_count",), partial=False),
+    ),
 )
 
 TABLES["verified_emails"] = TableDef(
@@ -1029,8 +1040,56 @@ TABLES["verified_emails"] = TableDef(
         _c("first_confirmed_at", "timestamptz", False),
         _c("last_confirmed_at", "timestamptz", False),
         _c("result_json", "jsonb", False),
+        _c("confirmation_count", "bigint", False, "1"),
     ),
     primary_key=("email",),
+)
+
+TABLES["verification_probe_leases"] = TableDef(
+    name="verification_probe_leases",
+    columns=(
+        _c("email", "text", False),
+        _c("owner_job_id", "text", False),
+        _c("acquired_at", "timestamptz", False),
+        _c("expires_at", "timestamptz", False),
+    ),
+    primary_key=("email",),
+    indexes=(IndexDef("idx_verification_probe_leases_expiry", ("expires_at",), partial=False),),
+)
+
+TABLES["verification_probe_waiters"] = TableDef(
+    name="verification_probe_waiters",
+    columns=(
+        _c("job_id", "text", False),
+        _c("result_index", "bigint", False),
+        _c("email", "text", False),
+        _c("owner_job_id", "text", False),
+        _c("created_at", "timestamptz", False),
+        _c("expires_at", "timestamptz", False),
+    ),
+    primary_key=("job_id", "result_index",),
+    indexes=(
+        IndexDef("idx_verification_probe_waiters_email", ("email",), partial=False),
+        IndexDef("idx_verification_probe_waiters_expiry", ("expires_at",), partial=False),
+    ),
+)
+
+TABLES["verification_cache_days"] = TableDef(
+    name="verification_cache_days",
+    columns=(
+        _c("day", "date", False),
+        _c("lookups", "bigint", False, "0"),
+        _c("fresh_hits", "bigint", False, "0"),
+        _c("misses", "bigint", False, "0"),
+        _c("stale_seen", "bigint", False, "0"),
+        _c("writes_deliverable", "bigint", False, "0"),
+        _c("writes_permanent_invalid", "bigint", False, "0"),
+        _c("writes_mailbox_full", "bigint", False, "0"),
+        _c("coalesced_waiters", "bigint", False, "0"),
+        _c("refresh_scheduled", "bigint", False, "0"),
+        _c("updated_at", "timestamptz", False),
+    ),
+    primary_key=("day",),
 )
 
 TABLES["worker_heartbeats"] = TableDef(
@@ -1093,6 +1152,9 @@ CORE_JOBSTORE_TABLES: tuple[str, ...] = (
     "scheduler_domain_routes",
     "verification_cache",
     "verified_emails",
+    "verification_probe_leases",
+    "verification_probe_waiters",
+    "verification_cache_days",
     "catch_all_emails",
     "cloudshell_account_usage",
     "cloudshell_claim_reservations",

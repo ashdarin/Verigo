@@ -238,8 +238,9 @@ class VerificationTasks:
         execution_target: str = "local",
         immediate_results: list[dict[str, Any]] | None = None,
         list_name: str | None = None,
+        is_cache_refresh: bool = False,
     ) -> Job:
-        guest_token = None if owner_id else secrets.token_urlsafe(32)
+        guest_token = None if owner_id or is_cache_refresh else secrets.token_urlsafe(32)
         job = Job(
             id=job_id or uuid.uuid4().hex[:12],
             emails=clean_emails(emails),
@@ -250,20 +251,39 @@ class VerificationTasks:
             stop_on_deliverable=stop_on_deliverable,
             execution_target=execution_target,
             list_name=list_name,
+            is_cache_refresh=is_cache_refresh,
         )
         job.results = [waiting_result(email, index) for index, email in enumerate(job.emails)]
         if immediate_results is not None:
-            job.results = immediate_results
-            job.status = "completed"
-            job.started_at = utc_now()
-            job.finished_at = job.started_at
+            by_email = {
+                str(result.get("email") or "").lower(): dict(result)
+                for result in immediate_results if result.get("email")
+            }
+            job.results = []
+            for index, email in enumerate(job.emails):
+                result = dict(by_email.get(email.lower(), waiting_result(email, index)))
+                result["email"] = email
+                result["original_index"] = index
+                if result.get("progress_state") not in {"pending", "verifying"}:
+                    result["progress_state"] = "completed"
+                job.results.append(result)
+            if all(
+                result.get("progress_state") not in {"pending", "verifying"}
+                for result in job.results
+            ):
+                job.status = "completed"
+                job.started_at = utc_now()
+                job.finished_at = job.started_at
         job_store.add(job, max_active=settings.max_pending_jobs)
-        if immediate_results is not None:
-            job_store.cache_results(job.results)
+        if job.status == "completed":
             job_store.record_catch_all(job)
-            write_csv(job)
-            job_store.persist(job)
-            publish_completed_result_objects(job)
+            if not job.is_cache_refresh:
+                write_csv(job)
+                job_store.persist(job)
+                publish_completed_result_objects(job)
+            return job
+        probe_status = job_store.register_probe_candidates(job.id, job.results)
+        if not probe_status["owned"]:
             return job
         if execution_target == TENCENT_QQ_TARGET:
             worker_lifecycle.notify_job_queued()
@@ -282,6 +302,7 @@ class VerificationTasks:
         job_id: str | None = None,
         immediate_results_by_target: dict[str, list[dict[str, Any]]] | None = None,
         list_name: str | None = None,
+        is_cache_refresh: bool = False,
     ) -> Job:
         """Create one visible task and target-specific internal child jobs."""
         all_emails = clean_emails(emails)
@@ -306,10 +327,11 @@ class VerificationTasks:
             status="running",
             started_at=utc_now(),
             owner_id=owner_id,
-            guest_token=None if owner_id else secrets.token_urlsafe(32),
+            guest_token=None if owner_id or is_cache_refresh else secrets.token_urlsafe(32),
             stop_on_deliverable=False,
             execution_target="aggregate",
             list_name=list_name,
+            is_cache_refresh=is_cache_refresh,
         )
         parent.guest_token_hash = (
             token_hash(parent.guest_token) if parent.guest_token else None
@@ -331,6 +353,7 @@ class VerificationTasks:
                 execution_target=target,
                 parent_id=parent.id,
                 list_name=list_name,
+                is_cache_refresh=is_cache_refresh,
             )
             child.results = [
                 waiting_result(email, index) for index, email in enumerate(child.emails)
@@ -355,15 +378,22 @@ class VerificationTasks:
                     result["email"] = email
                     result["original_index"] = index
                     child.results.append(result)
-                child.status = "completed"
-                child.started_at = utc_now()
-                child.finished_at = child.started_at
+                if all(
+                    result.get("progress_state") not in {"pending", "verifying"}
+                    for result in child.results
+                ):
+                    child.status = "completed"
+                    child.started_at = utc_now()
+                    child.finished_at = child.started_at
             job_store.add(child)
             job_store.link_child_results(child.id, parent.id, parent_indices)
             if immediate_results is not None:
                 # The initial write happened before the link existed.
                 job_store.upsert_results(child.id, child.results)
-            if immediate_results is not None:
+            if child.status == "completed":
+                continue
+            probe_status = job_store.register_probe_candidates(child.id, child.results)
+            if not probe_status["owned"]:
                 continue
             if target == TENCENT_QQ_TARGET:
                 worker_lifecycle.notify_job_queued()
@@ -373,7 +403,10 @@ class VerificationTasks:
                 notify_cloudshell_job_queued()
         job_store.refresh_parent(parent.id)
         refreshed = job_store.get(parent.id) or parent
-        if refreshed.status == "completed":
+        if refreshed.status == "completed" and not refreshed.is_cache_refresh:
+            job_store.record_catch_all(refreshed)
+            write_csv(refreshed)
+            job_store.persist(refreshed)
             publish_completed_result_objects(refreshed)
         return refreshed
 
@@ -429,9 +462,8 @@ def sync_parent_job(job: Job) -> Job | None:
     if not job.parent_id:
         return None
     parent = job_store.refresh_parent(job.parent_id)
-    if parent is not None and parent.status == "completed":
+    if parent is not None and parent.status == "completed" and not parent.is_cache_refresh:
         parent = job_store.get(parent.id) or parent
-        job_store.cache_results(parent.results)
         job_store.record_catch_all(parent)
         write_csv(parent)
         job_store.persist(parent)
@@ -445,6 +477,56 @@ def _notify_retry_target(job: Job) -> None:
         domestic_worker_lifecycle.notify_job_queued()
     elif job.execution_target == GMAIL_TARGET:
         notify_cloudshell_job_queued()
+
+
+def notify_probe_waiter_jobs(job_ids: list[str]) -> None:
+    """Wake the execution targets whose shared probe dependency was released."""
+    for job_id in job_ids:
+        resumed_job = job_store.get(job_id, include_results=False)
+        if resumed_job is not None and resumed_job.status in {"queued", "running"}:
+            _notify_retry_target(resumed_job)
+
+
+def cancel_job_probes(job_id: str) -> None:
+    owners = job_store.probe_job_ids(job_id)
+    notify_probe_waiter_jobs(job_store.cancel_probe_jobs(owners))
+
+
+def _finalize_shared_cache_jobs(job_ids: list[str]) -> None:
+    """Finish tasks whose pending row was satisfied by another task's probe."""
+    for job_id in job_ids:
+        job = job_store.get(job_id)
+        if job is None or job.status not in {"queued", "running"}:
+            continue
+        if job_store.pending_count(job.id):
+            continue
+        job.status = "completed"
+        job.started_at = job.started_at or utc_now()
+        job.finished_at = utc_now()
+        job.error = None
+        job.worker_id = None
+        job.heartbeat_at = None
+        if job.is_cache_refresh:
+            job_store.persist(job)
+            continue
+        write_csv(job)
+        job_store.persist(job)
+        publish_completed_result_objects(job)
+        parent = sync_parent_job(job)
+        if parent is not None and parent.status == "completed":
+            parent = job_store.get(parent.id) or parent
+            publish_completed_result_objects(parent)
+
+
+def cache_and_release_probe_results(
+    results: list[dict[str, Any]], *, owner_job_id: str | None = None,
+) -> None:
+    affected = job_store.cache_results(results, owner_job_id=owner_job_id)
+    resumed = (
+        job_store.complete_probe_leases(owner_job_id, results) if owner_job_id else []
+    )
+    _finalize_shared_cache_jobs(affected)
+    notify_probe_waiter_jobs(resumed)
 
 
 def enqueue_background_retry(
@@ -525,12 +607,14 @@ def finish_initial_job(job: Job) -> Job:
     """Complete the user task immediately and hand transient results to idle workers."""
     reconcile_catch_all_conflicts(job.results)
     job.finished_at = utc_now()
-    write_csv(job)
     job.error = None
     job.status = "completed"
     job_store.persist(job)
+    cache_and_release_probe_results(job.results, owner_job_id=job.id)
     visible = sync_parent_job(job) if job.parent_id else job
     visible = visible or job
+    if job.is_cache_refresh:
+        return visible
     retry_emails = [
         str(result["email"])
         for result in visible.results
@@ -540,7 +624,6 @@ def finish_initial_job(job: Job) -> Job:
     ]
     enqueue_background_retry(visible, job, retry_emails, 1)
     if visible.status == "completed":
-        job_store.cache_results(visible.results)
         job_store.record_catch_all(visible)
         write_csv(visible)
         job_store.persist(visible)
@@ -587,7 +670,7 @@ def finish_background_retry(job: Job) -> Job | None:
     parent.results = [
         existing[email.lower()] for email in parent.emails if email.lower() in existing
     ]
-    job_store.cache_results(parent.results)
+    cache_and_release_probe_results(job.results, owner_job_id=job.id)
     job_store.record_catch_all(parent)
     write_csv(parent)
     job_store.upsert_results(parent.id, changed_results)
@@ -657,7 +740,7 @@ def finish_background_retry_failure(job: Job, error: str) -> Job | None:
         result["retry_updated"] = True
         changed += 1
         changed_results.append(result)
-    job_store.cache_results(parent.results)
+    cache_and_release_probe_results(changed_results, owner_job_id=job.id)
     write_csv(parent)
     job_store.upsert_results(parent.id, changed_results)
     publish_completed_result_objects(parent, changed_results)
@@ -762,7 +845,7 @@ def reconcile_orphaned_background_retries(
         if not updated:
             continue
         job_store.upsert_results(parent.id, updated)
-        job_store.cache_results(updated)
+        cache_and_release_probe_results(updated)
         job_store.record_catch_all(parent)
         write_csv(parent)
         publish_completed_result_objects(parent, updated)
@@ -994,7 +1077,9 @@ def apply_prospecting_receiver_protection(
     if decision is None:
         return None
     if decision["action"] == "stop":
-        return job_store.stop_with_reason(job.id, str(decision["message"]))
+        stopped = job_store.stop_with_reason(job.id, str(decision["message"]))
+        cancel_job_probes(job.id)
+        return stopped
     return job_store.defer_job(job.id, decision["resume_at"], str(decision["message"]))
 
 
@@ -1011,7 +1096,17 @@ def run_job(job: Job) -> None:
     try:
         if job_store.is_stopped(job.id):
             return
-        cached_by_email = job_store.cached_results(job.emails)
+        pending_indices = {
+            int(result.get("original_index", index))
+            for index, result in enumerate(job.results)
+            if result.get("progress_state") in {"pending", "verifying"}
+        }
+        if job.lease_id:
+            pending_indices &= set(job.pending_indices)
+        pending_emails = [
+            email for index, email in enumerate(job.emails) if index in pending_indices
+        ]
+        cached_by_email = job_store.cached_results(pending_emails)
         if job.stop_on_deliverable:
             by_index = verify_until_deliverable(job, cached_by_email)
             if job_store.is_stopped(job.id):
@@ -1124,6 +1219,10 @@ def run_job(job: Job) -> None:
                 return
             overview = job_store.result_overview(job.id)
             if overview.settled < overview.total:
+                shard_results = [
+                    by_index[index] for index in missing_indices if index in by_index
+                ]
+                cache_and_release_probe_results(shard_results, owner_job_id=job.id)
                 job = refreshed
                 return
             job = refreshed
@@ -1146,6 +1245,12 @@ def run_job(job: Job) -> None:
             finish_initial_job(job)
     except Exception as exc:
         logger.exception("Verification job %s failed", job.id)
+        failed_probe_emails = (
+            [job.emails[index] for index in job.pending_indices]
+            if job.lease_id else None
+        )
+        resumed = job_store.release_probe_leases(job.id, failed_probe_emails)
+        notify_probe_waiter_jobs(resumed)
         if job.lease_id:
             job_store.abandon_lease(job.id, job.worker_id or "", job.lease_id)
             refreshed = job_store.get(job.id)

@@ -915,7 +915,7 @@ function renderResults() {
     const row = document.createElement("tr");
     row.className = "empty-row";
     const cell = document.createElement("td");
-    cell.colSpan = 4;
+    cell.colSpan = 5;
     cell.textContent = state.results.length ? "没有符合条件的结果" : "正在等待首条验证结果";
     row.append(cell);
     body.append(row);
@@ -930,6 +930,7 @@ function renderResults() {
       item.email,
       label,
       consumerResultAction(item),
+      item.smtp_result || item.smtp_raw_result || item.message || item.server_response || "暂未返回服务器响应",
       "详情",
     ];
     values.forEach((value, index) => {
@@ -972,7 +973,7 @@ function renderResults() {
         pill.className = `result-pill ${className}`;
         pill.textContent = label;
         cell.append(pill);
-      } else if (index === 3) {
+      } else if (index === 4) {
         const action = document.createElement("button");
         action.type = "button";
         action.className = "result-detail-action";
@@ -984,6 +985,7 @@ function renderResults() {
       } else {
         cell.className = "detail-cell";
         cell.textContent = value;
+        if (index === 3 && value) cell.title = String(value);
       }
       row.append(cell);
     });
