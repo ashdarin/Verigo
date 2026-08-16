@@ -82,6 +82,7 @@ _MARKET_LEGAL_PATTERNS = {
     "spain": (r"registro mercantil", r"\bc\.?i\.?f\.\b", r"aviso legal"),
     "united kingdom": (r"companies house", r"company (?:registration )?number", r"registered in (?:england|scotland|wales)"),
 }
+LEGAL_EVIDENCE_MARKETS = frozenset(_MARKET_LEGAL_PATTERNS)
 
 SEARCH_PRIORITY_BASE = 10
 RECENT_RECHECK_PRIORITY = 25

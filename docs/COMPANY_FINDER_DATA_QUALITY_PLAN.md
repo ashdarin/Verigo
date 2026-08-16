@@ -94,7 +94,7 @@ Hunter Discover 采用“搜索或筛选 -> 有界候选集 -> Domain Search / E
 - **P4 已上线**：新增 `/api/company-finder/companies/{company_id}` 详情接口和 Company Finder 详情抽屉。详情接口在专用目录服务侧再次执行活跃性门槛，只返回 `active_verified`、`recently_observed` 记录；`uncertain`、`inactive`、未完成检查或不存在的记录统一返回 404。详情展示规范化公司资料、最近核验时间、可信度、公开证据类型和可读说明，并保留官网、LinkedIn 与企业邮箱查找入口。SMTP 结果文案未改动。
 - **P5 已实现**：详情打开、官网访问、LinkedIn 访问和进入企业邮箱查找四类动作通过 `/api/company-finder/analytics` 聚合。请求只允许上报固定事件枚举，不接收公司 ID、名称、域名、邮箱或目录内容。PostgreSQL 仅保存按日计数和按“日期 + 事件”变化的 HMAC 用户散列；管理后台显示最近 14 天聚合，匿名去重行保留 45 天后由 retention 清理。埋点使用非阻塞 `keepalive` 请求，失败不影响外链跳转和页面操作。
 - **P6 已实现**：公开证据拆分为官网法律信息、官网标题、官网正文、域名品牌和历史官网证据，并保存强/中等级、证据发现时间和适用市场。首批市场法律标识覆盖德国、澳大利亚、中国、比利时、阿根廷、阿尔巴尼亚、英国、法国、意大利、西班牙、荷兰、日本、韩国、印度、巴西和墨西哥等市场。只有身份匹配同时成立时，法律标识才会增强证据，单独出现登记词不会让公司通过公开门槛。
-- **P6 复核调度**：用户当前搜索产生的候选优先级最高；历史证据和 `recently_observed` 先于普通 `active_verified` 到期复核，`uncertain` 与 `inactive` 在后。主要市场只获得小幅同级提升，不改变公开门槛。旧的公开记录由原有 2 并发低优先级 Worker 渐进复核；新规则第一次得出“身份不足”时保留 24 小时复核窗口，第二次仍不足才停止展示。
+- **P6 复核调度**：用户当前搜索产生的候选优先级最高；历史证据和 `recently_observed` 先于普通 `active_verified` 到期复核，`uncertain` 与 `inactive` 在后。主要市场只获得小幅同级提升，不改变公开门槛。旧的公开记录由原有 2 并发低优先级 Worker 渐进复核；新规则第一次得出“身份不足”时保留 24 小时复核窗口，第二次仍不足才停止展示。一次性回填只把原目录的国家字段写入 724 条独立活跃度记录，并只重新安排可能形成市场法律证据的公开记录，不复制公司目录内容。
 - **生产验收（2026-08-16）**：`/api/health` 返回 `status=ok`、`database=ok`；Web、worker API、Company Finder SSH 隧道、EC2 目录服务和活跃度 Worker 均为 active。专用目录健康统计为 389 条 `active_verified`、2 条 `inactive`、333 条 `uncertain`，`queued=0`、`checking=0`。公开搜索返回的样本详情均为 HTTP 200，并包含官网公开证据。上海应用发布不会自动更新隧道后的 EC2 目录服务；后续发布必须同步 `deploy/company-finder-service.py` 与 `deploy/company_vitality.py`，再重启 `company-finder.service` 并做详情回归。
 - 管理员结果现在显示“待核验、近期可确认、近期有记录、暂未确认、已停止展示”状态；普通用户只看到有近期公开活跃证据的结果。
 - 单次 NXDOMAIN 只标为“暂未确认”并在 24 小时后复查，避免 DNS 故障造成批量误隐藏；连续两次才停止对普通用户展示。
