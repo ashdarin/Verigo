@@ -38,21 +38,33 @@ def run_retention(
     *,
     results_days: int | None = None,
     job_days: int | None = None,
+    analytics_unique_days: int | None = None,
     results_root: Path | None = None,
 ) -> dict[str, int]:
     results_days = int(results_days or os.getenv("VERIGO_RESULTS_RETENTION_DAYS", "30"))
     job_days = int(job_days or os.getenv("VERIGO_JOB_RETENTION_DAYS", "90"))
+    analytics_unique_days = int(
+        analytics_unique_days
+        or os.getenv("VERIGO_ANALYTICS_UNIQUE_RETENTION_DAYS", "45")
+    )
     results_root = (results_root or Path(settings.results_dir)).resolve()
     now = utc_now()
     results_cutoff = now - timedelta(days=results_days)
     jobs_cutoff = now - timedelta(days=job_days)
+    analytics_cutoff_day = (now - timedelta(days=analytics_unique_days)).date().isoformat()
 
     if postgres_enabled():
-        return _run_postgres(results_cutoff, jobs_cutoff, results_root, now)
-    return _run_sqlite(results_cutoff, jobs_cutoff, results_root, now)
+        return _run_postgres(
+            results_cutoff, jobs_cutoff, analytics_cutoff_day, results_root, now,
+        )
+    return _run_sqlite(
+        results_cutoff, jobs_cutoff, analytics_cutoff_day, results_root, now,
+    )
 
 
-def _run_sqlite(results_cutoff, jobs_cutoff, results_root: Path, now) -> dict[str, int]:
+def _run_sqlite(
+    results_cutoff, jobs_cutoff, analytics_cutoff_day: str, results_root: Path, now,
+) -> dict[str, int]:
     database = sqlite_path()
     results_iso = results_cutoff.isoformat()
     jobs_iso = jobs_cutoff.isoformat()
@@ -124,12 +136,27 @@ def _run_sqlite(results_cutoff, jobs_cutoff, results_root: Path, now) -> dict[st
             "DELETE FROM verification_cache WHERE expires_at <= ?",
             (now.isoformat(),),
         )
+        metrics_table_exists = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' "
+            "AND name='company_finder_event_users'"
+        ).fetchone()
+        analytics_users_deleted = 0
+        if metrics_table_exists:
+            analytics_users_deleted = connection.execute(
+                "DELETE FROM company_finder_event_users WHERE day < ?",
+                (analytics_cutoff_day,),
+            ).rowcount
         connection.commit()
 
-    return {"backend": "sqlite", "results_cleared_jobs": cleared, "jobs_deleted": deleted}  # type: ignore[return-value]
+    return {
+        "backend": "sqlite", "results_cleared_jobs": cleared, "jobs_deleted": deleted,
+        "analytics_users_deleted": max(0, analytics_users_deleted),
+    }  # type: ignore[return-value]
 
 
-def _run_postgres(results_cutoff, jobs_cutoff, results_root: Path, now) -> dict[str, int]:
+def _run_postgres(
+    results_cutoff, jobs_cutoff, analytics_cutoff_day: str, results_root: Path, now,
+) -> dict[str, int]:
     from app.db.postgresql import connection as pg_connection, resolve_database_url
 
     dsn = resolve_database_url(database_url() or None)
@@ -200,8 +227,16 @@ def _run_postgres(results_cutoff, jobs_cutoff, results_root: Path, now) -> dict[
                 "DELETE FROM verification_cache WHERE expires_at <= %s",
                 (now,),
             )
+            cur.execute(
+                "DELETE FROM company_finder_event_users WHERE day < %s",
+                (analytics_cutoff_day,),
+            )
+            analytics_users_deleted = max(0, cur.rowcount)
 
-    return {"backend": "postgres", "results_cleared_jobs": cleared, "jobs_deleted": deleted}  # type: ignore[return-value]
+    return {
+        "backend": "postgres", "results_cleared_jobs": cleared, "jobs_deleted": deleted,
+        "analytics_users_deleted": analytics_users_deleted,
+    }  # type: ignore[return-value]
 
 
 if __name__ == "__main__":

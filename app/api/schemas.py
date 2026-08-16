@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.config import settings
 from app.core.prospecting import normalize_country, normalize_person_pattern
@@ -267,6 +267,17 @@ class CompanyCatalogSearchResponse(BaseModel):
 class CompanyFinderSearchResponse(CompanyCatalogSearchResponse):
     pending_count: int = 0
     refresh_after_seconds: int = 0
+
+
+class CompanyFinderAnalyticsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    event: Literal[
+        "company_detail_open",
+        "company_website_open",
+        "company_linkedin_open",
+        "company_domain_search_handoff",
+    ]
 
 
 class CompanyFinderCompanyResponse(BaseModel):

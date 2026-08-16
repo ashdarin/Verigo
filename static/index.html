@@ -20,7 +20,7 @@
   <link rel="stylesheet" href="/static/css/design-tokens.css?v=1.0.0">
   <link rel="stylesheet" href="/static/css/components.css?v=1.0.0">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" referrerpolicy="no-referrer">
-  <link rel="stylesheet" href="/static/css/app.css?v=company-finder-p4-v1">
+  <link rel="stylesheet" href="/static/css/app.css?v=company-finder-p5-v1">
   <link rel="stylesheet" href="/static/css/product.css?v=redemption-nav-v3">
 </head>
 <body class="product-surface">
@@ -483,7 +483,15 @@
         <div class="admin-company-catalog-table-wrap"><table class="admin-company-catalog-table"><thead><tr><th>公司</th><th>国家/地区</th><th>行业</th><th>规模</th><th>官网</th><th>活跃性</th><th>LinkedIn</th></tr></thead><tbody id="company-catalog-results"><tr class="company-catalog-empty"><td colspan="7">设置搜索条件后查看候选公司</td></tr></tbody></table></div>
         <div class="admin-company-catalog-pagination"><button id="company-catalog-prev" class="download-action" type="button" disabled>上一页</button><span id="company-catalog-page">等待筛选</span><button id="company-catalog-next" class="download-action" type="button" disabled>下一页</button></div>
       </section>
-      <section id="admin-account-summary" class="admin-account-summary"><div class="report-card-heading"><div><h2>功能使用趋势</h2><p>单个验证、批量验证与工作邮箱查找</p></div></div><div id="admin-feature-chart" class="admin-feature-chart"></div><div id="admin-feature-legend" class="report-legend"></div></section>
+      <section id="admin-account-summary" class="admin-account-summary">
+        <div class="report-card-heading"><div><h2>功能使用趋势</h2><p>单个验证、批量验证与工作邮箱查找</p></div></div>
+        <div id="admin-feature-chart" class="admin-feature-chart"></div>
+        <div id="admin-feature-legend" class="report-legend"></div>
+        <section class="admin-company-finder-usage" aria-labelledby="admin-company-finder-usage-title">
+          <div><h3 id="admin-company-finder-usage-title">Company Finder 下一步动作</h3><p>最近 14 天聚合数据，不记录公司、域名或邮箱内容</p></div>
+          <div id="admin-company-finder-metrics" class="admin-company-finder-metrics"></div>
+        </section>
+      </section>
       <section class="admin-accounts-section"><div class="report-card-heading"><div><h2>全部账户</h2><p id="admin-accounts-meta">按注册时间排序</p></div><button id="admin-accounts-refresh" class="download-action" type="button">刷新</button></div><div id="admin-accounts-list" class="admin-accounts-list"></div><div class="pagination"><span id="admin-accounts-page"></span><div><button id="admin-accounts-prev" class="page-button" type="button">上一页</button><span id="admin-accounts-pages" class="page-numbers"></span><button id="admin-accounts-next" class="page-button" type="button">下一页</button></div></div></section>
     </section>
   </main>
@@ -670,6 +678,6 @@
   </dialog>
 
   <script src="/static/js/i18n.js?v=locale-v1" defer></script>
-  <script src="/static/js/app.js?v=company-finder-p4-v1" defer></script>
+  <script src="/static/js/app.js?v=company-finder-p5-v1" defer></script>
 </body>
 </html>

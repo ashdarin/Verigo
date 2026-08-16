@@ -47,6 +47,7 @@ from app.api.schemas import (
     ProspectingCompanyUpdateRequest,
     CompanyCatalogFacetResponse,
     CompanyCatalogSearchResponse,
+    CompanyFinderAnalyticsRequest,
     CompanyFinderCompanyResponse,
     CompanyFinderSearchResponse,
     SavedProspectingContactsResponse,
@@ -1109,6 +1110,14 @@ def company_finder_company_detail(
     except company_catalog.CompanyCatalogUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     return CompanyFinderCompanyResponse(**item)
+
+
+@router.post("/company-finder/analytics", status_code=204)
+def record_company_finder_analytics(
+    payload: CompanyFinderAnalyticsRequest,
+    user: Annotated[User, Depends(require_company_finder_user)],
+) -> None:
+    metrics_store.record_company_finder_event(payload.event, user.id)
 
 
 @router.get("/company-finder/facets/{facet}", response_model=CompanyCatalogFacetResponse)

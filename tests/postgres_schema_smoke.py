@@ -81,7 +81,10 @@ def test_ddl_renders() -> None:
     ddl = render_full_schema_sql()
     assert "CREATE TABLE IF NOT EXISTS" in ddl
     assert len(ddl) > 10_000
-    for name in ("users", "jobs", "job_leases", "prospecting_runs", "page_view_days"):
+    for name in (
+        "users", "jobs", "job_leases", "prospecting_runs", "page_view_days",
+        "company_finder_event_days", "company_finder_event_users",
+    ):
         assert f'"{name}"' in ddl
 
 
@@ -96,7 +99,7 @@ def test_unknown_table_fails() -> None:
 def test_core_sets_nonempty() -> None:
     assert len(CORE_JOBSTORE_TABLES) >= 19
     assert len(AUTH_TABLES) >= 10
-    assert len(METRICS_TABLES) >= 4
+    assert len(METRICS_TABLES) >= 6
     assert len(PROSPECTING_TABLES) >= 10
 
 

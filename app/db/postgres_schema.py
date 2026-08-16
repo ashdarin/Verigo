@@ -267,6 +267,27 @@ TABLES["daily_visitors"] = TableDef(
     primary_key=("day", "visitor_hash",),
 )
 
+TABLES["company_finder_event_days"] = TableDef(
+    name="company_finder_event_days",
+    columns=(
+        _c("day", "text", False),
+        _c("event_type", "text", False),
+        _c("event_count", "bigint", False, "0"),
+        _c("unique_users", "bigint", False, "0"),
+    ),
+    primary_key=("day", "event_type",),
+)
+
+TABLES["company_finder_event_users"] = TableDef(
+    name="company_finder_event_users",
+    columns=(
+        _c("day", "text", False),
+        _c("event_type", "text", False),
+        _c("user_hash", "text", False),
+    ),
+    primary_key=("day", "event_type", "user_hash",),
+)
+
 TABLES["domain_relation_cache"] = TableDef(
     name="domain_relation_cache",
     columns=(
@@ -1103,6 +1124,8 @@ METRICS_TABLES: tuple[str, ...] = (
     "traffic_sessions",
     "anonymous_free_usage",
     "daily_visitors",
+    "company_finder_event_days",
+    "company_finder_event_users",
 )
 
 PROSPECTING_TABLES: tuple[str, ...] = (

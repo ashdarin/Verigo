@@ -31,6 +31,12 @@ BOT_USER_AGENT = re.compile(
 
 QUALITY_BASELINE_DAYS = 7
 QUALITY_BASELINE_MIN_DAILY_SAMPLE = 50
+COMPANY_FINDER_EVENTS = (
+    "company_detail_open",
+    "company_website_open",
+    "company_linkedin_open",
+    "company_domain_search_handoff",
+)
 
 
 class MetricsStore:
@@ -111,7 +117,56 @@ class MetricsStore:
                     )
                     """
                 )
+                connection.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS company_finder_event_days (
+                        day TEXT NOT NULL,
+                        event_type TEXT NOT NULL,
+                        event_count INTEGER NOT NULL DEFAULT 0,
+                        unique_users INTEGER NOT NULL DEFAULT 0,
+                        PRIMARY KEY(day, event_type)
+                    )
+                    """
+                )
+                connection.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS company_finder_event_users (
+                        day TEXT NOT NULL,
+                        event_type TEXT NOT NULL,
+                        user_hash TEXT NOT NULL,
+                        PRIMARY KEY(day, event_type, user_hash)
+                    )
+                    """
+                )
             self._initialized = True
+
+    def record_company_finder_event(self, event_type: str, user_id: str) -> None:
+        if event_type not in COMPANY_FINDER_EVENTS:
+            raise ValueError("unsupported Company Finder event")
+        self.initialize()
+        day = self._day()
+        key = (settings.metrics_salt or "verigo-metrics-unconfigured").encode("utf-8")
+        material = f"company-finder|{day}|{event_type}|{user_id}".encode("utf-8")
+        user_hash = hmac.new(key, material, hashlib.sha256).hexdigest()
+        with closing(self._connect()) as connection:
+            begin_immediate(connection)
+            is_new_user = connection.execute(
+                """INSERT OR IGNORE INTO company_finder_event_users(
+                    day, event_type, user_hash
+                ) VALUES (?, ?, ?)""",
+                (day, event_type, user_hash),
+            ).rowcount
+            connection.execute(
+                """INSERT INTO company_finder_event_days(
+                    day, event_type, event_count, unique_users
+                ) VALUES (?, ?, 1, ?)
+                ON CONFLICT(day, event_type) DO UPDATE SET
+                    event_count=company_finder_event_days.event_count+1,
+                    unique_users=company_finder_event_days.unique_users+excluded.unique_users
+                """,
+                (day, event_type, is_new_user),
+            )
+            connection.commit()
 
     def record_page_view(self, client_host: str, user_agent: str) -> None:
         self.initialize()
@@ -763,10 +818,47 @@ class MetricsStore:
                 """,
                 (days[0],),
             ).fetchall()
+            company_finder_rows = connection.execute(
+                """SELECT day, event_type, event_count, unique_users
+                FROM company_finder_event_days
+                WHERE day >= ?
+                ORDER BY day, event_type""",
+                (days[0],),
+            ).fetchall()
         by_day={str(day):{"single":int(single),"batch":int(batch),"discovery":int(discovery)} for day,discovery,single,batch in rows}
         daily=[{"day":day,**by_day.get(day,{"single":0,"batch":0,"discovery":0})} for day in days]
         totals={key:sum(item[key] for item in daily) for key in ("single","batch","discovery")}
-        return {"daily":daily,"totals":totals}
+        company_by_day = {
+            day: {
+                event: {"count": 0, "unique_users": 0}
+                for event in COMPANY_FINDER_EVENTS
+            }
+            for day in days
+        }
+        for day, event_type, count, unique_users in company_finder_rows:
+            day_key = str(day)
+            if day_key in company_by_day and event_type in COMPANY_FINDER_EVENTS:
+                company_by_day[day_key][event_type] = {
+                    "count": int(count), "unique_users": int(unique_users),
+                }
+        company_daily = [
+            {"day": day, "events": company_by_day[day]}
+            for day in days
+        ]
+        company_totals = {
+            event: {
+                "count": sum(item["events"][event]["count"] for item in company_daily),
+                "unique_users": sum(
+                    item["events"][event]["unique_users"] for item in company_daily
+                ),
+            }
+            for event in COMPANY_FINDER_EVENTS
+        }
+        return {
+            "daily": daily,
+            "totals": totals,
+            "company_finder": {"daily": company_daily, "totals": company_totals},
+        }
 
 
 metrics_store = MetricsStore()

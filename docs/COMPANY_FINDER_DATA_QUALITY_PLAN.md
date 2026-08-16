@@ -92,14 +92,15 @@ Hunter Discover 采用“搜索或筛选 -> 有界候选集 -> Domain Search / E
 - **P2 已完成并转为公开门槛**：Company Finder 专用节点使用 SQLite WAL 缓存活跃性证据，由独立的低优先级 Worker 以 2 个并发进行 DNS/HTTP/停放页/身份匹配检查。它的 CPU 上限为 40%、内存上限为 192 MB，与查询服务和邮箱验证 Worker 隔离。普通用户搜索只接收 `active_verified` 和 `recently_observed`，`uncertain`、`inactive` 及尚未完成检查的候选不会直接展示。
 - **P3 已上线**：新增登录且已验证邮箱用户专用的 `/app/company-finder` 页面和 `/api/company-finder/search`、`/api/company-finder/facets/{facet}` 接口。页面支持公司关键词、国家/地区、行业、规模筛选，提供官网入口，并可将域名交给现有企业邮箱查找流程；管理员原有 Company Catalog 保持不变。
 - **P4 已上线**：新增 `/api/company-finder/companies/{company_id}` 详情接口和 Company Finder 详情抽屉。详情接口在专用目录服务侧再次执行活跃性门槛，只返回 `active_verified`、`recently_observed` 记录；`uncertain`、`inactive`、未完成检查或不存在的记录统一返回 404。详情展示规范化公司资料、最近核验时间、可信度、公开证据类型和可读说明，并保留官网、LinkedIn 与企业邮箱查找入口。SMTP 结果文案未改动。
+- **P5 已实现**：详情打开、官网访问、LinkedIn 访问和进入企业邮箱查找四类动作通过 `/api/company-finder/analytics` 聚合。请求只允许上报固定事件枚举，不接收公司 ID、名称、域名、邮箱或目录内容。PostgreSQL 仅保存按日计数和按“日期 + 事件”变化的 HMAC 用户散列；管理后台显示最近 14 天聚合，匿名去重行保留 45 天后由 retention 清理。埋点使用非阻塞 `keepalive` 请求，失败不影响外链跳转和页面操作。
 - **生产验收（2026-08-16）**：`/api/health` 返回 `status=ok`、`database=ok`；Web、worker API、Company Finder SSH 隧道、EC2 目录服务和活跃度 Worker 均为 active。专用目录健康统计为 389 条 `active_verified`、2 条 `inactive`、333 条 `uncertain`，`queued=0`、`checking=0`。公开搜索返回的样本详情均为 HTTP 200，并包含官网公开证据。上海应用发布不会自动更新隧道后的 EC2 目录服务；后续发布必须同步 `deploy/company-finder-service.py` 与 `deploy/company_vitality.py`，再重启 `company-finder.service` 并做详情回归。
 - 管理员结果现在显示“待核验、近期可确认、近期有记录、暂未确认、已停止展示”状态；普通用户只看到有近期公开活跃证据的结果。
 - 单次 NXDOMAIN 只标为“暂未确认”并在 24 小时后复查，避免 DNS 故障造成批量误隐藏；连续两次才停止对普通用户展示。
 
-### 下一阶段（P5）
+### 下一阶段（P6）
 
-- 继续积累详情页打开、官网跳转和 Domain Search 交接的匿名产品指标，用于判断证据字段是否帮助用户完成下一步动作。
 - 为主要市场补充更细的公开证据来源标识，并在不扩大目录暴露范围的前提下优化复核优先级。
+- 指标积累到足够样本后，比较“详情 -> 官网 / LinkedIn / 企业邮箱查找”的动作比例，再决定详情字段和排序调整；不基于低样本数据提前改变检索逻辑。
 
 ## 验收标准
 

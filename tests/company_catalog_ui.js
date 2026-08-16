@@ -33,7 +33,7 @@ const company = {
 };
 
 async function mockApi(page) {
-  const counters = { search: 0, publicSearch: 0 };
+  const counters = { search: 0, publicSearch: 0, analytics: [] };
   await page.route("**/api/**", async (route) => {
     const url = new URL(route.request().url());
     let payload = {};
@@ -42,7 +42,17 @@ async function mockApi(page) {
     } else if (url.pathname === "/api/admin/accounts/list") {
       payload = { total: 0, offset: 0, limit: 50, items: [], summary: {} };
     } else if (url.pathname === "/api/admin/feature-usage") {
-      payload = { daily: [], totals: { single: 0, batch: 0, discovery: 0 } };
+      payload = {
+        daily: [], totals: { single: 0, batch: 0, discovery: 0 },
+        company_finder: { totals: {
+          company_detail_open: { count: 12, unique_users: 5 },
+          company_website_open: { count: 8, unique_users: 4 },
+          company_linkedin_open: { count: 3, unique_users: 2 },
+          company_domain_search_handoff: { count: 6, unique_users: 3 },
+        } },
+      };
+    } else if (url.pathname === "/api/company-finder/analytics") {
+      counters.analytics.push(route.request().postDataJSON().event);
     } else if (url.pathname.endsWith("/facets/country")) {
       payload = { items: [{ value: "germany", label: "德国", count: 1168694 }] };
     } else if (url.pathname.endsWith("/facets/industry")) {
@@ -94,6 +104,10 @@ async function checkPublicFinderViewport(browser, name, viewport) {
   }
   if (result.websiteHref !== "https://boost-your-sales.eu/") throw new Error(`${name}: public website link is incorrect`);
   if (result.overflow) throw new Error(`${name}: public finder has horizontal overflow`);
+  await page.locator(".company-finder-website").evaluate((node) => {
+    node.addEventListener("click", (event) => event.preventDefault(), { once: true });
+    node.click();
+  });
   await page.click(".company-finder-details");
   await page.waitForFunction(() => document.querySelector("#company-finder-detail-title")?.textContent.includes("Boost-Your-Sales"));
   const detail = await page.evaluate(() => ({
@@ -105,7 +119,13 @@ async function checkPublicFinderViewport(browser, name, viewport) {
     throw new Error(`${name}: company detail drawer is incomplete: ${JSON.stringify(detail)}`);
   }
   if (detail.website !== "https://boost-your-sales.eu/") throw new Error(`${name}: company detail website is incorrect`);
-  await page.click("#close-company-finder-detail");
+  for (const selector of [".company-finder-detail-website", ".company-finder-detail-linkedin"]) {
+    await page.locator(selector).evaluate((node) => {
+      node.addEventListener("click", (event) => event.preventDefault(), { once: true });
+      node.click();
+    });
+  }
+  await page.locator("#close-company-finder-detail").evaluate((node) => node.click());
   if (screenshotDir) {
     fs.mkdirSync(screenshotDir, { recursive: true });
     await page.locator("#company-finder-workspace").screenshot({ path: path.join(screenshotDir, `${name}.png`) });
@@ -114,6 +134,13 @@ async function checkPublicFinderViewport(browser, name, viewport) {
   await page.waitForFunction(() => window.location.pathname === "/app/finder");
   if (await page.inputValue("#discovery-domain") !== "boost-your-sales.eu") {
     throw new Error(`${name}: company-to-domain handoff failed`);
+  }
+  await page.waitForTimeout(100);
+  for (const event of [
+    "company_detail_open", "company_website_open", "company_linkedin_open",
+    "company_domain_search_handoff",
+  ]) {
+    if (!counters.analytics.includes(event)) throw new Error(`${name}: missing analytics event ${event}`);
   }
   await page.close();
   return { name, ...result };
@@ -125,6 +152,10 @@ async function checkViewport(browser, name, viewport) {
   const counters = await mockApi(page);
   await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
   await page.waitForFunction(() => document.querySelectorAll("#company-catalog-country option").length > 1);
+  await page.waitForFunction(() => document.querySelector("#admin-company-finder-metrics")?.textContent.includes("12"));
+  if (!await page.locator("#admin-company-finder-metrics").textContent().then((text) => text.includes("进入企业邮箱查找"))) {
+    throw new Error(`${name}: Company Finder aggregate metrics are missing`);
+  }
   if (await page.inputValue("#company-catalog-website") !== "true") {
     throw new Error(`${name}: website-only filter is not selected by default`);
   }
@@ -176,6 +207,7 @@ async function checkViewport(browser, name, viewport) {
   if (screenshotDir) {
     fs.mkdirSync(screenshotDir, { recursive: true });
     await page.locator(".company-catalog-card").screenshot({ path: path.join(screenshotDir, `${name}.png`) });
+    await page.locator("#admin-account-summary").screenshot({ path: path.join(screenshotDir, `${name}-metrics.png`) });
   }
   await page.close();
   return { name, ...result };

@@ -2153,6 +2153,20 @@ function stopCompanyFinderPolling() {
   state.companyFinder.refreshTimer = null;
 }
 
+function trackCompanyFinderEvent(event) {
+  const allowed = new Set([
+    "company_detail_open", "company_website_open", "company_linkedin_open",
+    "company_domain_search_handoff",
+  ]);
+  if (!allowed.has(event) || !state.user?.email_verified) return;
+  void fetch("/api/company-finder/analytics", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ event }),
+    keepalive: true,
+  }).catch(() => {});
+}
+
 function companyFinderFields() {
   return {
     query: el("company-finder-query")?.value,
@@ -2267,11 +2281,11 @@ function renderCompanyFinderDetail(item) {
   [["证据类型", evidence.type || "官网公开证据"], ["可信度", `${Math.round(Number(item.vitality_confidence || 0) * 100)}%`], ["页面标题", evidence.page_title]].forEach(([label, value]) => content.append(companyFinderDetailField(label, value)));
 
   if (item.website_url) {
-    const website = document.createElement("a"); website.className = "secondary-action company-finder-detail-link"; website.href = item.website_url; website.target = "_blank"; website.rel = "noopener noreferrer";
+    const website = document.createElement("a"); website.className = "secondary-action company-finder-detail-link company-finder-detail-website"; website.href = item.website_url; website.target = "_blank"; website.rel = "noopener noreferrer";
     const icon = document.createElement("i"); icon.className = "fa-solid fa-arrow-up-right-from-square"; icon.setAttribute("aria-hidden", "true"); website.append(icon, document.createTextNode("打开官网")); actions.append(website);
   }
   if (item.linkedin_url) {
-    const linkedin = document.createElement("a"); linkedin.className = "secondary-action company-finder-detail-link"; linkedin.href = item.linkedin_url; linkedin.target = "_blank"; linkedin.rel = "noopener noreferrer"; linkedin.setAttribute("aria-label", "打开 LinkedIn 公司主页");
+    const linkedin = document.createElement("a"); linkedin.className = "secondary-action company-finder-detail-link company-finder-detail-linkedin"; linkedin.href = item.linkedin_url; linkedin.target = "_blank"; linkedin.rel = "noopener noreferrer"; linkedin.setAttribute("aria-label", "打开 LinkedIn 公司主页");
     const icon = document.createElement("i"); icon.className = "fa-brands fa-linkedin-in"; icon.setAttribute("aria-hidden", "true"); linkedin.append(icon, document.createTextNode("LinkedIn")); actions.append(linkedin);
   }
   if (item.website_domain) {
@@ -2298,6 +2312,7 @@ async function openCompanyFinderDetail(companyId) {
   try {
     const item = await api(`/api/company-finder/companies/${encodeURIComponent(companyId)}`);
     renderCompanyFinderDetail(item);
+    trackCompanyFinderEvent("company_detail_open");
   } catch (error) {
     el("company-finder-detail-title").textContent = "公司资料暂时不可用";
     el("company-finder-detail-status").textContent = "暂时无法打开";
@@ -2392,6 +2407,8 @@ el("company-finder-next")?.addEventListener("click", () => {
   state.companyFinder.offset += state.companyFinder.limit; loadCompanyFinder();
 });
 el("company-finder-results")?.addEventListener("click", (event) => {
+  const website = event.target.closest(".company-finder-website");
+  if (website) { trackCompanyFinderEvent("company_website_open"); return; }
   const detail = event.target.closest(".company-finder-details");
   if (detail?.dataset.companyId) { openCompanyFinderDetail(detail.dataset.companyId); return; }
   const detailHandoff = event.target.closest(".company-finder-detail-handoff");
@@ -2401,8 +2418,22 @@ el("company-finder-results")?.addEventListener("click", (event) => {
   }
   const handoff = event.target.closest(".company-finder-handoff");
   if (!handoff?.dataset.domain) return;
+  trackCompanyFinderEvent("company_domain_search_handoff");
   el("discovery-domain").value = handoff.dataset.domain;
   switchView("discovery");
+  window.setTimeout(() => el("discovery-first-name")?.focus(), 0);
+});
+el("company-finder-detail-actions")?.addEventListener("click", (event) => {
+  if (event.target.closest(".company-finder-detail-website")) {
+    trackCompanyFinderEvent("company_website_open"); return;
+  }
+  if (event.target.closest(".company-finder-detail-linkedin")) {
+    trackCompanyFinderEvent("company_linkedin_open"); return;
+  }
+  const handoff = event.target.closest(".company-finder-detail-handoff");
+  if (!handoff?.dataset.domain) return;
+  trackCompanyFinderEvent("company_domain_search_handoff");
+  closeCompanyFinderDetail(); el("discovery-domain").value = handoff.dataset.domain; switchView("discovery");
   window.setTimeout(() => el("discovery-first-name")?.focus(), 0);
 });
 el("close-company-finder-detail")?.addEventListener("click", closeCompanyFinderDetail);
@@ -2503,7 +2534,27 @@ el("purchase-button")?.addEventListener("click", async () => {
   } catch (error) { el("purchase-status").className = "purchase-status error"; el("purchase-status").textContent = error.message; } finally { button.disabled = false; }
 });
 async function loadAdminAccounts(){try{const data=await api(`/api/admin/accounts/list?offset=${state.adminAccountOffset}&limit=50`),rows=data.items,summary=data.summary||{};el("admin-metric-users").textContent=data.total.toLocaleString("zh-CN");el("admin-metric-paid").textContent=Number(summary.paid_verifications||0).toLocaleString("zh-CN");el("admin-metric-trial").textContent=Number(summary.trial_verifications||0).toLocaleString("zh-CN");el("admin-metric-used").textContent=Number(summary.used_verifications||0).toLocaleString("zh-CN");el("admin-accounts-meta").textContent=`共 ${data.total} 个账户，按注册时间排序`;el("admin-accounts-list").innerHTML=rows.map(r=>`<button class="admin-account-row" data-email="${r.email}" type="button"><strong>${r.email}</strong><span>付费 ${r.paid_verifications}</span><span>体验 ${r.trial_verifications}</span><span>已用 ${r.used_verifications}</span></button>`).join("")||"暂无账户";el("admin-accounts-page").textContent=`${data.offset+1}-${Math.min(data.offset+data.limit,data.total)} / ${data.total}`;el("admin-accounts-prev").disabled=!data.offset;el("admin-accounts-next").disabled=data.offset+data.limit>=data.total;const page=Math.floor(data.offset/data.limit);renderPageNumbers(el("admin-accounts-pages"),page,Math.max(1,Math.ceil(data.total/data.limit)),nextPage=>{state.adminAccountOffset=nextPage*data.limit;loadAdminAccounts();});document.querySelectorAll(".admin-account-row").forEach(b=>b.addEventListener("click",()=>{el("admin-credit-email").value=b.dataset.email;el("admin-account-lookup").click();}));}catch(error){["admin-metric-users","admin-metric-paid","admin-metric-trial","admin-metric-used"].forEach(id=>el(id).textContent="—");el("admin-accounts-meta").textContent=`账户数据加载失败：${error.message}`;el("admin-accounts-list").textContent="请刷新后重试";}}
-async function loadAdminFeatureUsage(){const data=await api("/api/admin/feature-usage");const days=data.daily||[];const width=620,height=350,p={top:18,right:12,bottom:30,left:30},max=Math.max(1,...days.flatMap(day=>[day.single,day.batch,day.discovery]));const x=index=>p.left+(days.length>1?index*(width-p.left-p.right)/(days.length-1):(width-p.left-p.right)/2),point=(value,index)=>`${x(index)},${p.top+(height-p.top-p.bottom)*(1-value/max)}`;const series=[["single","single"],["batch","batch"],["discovery","discovery"]];const grid=[0,.5,1].map(step=>{const y=p.top+(height-p.top-p.bottom)*step;return `<line class="admin-feature-grid" x1="${p.left}" y1="${y}" x2="${width-p.right}" y2="${y}"/><text class="admin-feature-axis" x="0" y="${y+4}">${Math.round(max*(1-step))}</text>`;}).join("");const labels=days.map((day,index)=>index%2&&days.length>8?"":`<text class="admin-feature-axis" text-anchor="middle" x="${x(index)}" y="${height-8}">${day.day.slice(5).replace("-","/")}</text>`).join("");const lines=series.map(([key,name])=>`<polyline class="admin-feature-line-${name}" points="${days.map((day,index)=>point(day[key],index)).join(" ")}" fill="none" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>${days.map((day,index)=>{const [px,py]=point(day[key],index).split(",");return `<circle cx="${px}" cy="${py}" r="3" fill="currentColor" class="admin-feature-line-${name}"><title>${day.day} ${key} ${day[key]}</title></circle>`;}).join("")}`).join("");el("admin-feature-chart").innerHTML=`<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="功能使用趋势">${grid}${lines}${labels}</svg>`;el("admin-feature-legend").innerHTML=`<span>单个 ${data.totals.single}</span><span>批量 ${data.totals.batch}</span><span>查找 ${data.totals.discovery}</span>`;}
+function renderAdminCompanyFinderUsage(companyFinder = {}) {
+  const container = el("admin-company-finder-metrics");
+  if (!container) return;
+  const totals = companyFinder.totals || {};
+  const labels = [
+    ["company_detail_open", "查看详情"],
+    ["company_website_open", "访问官网"],
+    ["company_linkedin_open", "访问 LinkedIn"],
+    ["company_domain_search_handoff", "进入企业邮箱查找"],
+  ];
+  container.replaceChildren(...labels.map(([event, label]) => {
+    const value = totals[event] || {};
+    const item = document.createElement("article"); item.className = "admin-company-finder-metric";
+    const name = document.createElement("span"); name.textContent = label;
+    const count = document.createElement("strong"); count.textContent = Number(value.count || 0).toLocaleString("zh-CN");
+    const unique = document.createElement("small"); unique.textContent = `日去重用户 ${Number(value.unique_users || 0).toLocaleString("zh-CN")}`;
+    item.append(name, count, unique); return item;
+  }));
+}
+
+async function loadAdminFeatureUsage(){const data=await api("/api/admin/feature-usage");const days=data.daily||[];const width=620,height=350,p={top:18,right:12,bottom:30,left:30},max=Math.max(1,...days.flatMap(day=>[day.single,day.batch,day.discovery]));const x=index=>p.left+(days.length>1?index*(width-p.left-p.right)/(days.length-1):(width-p.left-p.right)/2),point=(value,index)=>`${x(index)},${p.top+(height-p.top-p.bottom)*(1-value/max)}`;const series=[["single","single"],["batch","batch"],["discovery","discovery"]];const grid=[0,.5,1].map(step=>{const y=p.top+(height-p.top-p.bottom)*step;return `<line class="admin-feature-grid" x1="${p.left}" y1="${y}" x2="${width-p.right}" y2="${y}"/><text class="admin-feature-axis" x="0" y="${y+4}">${Math.round(max*(1-step))}</text>`;}).join("");const labels=days.map((day,index)=>index%2&&days.length>8?"":`<text class="admin-feature-axis" text-anchor="middle" x="${x(index)}" y="${height-8}">${day.day.slice(5).replace("-","/")}</text>`).join("");const lines=series.map(([key,name])=>`<polyline class="admin-feature-line-${name}" points="${days.map((day,index)=>point(day[key],index)).join(" ")}" fill="none" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>${days.map((day,index)=>{const [px,py]=point(day[key],index).split(",");return `<circle cx="${px}" cy="${py}" r="3" fill="currentColor" class="admin-feature-line-${name}"><title>${day.day} ${key} ${day[key]}</title></circle>`;}).join("")}`).join("");el("admin-feature-chart").innerHTML=`<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="功能使用趋势">${grid}${lines}${labels}</svg>`;el("admin-feature-legend").innerHTML=`<span>单个 ${data.totals.single}</span><span>批量 ${data.totals.batch}</span><span>查找 ${data.totals.discovery}</span>`;renderAdminCompanyFinderUsage(data.company_finder);}
 el("admin-accounts-refresh")?.addEventListener("click",()=>{state.adminAccountOffset=0;loadAdminAccounts();});el("admin-accounts-prev")?.addEventListener("click",()=>{state.adminAccountOffset=Math.max(0,state.adminAccountOffset-50);loadAdminAccounts();});el("admin-accounts-next")?.addEventListener("click",()=>{state.adminAccountOffset+=50;loadAdminAccounts();});
 el("admin-account-lookup")?.addEventListener("click", async()=>{const email=el("admin-credit-email").value;if(!email){el("admin-credit-result").className="admin-credit-result error";el("admin-credit-result").textContent="请输入邮箱地址";return;}const btn=el("admin-account-lookup");const originalText=btn.innerHTML;btn.disabled=true;btn.innerHTML='<i class="fa-solid fa-spinner fa-spin"></i>查询中';el("admin-credit-result").className="admin-credit-result";el("admin-credit-result").textContent="";try{const account=await api(`/api/admin/accounts?email=${encodeURIComponent(email)}`);el("account-info-paid").textContent=account.paid_verifications||0;el("account-info-trial").textContent=account.trial_verifications||0;el("account-info-used").textContent=account.used_verifications||0;el("admin-account-info").classList.remove("hidden");el("admin-credit-result").className="admin-credit-result success";el("admin-credit-result").textContent=`找到账户：${account.email}`;}catch(error){el("admin-account-info").classList.add("hidden");el("admin-credit-result").className="admin-credit-result error";el("admin-credit-result").textContent=error.message;}finally{btn.disabled=false;btn.innerHTML=originalText;}});
 el("admin-credit-action")?.addEventListener("change",()=>{const action=el("admin-credit-action").value;const btn=el("admin-credit-submit");btn.innerHTML=action==="deduct"?'<i class="fa-solid fa-minus"></i>确认扣减':'<i class="fa-solid fa-check"></i>确认授予';});
