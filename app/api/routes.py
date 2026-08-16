@@ -47,6 +47,8 @@ from app.api.schemas import (
     ProspectingCompanyUpdateRequest,
     CompanyCatalogFacetResponse,
     CompanyCatalogSearchResponse,
+    CompanyFinderCompanyResponse,
+    CompanyFinderSearchResponse,
     SavedProspectingContactsResponse,
     ResultsResponse,
     ListCreateRequest, ListUpdateRequest, ListResultIdsRequest, SaveJobResultRequest, SaveJobResultsRequest, ReverifyRequest,
@@ -113,6 +115,7 @@ from app.tasks.verification import (
 
 
 router = APIRouter(prefix="/api")
+COMPANY_CATALOG_MAX_WINDOW = 100
 
 def _normalize_domain_query(value: str) -> str:
     return value.strip().lower().replace("https://", "").replace("http://", "").removeprefix("www.").split("/", 1)[0]
@@ -1014,9 +1017,16 @@ def search_company_catalog(
     size: str | None = Query(default=None, max_length=40),
     query: str | None = Query(default=None, max_length=120),
     has_website: bool | None = Query(default=None),
-    offset: int = Query(default=0, ge=0),
+    offset: int = Query(default=0, ge=0, lt=COMPANY_CATALOG_MAX_WINDOW),
     limit: int = Query(default=25, ge=1, le=50),
 ) -> CompanyCatalogSearchResponse:
+    meaningful_filters = (query, country, region, industry, size)
+    if not any(value and value.strip() for value in meaningful_filters):
+        raise HTTPException(status_code=422, detail="请输入公司关键词或选择至少一个筛选条件")
+    if offset + limit > COMPANY_CATALOG_MAX_WINDOW:
+        raise HTTPException(status_code=422, detail="每次搜索最多查看前 100 家公司")
+    if has_website is None:
+        has_website = True
     try:
         total, items, has_more = company_catalog.search(
             country=country, industry=industry, region=region, size=size, query=query,
@@ -1033,6 +1043,78 @@ def search_company_catalog(
 def company_catalog_facets(
     facet: str,
     _: Annotated[User, Depends(require_admin)],
+    country: str | None = Query(default=None, max_length=80),
+    industry: str | None = Query(default=None, max_length=160),
+) -> CompanyCatalogFacetResponse:
+    try:
+        return CompanyCatalogFacetResponse(items=company_catalog.facets(
+            facet, country=country, industry=industry,
+        ))
+    except company_catalog.CompanyCatalogUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+def require_company_finder_user(
+    user: Annotated[User, Depends(require_user)],
+) -> User:
+    if not user.email_verified:
+        raise HTTPException(status_code=403, detail="请先验证注册邮箱后使用 Company Finder")
+    return user
+
+
+@router.get("/company-finder/search", response_model=CompanyFinderSearchResponse)
+def search_company_finder(
+    _: Annotated[User, Depends(require_company_finder_user)],
+    country: str | None = Query(default=None, max_length=80),
+    industry: str | None = Query(default=None, max_length=160),
+    region: str | None = Query(default=None, max_length=160),
+    size: str | None = Query(default=None, max_length=40),
+    query: str | None = Query(default=None, max_length=120),
+    has_website: bool | None = Query(default=None),
+    offset: int = Query(default=0, ge=0, lt=COMPANY_CATALOG_MAX_WINDOW),
+    limit: int = Query(default=25, ge=1, le=50),
+) -> CompanyFinderSearchResponse:
+    meaningful_filters = (query, country, region, industry, size)
+    if not any(value and value.strip() for value in meaningful_filters):
+        raise HTTPException(status_code=422, detail="请输入公司关键词或选择至少一个筛选条件")
+    if offset + limit > COMPANY_CATALOG_MAX_WINDOW:
+        raise HTTPException(status_code=422, detail="每次搜索最多查看前 100 家公司")
+    try:
+        result = company_catalog.search_public(
+            country=country, industry=industry, region=region, size=size, query=query,
+            has_website=True if has_website is None else has_website,
+            offset=offset, limit=limit,
+        )
+    except company_catalog.CompanyCatalogUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return CompanyFinderSearchResponse(
+        total=int(result["total"]), offset=offset, limit=limit,
+        items=list(result["items"]), has_more=bool(result["has_more"]),
+        pending_count=int(result["pending_count"]),
+        refresh_after_seconds=int(result["refresh_after_seconds"]),
+    )
+
+
+@router.get("/company-finder/companies/{company_id}", response_model=CompanyFinderCompanyResponse)
+def company_finder_company_detail(
+    company_id: str,
+    _: Annotated[User, Depends(require_company_finder_user)],
+) -> CompanyFinderCompanyResponse:
+    try:
+        item = company_catalog.public_company_detail(company_id)
+    except company_catalog.CompanyCatalogNotFound as exc:
+        raise HTTPException(status_code=404, detail="公司不存在或当前不可展示") from exc
+    except company_catalog.CompanyCatalogUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return CompanyFinderCompanyResponse(**item)
+
+
+@router.get("/company-finder/facets/{facet}", response_model=CompanyCatalogFacetResponse)
+def company_finder_facets(
+    facet: str,
+    _: Annotated[User, Depends(require_company_finder_user)],
     country: str | None = Query(default=None, max_length=80),
     industry: str | None = Query(default=None, max_length=160),
 ) -> CompanyCatalogFacetResponse:

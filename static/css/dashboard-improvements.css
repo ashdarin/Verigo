@@ -1,0 +1,463 @@
+/* ========================================
+   Dashboard Improvements
+   Workspace Home & 运营监控优化
+   版本: 1.0.0
+   ======================================== */
+
+/* ========================================
+   Workspace Metrics - 指标卡片优化
+   ======================================== */
+
+.workspace-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 1.5rem;
+  margin: 2rem 0;
+}
+
+.workspace-metric {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 1.5rem;
+  transition: all 0.2s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.workspace-metric:hover {
+  border-color: #168553;
+  box-shadow: 0 4px 12px rgba(22, 133, 83, 0.1);
+  transform: translateY(-2px);
+}
+
+.workspace-metric::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: linear-gradient(90deg, #168553, #0f6840);
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.workspace-metric:hover::before {
+  opacity: 1;
+}
+
+.metric-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1rem;
+}
+
+.metric-icon {
+  width: 40px;
+  height: 40px;
+  background: #eaf6ef;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.25rem;
+  color: #168553;
+}
+
+.metric-trend {
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+}
+
+.metric-trend.up {
+  color: #168553;
+  background: #eaf6ef;
+}
+
+.metric-trend.up::before {
+  content: '↑ ';
+}
+
+.metric-trend.down {
+  color: #b33b35;
+  background: #fef2f2;
+}
+
+.metric-trend.down::before {
+  content: '↓ ';
+}
+
+.metric-trend.neutral {
+  color: #6b7280;
+  background: #f3f4f6;
+}
+
+.metric-label {
+  font-size: 0.875rem;
+  color: #6b7280;
+  margin-bottom: 0.5rem;
+}
+
+.metric-value {
+  font-size: 2rem;
+  font-weight: 700;
+  color: #168553;
+  line-height: 1;
+}
+
+.metric-description {
+  font-size: 0.75rem;
+  color: #9ca3af;
+  margin-top: 0.5rem;
+}
+
+/* ========================================
+   Quick Start - 快速开始优化
+   ======================================== */
+
+.workspace-quick-start {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 2rem;
+}
+
+.quick-start-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1rem;
+}
+
+.quick-start-grid button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 1.5rem;
+  background: white;
+  border: 2px solid #e5e7eb;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  text-align: left;
+}
+
+.quick-start-grid button:hover {
+  border-color: #168553;
+  box-shadow: 0 4px 12px rgba(22, 133, 83, 0.1);
+  transform: translateY(-2px);
+}
+
+.quick-icon {
+  width: 48px;
+  height: 48px;
+  background: #eaf6ef;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.5rem;
+  color: #168553;
+}
+
+.quick-start-grid button strong {
+  font-size: 1rem;
+  font-weight: 600;
+  color: #1f2937;
+}
+
+.quick-start-grid button span:last-child {
+  font-size: 0.875rem;
+  color: #6b7280;
+  line-height: 1.4;
+}
+
+/* ========================================
+   Recent Activity - 最近活动优化
+   ======================================== */
+
+.workspace-recent-tasks,
+.workspace-recent-results {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 2rem;
+}
+
+.workspace-card-heading {
+  margin-bottom: 1.5rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.workspace-card-heading h2 {
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: #1f2937;
+  margin: 0;
+}
+
+.workspace-card-heading .eyebrow {
+  font-size: 0.75rem;
+  color: #168553;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 0.5rem;
+}
+
+/* 活动列表项 */
+.activity-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 1rem;
+  padding: 1rem 0;
+  border-bottom: 1px solid #f3f4f6;
+}
+
+.activity-item:last-child {
+  border-bottom: none;
+}
+
+.activity-status {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.875rem;
+}
+
+.activity-status.success {
+  background: #eaf6ef;
+  color: #168553;
+}
+
+.activity-status.pending {
+  background: #fef3c7;
+  color: #996f16;
+}
+
+.activity-status.error {
+  background: #fef2f2;
+  color: #b33b35;
+}
+
+.activity-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.activity-title {
+  font-weight: 600;
+  color: #1f2937;
+  margin-bottom: 0.25rem;
+}
+
+.activity-meta {
+  font-size: 0.875rem;
+  color: #6b7280;
+}
+
+.activity-time {
+  font-size: 0.75rem;
+  color: #9ca3af;
+  white-space: nowrap;
+}
+
+/* ========================================
+   Quality Dashboard - 质量概览优化
+   ======================================== */
+
+.quality-dashboard {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 2rem;
+  margin: 2rem 0;
+}
+
+.quality-dashboard-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1.5rem;
+  margin-top: 1.5rem;
+}
+
+.quality-dashboard-metric {
+  text-align: center;
+  padding: 1.5rem;
+  background: #f9fafb;
+  border-radius: 8px;
+  border: 1px solid #e5e7eb;
+  transition: all 0.2s ease;
+}
+
+.quality-dashboard-metric:hover {
+  background: white;
+  border-color: #168553;
+  box-shadow: 0 2px 8px rgba(22, 133, 83, 0.1);
+}
+
+.quality-dashboard-metric span {
+  display: block;
+  font-size: 0.875rem;
+  color: #6b7280;
+  margin-bottom: 0.5rem;
+}
+
+.quality-dashboard-metric strong {
+  display: block;
+  font-size: 2rem;
+  font-weight: 700;
+  color: #168553;
+}
+
+/* ========================================
+   Charts - 图表容器
+   ======================================== */
+
+.dashboard-charts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+  gap: 2rem;
+  margin: 2rem 0;
+}
+
+.chart-container {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 2rem;
+}
+
+.chart-container h3 {
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: #1f2937;
+  margin: 0 0 1.5rem 0;
+}
+
+.chart-wrapper {
+  position: relative;
+  height: 300px;
+}
+
+.chart-wrapper canvas {
+  max-height: 100%;
+}
+
+.chart-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 300px;
+  color: #9ca3af;
+  font-size: 0.875rem;
+}
+
+.chart-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 300px;
+  color: #9ca3af;
+  font-size: 0.875rem;
+}
+
+.chart-empty-icon {
+  font-size: 3rem;
+  margin-bottom: 1rem;
+  opacity: 0.5;
+}
+
+/* ========================================
+   Responsive - 响应式优化
+   ======================================== */
+
+@media (max-width: 768px) {
+  .workspace-metrics {
+    grid-template-columns: 1fr;
+  }
+
+  .quick-start-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .quality-dashboard-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .dashboard-charts {
+    grid-template-columns: 1fr;
+  }
+
+  .chart-wrapper {
+    height: 250px;
+  }
+}
+
+@media (max-width: 480px) {
+  .quality-dashboard-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .workspace-metric {
+    padding: 1rem;
+  }
+
+  .metric-value {
+    font-size: 1.75rem;
+  }
+
+  .quick-start-grid button {
+    padding: 1rem;
+  }
+}
+
+/* ========================================
+   Utility Classes
+   ======================================== */
+
+.text-success {
+  color: #168553 !important;
+}
+
+.text-error {
+  color: #b33b35 !important;
+}
+
+.text-warning {
+  color: #996f16 !important;
+}
+
+.bg-success {
+  background-color: #eaf6ef !important;
+}
+
+.bg-error {
+  background-color: #fef2f2 !important;
+}
+
+.bg-warning {
+  background-color: #fef3c7 !important;
+}
+
+.border-success {
+  border-color: #168553 !important;
+}
+
+.border-error {
+  border-color: #b33b35 !important;
+}
+
+.border-warning {
+  border-color: #996f16 !important;
+}

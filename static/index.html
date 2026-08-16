@@ -14,12 +14,14 @@
   <meta property="og:description" content="验证邮箱、清洗名单，并查找目标企业的可联系邮箱。">
   <meta property="og:url" content="https://verigo.site/">
   <meta name="twitter:card" content="summary">
-  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"Organization","name":"Verigo","url":"https://verigo.site/","logo":"https://verigo.site/static/favicon.svg"},{"@type":"WebApplication","name":"Verigo","url":"https://verigo.site/","applicationCategory":"BusinessApplication","operatingSystem":"Web","description":"面向销售、招聘与出海团队的邮箱验证、名单清洗和企业邮箱查找工具。","offers":{"@type":"Offer","price":"0.50","priceCurrency":"CNY","description":"100 次批量验证"}},{"@type":"FAQPage","mainEntity":[{"@type":"Question","name":"Catch-all 邮箱是什么意思？","acceptedAnswer":{"@type":"Answer","text":"Catch-all 是企业邮箱域名的一种设置：发往该域名的任意前缀都可能被接收或转发，因此单次验证结果不一定能确认某个具体收件人真实存在。"}},{"@type":"Question","name":"企业邮箱查找和普通验证有什么区别？","acceptedAnswer":{"@type":"Answer","text":"普通验证用于确认已有邮箱是否可用；企业邮箱查找用于获取目标企业的业务联络邮箱，适合销售开发、招聘和商务合作。"}}]}]}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"Organization","name":"Verigo","url":"https://verigo.site/","logo":"https://verigo.site/static/favicon.svg"},{"@type":"WebApplication","name":"Verigo","url":"https://verigo.site/","applicationCategory":"BusinessApplication","operatingSystem":"Web","description":"面向销售、招聘与出海团队的邮箱验证、名单清洗和企业邮箱查找工具。","offers":{"@type":"Offer","price":"0.50","priceCurrency":"CNY","description":"100 次批量验证"}},{"@type":"FAQPage","mainEntity":[{"@type":"Question","name":"Catch-all 邮箱是什么意思？","acceptedAnswer":{"@type":"Answer","text":"Catch-all 是企业邮箱域名的一种设置：发往该域名的任意前缀都可能被服务器接收或转发，因此无法仅凭服务器响应确认某个具体收件人真实存在。"}},{"@type":"Question","name":"企业邮箱查找和普通验证有什么区别？","acceptedAnswer":{"@type":"Answer","text":"普通验证用于确认已有邮箱是否可用；企业邮箱查找用于获取目标企业的业务联络邮箱，适合销售开发、招聘和商务合作。"}}]}]}</script>
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
-  <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
+  <!-- Design System CSS (必须最先加载) -->
+  <link rel="stylesheet" href="/static/css/design-tokens.css?v=1.0.0">
+  <link rel="stylesheet" href="/static/css/components.css?v=1.0.0">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" referrerpolicy="no-referrer">
-  <link rel="stylesheet" href="/static/css/app.css?v=ui-20260816-r3">
-  <link rel="stylesheet" href="/static/css/product.css?v=ui-20260816-r3">
+  <link rel="stylesheet" href="/static/css/app.css?v=company-finder-p4-v1">
+  <link rel="stylesheet" href="/static/css/product.css?v=redemption-nav-v3">
 </head>
 <body class="product-surface">
   <header class="topbar">
@@ -31,6 +33,7 @@
       <button class="nav-item active" type="button" data-view="single"><i class="fa-regular fa-circle-check" aria-hidden="true"></i><span>验证</span></button>
       <button class="nav-item" type="button" data-view="batch"><i class="fa-solid fa-list-check" aria-hidden="true"></i><span>批量</span></button>
       <button class="nav-item" type="button" data-view="discovery"><i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i><span>查找</span></button>
+      <button class="nav-item" type="button" data-view="company-finder"><i class="fa-regular fa-building" aria-hidden="true"></i><span>公司</span></button>
       <button class="nav-item" type="button" data-view="history"><i class="fa-solid fa-clock-rotate-left" aria-hidden="true"></i><span>历史</span></button>
       <button id="api-nav" class="nav-item" type="button"><i class="fa-solid fa-code" aria-hidden="true"></i><span>API</span></button>
       <button id="redeem-nav" class="nav-item nav-redeem" type="button"><i class="fa-solid fa-ticket" aria-hidden="true"></i><span>兑换</span></button>
@@ -74,7 +77,6 @@
         <button id="wallet-nav" class="account-action hidden" type="button" data-view="wallet"><i class="fa-regular fa-credit-card" aria-hidden="true"></i>额度与账单</button>
         <button id="dashboard-nav" class="account-action hidden" type="button" data-view="dashboard"><i class="fa-solid fa-chart-line" aria-hidden="true"></i>运营监控</button>
         <button id="admin-credits-nav" class="account-action hidden" type="button" data-view="admin-credits"><i class="fa-solid fa-sliders" aria-hidden="true"></i>额度管理</button>
-        <button id="system-health-nav" class="account-action hidden" type="button" data-view="system-health"><i class="fa-solid fa-heart-pulse" aria-hidden="true"></i>系统监控</button>
         <div class="account-menu-separator"></div>
         <button id="bind-email-button" type="button" class="hidden">绑定邮箱</button>
         <button id="change-password-button" type="button" class="account-action"><i class="fa-solid fa-lock" aria-hidden="true"></i>修改密码</button>
@@ -94,7 +96,7 @@
     </div>
     <aside class="hero-proof hero-capabilities" aria-label="Verigo 核心能力">
       <article><strong>多层检查</strong><span>语法、域名、MX 与 SMTP</span></article>
-      <article><strong>结果可解释</strong><span>状态、原因与下一步</span></article>
+      <article><strong>结果可解释</strong><span>状态、方式、服务器响应</span></article>
       <article><strong>按量使用</strong><span>单个免费，批量按额度计费</span></article>
     </aside>
   </section>
@@ -212,7 +214,7 @@
 
       <div class="table-toolbar">
         <div class="filters">
-          <input id="result-search" type="search" placeholder="搜索邮箱" aria-label="搜索邮箱">
+          <input id="result-search" type="search" placeholder="搜索邮箱">
           <select id="result-filter" aria-label="筛选验证状态">
             <option value="all">全部结果</option>
             <option value="deliverable">可投递</option>
@@ -225,9 +227,9 @@
 
       <div class="table-wrap">
         <table>
-          <thead><tr><th>邮箱</th><th>状态</th><th>下一步</th><th>操作</th></tr></thead>
+          <thead><tr><th>邮箱</th><th>状态</th><th>验证方式</th><th>服务器响应</th><th>操作</th></tr></thead>
           <tbody id="results-body">
-            <tr class="empty-row"><td colspan="4">尚无验证结果</td></tr>
+            <tr class="empty-row"><td colspan="5">尚无验证结果</td></tr>
           </tbody>
         </table>
       </div>
@@ -250,7 +252,7 @@
 
   <section class="commercial-section trust-section compact-marketing public-marketing" aria-labelledby="trust-title">
     <div class="commercial-heading"><p class="eyebrow">为业务动作而设计</p><h2 id="trust-title">让下一封邮件、更值得发出去</h2></div>
-    <div class="trust-grid"><article><h3>多层检查</h3><p>语法、域名、MX 与 SMTP</p></article><article><h3>结果可解释</h3><p>状态、原因与下一步</p></article><article><h3>按量使用</h3><p>单个免费，批量按额度计费</p></article></div>
+    <div class="trust-grid"><article><h3>多层检查</h3><p>语法、域名、MX 与 SMTP</p></article><article><h3>结果可解释</h3><p>状态、方式、服务器响应</p></article><article><h3>按量使用</h3><p>单个免费，批量按额度计费</p></article></div>
   </section>
 
   <section class="commercial-section faq-section compact-marketing public-marketing" aria-labelledby="faq-title">
@@ -283,7 +285,7 @@
       <section class="discovery-guide" aria-label="邮箱查找说明">
         <h2>三步找到有效的工作邮箱</h2>
         <p>输入真实姓名和公司域名后，Verigo 会生成候选地址。提交验证后，再根据状态决定是否继续联系。</p>
-        <div class="discovery-guide-grid"><div class="discovery-guide-card"><strong>1. 输入信息</strong><span>姓名和公司域名越准确，候选结果越相关。</span></div><div class="discovery-guide-card"><strong>2. 验证候选</strong><span>确认候选地址是否适合联系。</span></div><div class="discovery-guide-card"><strong>3. 导出结果</strong><span>下载 CSV，按状态安排后续跟进。</span></div></div>
+        <div class="discovery-guide-grid"><div class="discovery-guide-card"><strong>1. 输入信息</strong><span>姓名和公司域名越准确，候选结果越相关。</span></div><div class="discovery-guide-card"><strong>2. 验证候选</strong><span>对候选地址执行语法、域名和邮箱服务器检查。</span></div><div class="discovery-guide-card"><strong>3. 导出结果</strong><span>下载 CSV，保留状态、验证方式和服务器响应。</span></div></div>
       </section>
     </section>
     <section class="discovery-results-area">
@@ -296,13 +298,44 @@
         <div class="progress-track"><div id="discovery-progress-bar" class="progress-bar"></div></div>
       </section>
       <p id="discovery-verdict" class="discovery-verdict">请输入姓名和公司域名</p>
-      <div class="discovery-empty-panel" aria-label="查找结果说明"><div class="discovery-empty-card"><strong>候选地址</strong><span>根据姓名与域名生成可能的工作邮箱。</span></div><div class="discovery-empty-card"><strong>验证状态</strong><span>查看可投递、不可投递或待确认结果。</span></div><div class="discovery-empty-card"><strong>结果解释</strong><span>每条结果提供原因与后续建议。</span></div></div>
+      <div class="discovery-empty-panel" aria-label="查找结果说明"><div class="discovery-empty-card"><strong>候选地址</strong><span>根据姓名与域名生成可能的工作邮箱。</span></div><div class="discovery-empty-card"><strong>验证状态</strong><span>查看可投递、不可投递或待确认结果。</span></div><div class="discovery-empty-card"><strong>结果解释</strong><span>每条结果附带验证方式和服务器响应。</span></div></div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>候选邮箱</th><th>结果</th><th>下一步</th></tr></thead>
-          <tbody id="discovery-results-body"><tr class="empty-row"><td colspan="3">尚无查找结果</td></tr></tbody>
+          <thead><tr><th>候选邮箱</th><th>结果</th><th>验证方式</th><th>服务器响应</th></tr></thead>
+          <tbody id="discovery-results-body"><tr class="empty-row"><td colspan="4">尚无查找结果</td></tr></tbody>
         </table>
       </div>
+    </section>
+  </main>
+
+  <main id="company-finder-workspace" class="company-finder-workspace hidden">
+    <section class="company-finder-form-area">
+      <p class="eyebrow">COMPANY FINDER</p>
+      <h2>从可靠的目标公司开始</h2>
+      <p class="company-finder-intro">按公司、地区、行业或规模筛选。结果只包含近期确认可公开访问的网站。</p>
+      <form id="company-finder-form" class="company-finder-form">
+        <label for="company-finder-query">公司名称或关键词<input id="company-finder-query" type="search" maxlength="120" placeholder="例如：物流软件"></label>
+        <label for="company-finder-country">国家/地区<select id="company-finder-country"><option value="">全部国家/地区</option></select></label>
+        <label for="company-finder-region">地区关键词<input id="company-finder-region" type="search" maxlength="160" placeholder="例如：California"></label>
+        <label for="company-finder-industry">行业<select id="company-finder-industry"><option value="">全部行业</option></select></label>
+        <label for="company-finder-size">公司规模<select id="company-finder-size"><option value="">全部规模</option><option value="1-10">1–10 人</option><option value="11-50">11–50 人</option><option value="51-200">51–200 人</option><option value="201-500">201–500 人</option><option value="501-1000">501–1,000 人</option><option value="1001-5000">1,001–5,000 人</option><option value="5001-10000">5,001–10,000 人</option><option value="10001+">10,001+ 人</option></select></label>
+        <button class="primary-action" type="submit"><i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i>查找公司</button>
+      </form>
+      <p class="company-finder-note"><i class="fa-solid fa-shield-halved" aria-hidden="true"></i>每次搜索仅在受控候选范围内执行，不提供完整目录浏览。</p>
+    </section>
+    <section class="company-finder-results-area" aria-live="polite">
+      <div class="company-finder-results-heading">
+        <div><p class="eyebrow">MATCHES</p><h2 id="company-finder-title">设置条件后开始查找</h2><p id="company-finder-summary">仅显示近期有公开活跃证据的公司。</p></div>
+        <span id="company-finder-count" class="company-finder-count">0 家</span>
+      </div>
+      <p id="company-finder-status" class="company-finder-status" role="status"></p>
+      <section id="company-finder-pending" class="company-finder-pending hidden" aria-live="polite">
+        <i class="fa-solid fa-rotate fa-spin" aria-hidden="true"></i><span id="company-finder-pending-copy"></span>
+      </section>
+      <div id="company-finder-results" class="company-finder-results">
+        <section class="company-finder-empty"><i class="fa-regular fa-building" aria-hidden="true"></i><h3>还没有搜索结果</h3><p>输入公司关键词，或至少选择一个筛选条件。</p></section>
+      </div>
+      <div class="company-finder-pagination"><button id="company-finder-prev" class="download-action" type="button" disabled>上一页</button><span id="company-finder-page">等待搜索</span><button id="company-finder-next" class="download-action" type="button" disabled>下一页</button></div>
     </section>
   </main>
 
@@ -321,22 +354,6 @@
       <article class="report-scorecard"><span>互动会话</span><strong id="metric-report-engaged">0</strong><small id="metric-report-engagement-rate">互动率 0%</small></article>
       <article class="report-scorecard"><span>验证提交</span><strong id="metric-report-submissions">0</strong><small id="metric-report-submission-rate">会话转化 0%</small></article>
       <article class="report-scorecard"><span>平均互动时长</span><strong id="metric-report-engagement-time">0 秒</strong><small>已互动会话</small></article>
-    </section>
-
-    <section id="quality-dashboard" class="report-card quality-dashboard" aria-labelledby="quality-dashboard-title">
-      <div class="report-card-heading">
-        <div><h2 id="quality-dashboard-title">验证质量概览</h2><p id="quality-summary-copy">正在加载质量数据</p></div>
-      </div>
-      <div class="quality-dashboard-grid">
-        <div class="quality-dashboard-metric"><span>已完成验证</span><strong id="quality-verification-total">—</strong></div>
-        <div class="quality-dashboard-metric"><span>可投递率</span><strong id="quality-deliverable-rate">—</strong></div>
-        <div class="quality-dashboard-metric"><span>无法确认</span><strong id="quality-unknown-rate">—</strong></div>
-        <div class="quality-dashboard-metric"><span>复核更新</span><strong id="quality-reviewed-count">—</strong></div>
-      </div>
-      <div class="quality-attention">
-        <div><h3>需要关注</h3><p>按近期记录汇总</p></div>
-        <ul id="quality-attention-list" aria-live="polite"><li class="quality-attention-empty">暂无足够数据</li></ul>
-      </div>
     </section>
 
     <section id="cloudshell-crm" class="cloudshell-crm" aria-labelledby="cloudshell-crm-title">
@@ -402,19 +419,6 @@
       </section>
     </section>
 
-    <section class="report-card provider-quality-card" aria-labelledby="provider-quality-heading">
-      <div class="report-card-heading">
-        <div><h2 id="provider-quality-heading">邮箱服务商质量</h2><p>最近 24 小时表现与七日稳定参考</p></div>
-        <span>建议线仅供管理员确认</span>
-      </div>
-      <div class="provider-quality-table-wrap">
-        <table class="provider-quality-table">
-          <thead><tr><th scope="col">服务商</th><th scope="col">24h 已处理</th><th scope="col">可投递率</th><th scope="col">无法确认率</th><th scope="col">复核完成率</th><th scope="col">首次 / 复核 p50-p95</th><th scope="col">有效天数</th><th scope="col">七日参考</th><th scope="col">建议告警线</th></tr></thead>
-          <tbody id="provider-quality-body"><tr><td colspan="9" class="provider-quality-empty">正在加载质量数据</td></tr></tbody>
-        </table>
-      </div>
-    </section>
-
     <section class="report-tertiary-grid">
       <section class="report-card report-audience-card">
         <div class="report-card-heading"><div><h2>用户与活跃度</h2><p>用户规模与今日真实访问</p></div><span>账户活跃</span></div>
@@ -447,33 +451,17 @@
         <div><p class="eyebrow">调整操作</p><h2 id="admin-credits-heading">授予或扣减验证次数</h2></div>
       </div>
       <form id="admin-credit-grant-form" class="admin-credit-grant-form">
-        <label for="admin-credit-action">操作类型</label>
+        <label for="admin-credit-action">操作</label>
         <select id="admin-credit-action"><option value="grant">授予额度</option><option value="deduct">扣减额度</option></select>
         <label for="admin-credit-email">用户注册邮箱</label>
-        <div class="admin-email-lookup">
-          <input id="admin-credit-email" type="email" autocomplete="email" maxlength="254" placeholder="输入邮箱查询账户" required>
-          <button id="admin-account-lookup" class="lookup-action" type="button"><i class="fa-solid fa-magnifying-glass"></i>查询</button>
-        </div>
-        <div id="admin-account-info" class="admin-account-info hidden">
-          <div class="account-info-row">
-            <span class="info-label">当前付费余额</span>
-            <strong id="account-info-paid" class="info-value">—</strong>
-          </div>
-          <div class="account-info-row">
-            <span class="info-label">体验额度</span>
-            <strong id="account-info-trial" class="info-value">—</strong>
-          </div>
-          <div class="account-info-row">
-            <span class="info-label">已使用</span>
-            <strong id="account-info-used" class="info-value">—</strong>
-          </div>
-        </div>
-        <label for="admin-credit-amount">调整金额（元）</label>
-        <input id="admin-credit-amount" type="number" inputmode="decimal" min="0.01" max="5000" step="0.01" placeholder="0.01 - 5000.00" required>
-        <label for="admin-credit-note">操作备注 <span class="label-optional">（可选）</span></label>
-        <input id="admin-credit-note" type="text" maxlength="200" autocomplete="off" placeholder="说明调整原因">
+        <input id="admin-credit-email" type="email" autocomplete="email" maxlength="254" required>
+        <button id="admin-account-lookup" class="download-action" type="button">查询账户</button>
+        <label for="admin-credit-amount">充值或退款金额（元）</label>
+        <input id="admin-credit-amount" type="number" inputmode="decimal" min="0.01" max="5000" step="0.01" required>
+        <label for="admin-credit-note">备注</label>
+        <input id="admin-credit-note" type="text" maxlength="200" autocomplete="off">
         <p id="admin-credit-result" class="admin-credit-result" role="status"></p>
-        <button id="admin-credit-submit" class="primary-action" type="submit"><i class="fa-solid fa-check"></i>确认操作</button>
+        <button id="admin-credit-submit" class="primary-action" type="submit">确认授予</button>
       </form>
       <section class="admin-redemption-card" aria-labelledby="admin-redemption-heading">
         <div><p class="eyebrow">临时支付通道</p><h2 id="admin-redemption-heading">生成兑换码</h2><p>完整兑换码仅在生成后展示一次。系统只保存哈希，无法再次查看。</p></div>
@@ -481,64 +469,22 @@
         <div id="admin-redemption-result" class="admin-redemption-result hidden" aria-live="polite"></div>
       </section>
       <section class="admin-redemption-card company-catalog-card" aria-labelledby="company-catalog-heading">
-        <div><p class="eyebrow">Company Finder</p><h2 id="company-catalog-heading">公司目录筛选</h2><p>按公司名称、国家、行业、规模和官网筛选。结果包含官网、LinkedIn 链接与公司头像。</p></div>
+        <div><p class="eyebrow">Company Finder</p><h2 id="company-catalog-heading">公司目录筛选</h2><p>按公司、国家、地区、行业和人员规模查找公司。目录信息已统一清理，原始数据仅用于追溯。</p></div>
         <form id="company-catalog-form" class="admin-company-catalog-form">
-          <label>公司名称或关键词<input id="company-catalog-query" type="search" maxlength="120" placeholder="例如：software"></label>
-          <label>国家/地区<input id="company-catalog-country" type="text" maxlength="80" placeholder="例如：united states"></label>
-          <label>行业<input id="company-catalog-industry" type="text" maxlength="160" placeholder="例如：computer software"></label>
-          <label>公司规模<input id="company-catalog-size" type="text" maxlength="40" placeholder="例如：51-200"></label>
-          <label>官网<select id="company-catalog-website"><option value="">不限</option><option value="true">有官网</option><option value="false">无官网</option></select></label>
+          <label>公司名称或关键词<input id="company-catalog-query" type="search" maxlength="120" placeholder="例如：公司名称或关键词"></label>
+          <label>国家/地区<select id="company-catalog-country"><option value="">全部国家/地区</option></select></label>
+          <label>地区关键词<input id="company-catalog-region" type="search" maxlength="160" placeholder="例如：North Rhine-Westphalia"></label>
+          <label>行业<select id="company-catalog-industry"><option value="">全部行业</option></select></label>
+          <label>公司规模<select id="company-catalog-size"><option value="">全部规模</option><option value="1-10">1–10 人</option><option value="11-50">11–50 人</option><option value="51-200">51–200 人</option><option value="201-500">201–500 人</option><option value="501-1000">501–1,000 人</option><option value="1001-5000">1,001–5,000 人</option><option value="5001-10000">5,001–10,000 人</option><option value="10001+">10,001+ 人</option></select></label>
+          <label>官网<select id="company-catalog-website"><option value="true" selected>有官网</option><option value="">不限</option><option value="false">无官网</option></select></label>
           <button class="primary-action" type="submit">筛选公司</button>
         </form>
         <p id="company-catalog-status" class="admin-credit-result" role="status"></p>
-        <div class="admin-company-catalog-table-wrap"><table class="admin-company-catalog-table"><thead><tr><th>公司</th><th>国家/地区</th><th>行业</th><th>规模</th><th>官网</th><th>LinkedIn</th></tr></thead><tbody id="company-catalog-results"></tbody></table></div>
-        <div class="admin-company-catalog-pagination"><button id="company-catalog-prev" class="download-action" type="button" disabled>上一页</button><span id="company-catalog-page">-</span><button id="company-catalog-next" class="download-action" type="button" disabled>下一页</button></div>
+        <div class="admin-company-catalog-table-wrap"><table class="admin-company-catalog-table"><thead><tr><th>公司</th><th>国家/地区</th><th>行业</th><th>规模</th><th>官网</th><th>活跃性</th><th>LinkedIn</th></tr></thead><tbody id="company-catalog-results"><tr class="company-catalog-empty"><td colspan="7">设置搜索条件后查看候选公司</td></tr></tbody></table></div>
+        <div class="admin-company-catalog-pagination"><button id="company-catalog-prev" class="download-action" type="button" disabled>上一页</button><span id="company-catalog-page">等待筛选</span><button id="company-catalog-next" class="download-action" type="button" disabled>下一页</button></div>
       </section>
       <section id="admin-account-summary" class="admin-account-summary"><div class="report-card-heading"><div><h2>功能使用趋势</h2><p>单个验证、批量验证与工作邮箱查找</p></div></div><div id="admin-feature-chart" class="admin-feature-chart"></div><div id="admin-feature-legend" class="report-legend"></div></section>
-      <section class="admin-accounts-section">
-        <div class="report-card-heading">
-          <div><h2>全部账户</h2><p id="admin-accounts-meta">按注册时间排序</p></div>
-          <div class="admin-accounts-controls">
-            <input id="admin-accounts-search" type="search" placeholder="搜索邮箱..." maxlength="100" aria-label="搜索账户邮箱">
-            <button id="admin-accounts-refresh" class="download-action" type="button">刷新</button>
-          </div>
-        </div>
-        <div id="admin-accounts-list" class="admin-accounts-list"></div>
-        <div class="pagination"><span id="admin-accounts-page"></span><div><button id="admin-accounts-prev" class="page-button" type="button">上一页</button><span id="admin-accounts-pages" class="page-numbers"></span><button id="admin-accounts-next" class="page-button" type="button">下一页</button></div></div>
-      </section>
-    </section>
-  </main>
-
-  <main id="system-health-workspace" class="system-health-workspace hidden">
-    <section class="report-heading admin-report-heading">
-      <div><p class="eyebrow">系统管理</p><h2>系统监控</h2><p class="report-updated">服务状态、队列、数据库与资源</p></div>
-      <div class="report-actions"><button id="system-health-refresh" class="download-action" type="button">刷新</button></div>
-    </section>
-    <section class="report-scorecards admin-scorecards">
-      <article class="report-scorecard"><span>服务状态</span><strong id="health-services-status">—</strong><small id="health-services-detail">检测中</small></article>
-      <article class="report-scorecard"><span>工作进程</span><strong id="health-workers-status">—</strong><small id="health-workers-detail">检测中</small></article>
-      <article class="report-scorecard"><span>待处理任务</span><strong id="health-queue-pending">—</strong><small id="health-queue-running">运行中 —</small></article>
-      <article class="report-scorecard"><span>数据库连接</span><strong id="health-db-connections">—</strong><small id="health-db-detail">检测中</small></article>
-    </section>
-    <section class="report-secondary-grid">
-      <section class="report-card">
-        <div class="report-card-heading"><div><h2>服务状态</h2><p>系统核心服务运行情况</p></div></div>
-        <div id="health-services-list" class="admin-accounts-list"></div>
-      </section>
-      <section class="report-card">
-        <div class="report-card-heading"><div><h2>工作进程</h2><p>邮箱验证 Worker 状态</p></div></div>
-        <div id="health-workers-list" class="admin-accounts-list"></div>
-      </section>
-    </section>
-    <section class="report-secondary-grid">
-      <section class="report-card">
-        <div class="report-card-heading"><div><h2>系统资源</h2><p>CPU、内存与磁盘使用</p></div></div>
-        <div id="health-resources-list" class="admin-accounts-list"></div>
-      </section>
-      <section class="report-card">
-        <div class="report-card-heading"><div><h2>数据库</h2><p>连接池与查询性能</p></div></div>
-        <div id="health-database-list" class="admin-accounts-list"></div>
-      </section>
+      <section class="admin-accounts-section"><div class="report-card-heading"><div><h2>全部账户</h2><p id="admin-accounts-meta">按注册时间排序</p></div><button id="admin-accounts-refresh" class="download-action" type="button">刷新</button></div><div id="admin-accounts-list" class="admin-accounts-list"></div><div class="pagination"><span id="admin-accounts-page"></span><div><button id="admin-accounts-prev" class="page-button" type="button">上一页</button><span id="admin-accounts-pages" class="page-numbers"></span><button id="admin-accounts-next" class="page-button" type="button">下一页</button></div></div></section>
     </section>
   </main>
 
@@ -552,7 +498,7 @@
 
   <main id="history-workspace" class="history-workspace hidden">
     <section class="report-heading"><div><p class="eyebrow">账户</p><h1>历史记录</h1><p class="report-updated">按名单名称查看过去的验证任务</p></div><button id="history-refresh" class="download-action" type="button">刷新</button></section>
-    <section class="report-card history-card"><div class="table-toolbar"><div class="history-search-controls"><input id="history-search" type="search" placeholder="搜索文件名或名单名称" aria-label="搜索文件名或名单名称"><select id="history-filter" aria-label="筛选任务"><option value="all">全部</option><option value="completed">已完成</option><option value="running">验证中</option><option value="failed">失败</option><option value="stopped">已停止</option></select></div></div><div id="history-list" class="history-list"></div><div class="pagination"><span id="history-page-info"></span><div><button id="history-prev" class="page-button" type="button">上一页</button><span id="history-pages" class="page-numbers"></span><button id="history-next" class="page-button" type="button">下一页</button></div></div></section>
+    <section class="report-card history-card"><div class="table-toolbar"><div class="history-search-controls"><input id="history-search" type="search" placeholder="搜索文件名或名单名称"><select id="history-filter" aria-label="筛选任务"><option value="all">全部</option><option value="completed">已完成</option><option value="running">验证中</option><option value="failed">失败</option><option value="stopped">已停止</option></select></div></div><div id="history-list" class="history-list"></div><div class="pagination"><span id="history-page-info"></span><div><button id="history-prev" class="page-button" type="button">上一页</button><span id="history-pages" class="page-numbers"></span><button id="history-next" class="page-button" type="button">下一页</button></div></div></section>
   </main>
   <footer class="site-footer">
     <span>Verigo · 邮箱验证、名单清洗与企业邮箱查找</span>
@@ -573,6 +519,12 @@
     <div class="result-detail-actions">
       <button id="result-reverify-button" class="secondary-action" type="button">再次验证</button>
     </div>
+  </aside>
+
+  <aside id="company-finder-detail-drawer" class="result-detail-drawer company-finder-detail-drawer" aria-hidden="true" aria-labelledby="company-finder-detail-title">
+    <div class="drawer-heading"><div><p class="eyebrow">公司详情</p><h2 id="company-finder-detail-title">公司资料</h2><span id="company-finder-detail-status" class="company-vitality-badge is-active_verified">近期可确认</span></div><button id="close-company-finder-detail" class="dialog-close" type="button" aria-label="关闭">×</button></div>
+    <div id="company-finder-detail-content" class="result-detail-content" aria-live="polite"></div>
+    <div id="company-finder-detail-actions" class="result-detail-actions"></div>
   </aside>
 
   <dialog id="auth-dialog" class="auth-dialog">
@@ -717,7 +669,7 @@
     </form>
   </dialog>
 
-  <script src="/static/js/i18n.js?v=locale-v2" defer></script>
-  <script src="/static/js/app.js?v=ui-20260816-r3" defer></script>
+  <script src="/static/js/i18n.js?v=locale-v1" defer></script>
+  <script src="/static/js/app.js?v=company-finder-p4-v1" defer></script>
 </body>
 </html>

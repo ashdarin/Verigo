@@ -46,6 +46,25 @@ def _ts_expired(value: Any, now: datetime) -> bool:
         return True
 
 
+def _cooldown_sort_value(value: Any) -> float:
+    """Normalize SQLite text and PostgreSQL datetimes for deterministic sorting."""
+    if value is None or value == "":
+        return float("-inf")
+    if isinstance(value, datetime):
+        timestamp = value
+    else:
+        try:
+            text = str(value).replace("Z", "+00:00")
+            if "T" not in text and " " in text:
+                text = text.replace(" ", "T", 1)
+            timestamp = datetime.fromisoformat(text)
+        except (TypeError, ValueError, OverflowError):
+            return float("-inf")
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.replace(tzinfo=timezone.utc)
+    return timestamp.timestamp()
+
+
 class CloudShellCoordinator:
     """Coordinate Cloud Shell claims without storing credentials or tokens."""
 
@@ -341,7 +360,8 @@ class CloudShellCoordinator:
                 }
                 eligible.sort(key=lambda row: (
                     -int(str(row[0]) in healthy_worker_ids),
-                    -int(row[6]), int(row[2]), int(row[3]), row[4] or "", row[0]
+                    -int(row[6]), int(row[2]), int(row[3]),
+                    _cooldown_sort_value(row[4]), row[0]
                 ))
                 selected = {str(row[0]) for row in eligible[: min(desired, len(eligible))]}
                 # One deterministic update prevents the prior deactivate-all /

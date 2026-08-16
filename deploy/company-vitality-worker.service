@@ -1,0 +1,41 @@
+[Unit]
+Description=Verigo Company Finder vitality worker
+After=network-online.target company-finder.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+EnvironmentFile=/etc/verigo-company-finder/service.env
+WorkingDirectory=/opt/verigo-company-finder
+ExecStart=/opt/verigo-company-finder/.venv/bin/python /opt/verigo-company-finder/company-vitality-worker.py
+Restart=on-failure
+RestartSec=5
+Nice=10
+CPUQuota=40%
+MemoryMax=192M
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+IPAddressAllow=127.0.0.53
+IPAddressAllow=127.0.0.54
+IPAddressDeny=0.0.0.0/8
+IPAddressDeny=10.0.0.0/8
+IPAddressDeny=100.64.0.0/10
+IPAddressDeny=127.0.0.0/8
+IPAddressDeny=169.254.0.0/16
+IPAddressDeny=172.16.0.0/12
+IPAddressDeny=192.0.0.0/24
+IPAddressDeny=192.168.0.0/16
+IPAddressDeny=198.18.0.0/15
+IPAddressDeny=224.0.0.0/4
+IPAddressDeny=::1/128
+IPAddressDeny=fc00::/7
+IPAddressDeny=fe80::/10
+ReadWritePaths=/opt/verigo-company-finder/data
+
+[Install]
+WantedBy=multi-user.target

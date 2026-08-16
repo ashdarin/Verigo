@@ -4,7 +4,8 @@ const initialView = initialPath === "/workspace" || initialPath === "/lists" ? "
   : initialPath === "/admin/credits" ? "admin-credits"
     : initialPath === "/wallet" || initialPath === "/app/billing" ? "wallet"
       : initialPath === "/history" || initialPath === "/app/history" ? "history"
-        : initialPath === "/app/finder" ? "discovery" : "single";
+        : initialPath === "/app/finder" ? "discovery"
+          : initialPath === "/app/company-finder" ? "company-finder" : "single";
 const state = {
   view: initialView,
   mode: "paste",
@@ -45,6 +46,7 @@ const state = {
   activeResultItem: null,
   history: { offset: 0, limit: 10, total: 0 },
   historyTimer: null,
+  companyFinder: { offset: 0, limit: 25, total: 0, hasMore: false, facetsLoaded: false, refreshTimer: null, refreshAttempts: 0 },
 };
 
 const pageSize = 50;
@@ -203,6 +205,7 @@ function switchView(view) {
     return;
   }
   const discovery = view === "discovery";
+  const companyFinder = view === "company-finder";
   const dashboard = view === "dashboard";
   const adminCredits = view === "admin-credits";
   const systemHealth = view === "system-health";
@@ -223,13 +226,27 @@ function switchView(view) {
     el("auth-error").textContent = "请先登录后使用企业邮箱查找";
     return;
   }
+  if (companyFinder && !state.user) {
+    state.pendingView = view;
+    el("auth-dialog").showModal();
+    setAuthMode("login");
+    el("auth-error").textContent = "请先登录后使用 Company Finder";
+    return;
+  }
+  if (companyFinder && !state.user.email_verified) {
+    el("auth-dialog").showModal();
+    setAuthMode("login");
+    el("auth-error").textContent = "请先验证注册邮箱后使用 Company Finder";
+    return;
+  }
   state.view = view;
   const marketing = view === "single" || view === "batch";
   document.querySelectorAll(".public-marketing").forEach((section) => section.classList.toggle("workspace-mode-hidden", !marketing));
   const setHidden = (id, hidden) => el(id)?.classList.toggle("hidden", hidden);
-  setHidden("verify-workspace", discovery || dashboard || adminCredits || systemHealth || wallet || workspace || history);
+  setHidden("verify-workspace", discovery || companyFinder || dashboard || adminCredits || systemHealth || wallet || workspace || history);
   setHidden("workspace-home", !workspace);
   setHidden("discovery-workspace", !discovery);
+  setHidden("company-finder-workspace", !companyFinder);
   setHidden("dashboard-workspace", !dashboard);
   setHidden("admin-credits-workspace", !adminCredits);
   setHidden("system-health-workspace", !systemHealth);
@@ -237,7 +254,7 @@ function switchView(view) {
   setHidden("history-workspace", !history);
   setHidden("single-panel", view !== "single");
   setHidden("batch-panel", view !== "batch");
-  if (!discovery && !dashboard && !adminCredits && !systemHealth && !wallet && !workspace && !history) {
+  if (!discovery && !companyFinder && !dashboard && !adminCredits && !systemHealth && !wallet && !workspace && !history) {
     el("verify-eyebrow").textContent = VerigoI18n.text(view === "single" ? "免费单个验证" : "收费批量验证");
     el("verify-heading").textContent = VerigoI18n.text(view === "single" ? "验证单个收件地址" : "批量验证收件地址");
   }
@@ -247,6 +264,10 @@ function switchView(view) {
   if (discovery) {
     document.title = "邮箱查找 | Verigo";
     if (window.location.pathname !== "/app/finder") window.history.pushState({}, "", "/app/finder");
+  } else if (companyFinder) {
+    document.title = "Company Finder | Verigo";
+    if (window.location.pathname !== "/app/company-finder") window.history.pushState({}, "", "/app/company-finder");
+    loadCompanyFinderFacets();
   } else if (dashboard) {
     document.title = `${VerigoI18n.text("运营监控")} | Verigo`;
     if (window.location.pathname !== "/dashboard") window.history.pushState({}, "", "/dashboard");
@@ -260,6 +281,7 @@ function switchView(view) {
     state.metricsTimer = null;
     loadAdminAccounts();
     loadAdminFeatureUsage();
+    loadCompanyCatalogFacets();
   } else if (systemHealth) {
     document.title = "系统监控 | Verigo";
     if (window.location.pathname !== "/admin/system") window.history.pushState({}, "", "/admin/system");
@@ -285,11 +307,12 @@ function switchView(view) {
     state.metricsTimer = null;
     if (window.location.pathname !== "/verify") window.history.replaceState({}, "", "/verify");
   }
+  if (!companyFinder) stopCompanyFinderPolling();
   updateCount();
 }
 
 window.addEventListener("popstate", () => {
-  const pathView = { "/workspace": "workspace", "/lists": "workspace", "/dashboard": "dashboard", "/admin/credits": "admin-credits", "/wallet": "wallet", "/history": "history", "/app/finder": "discovery", "/app/history": "history", "/app/billing": "wallet" }[window.location.pathname] || "single";
+  const pathView = { "/workspace": "workspace", "/lists": "workspace", "/dashboard": "dashboard", "/admin/credits": "admin-credits", "/wallet": "wallet", "/history": "history", "/app/finder": "discovery", "/app/company-finder": "company-finder", "/app/history": "history", "/app/billing": "wallet" }[window.location.pathname] || "single";
   switchView(pathView);
 });
 
@@ -1975,16 +1998,83 @@ el("admin-redemption-form")?.addEventListener("submit", async (event) => {
   } finally { submit.disabled = false; }
 });
 
-const companyCatalogState = { offset: 0, limit: 25, total: 0, hasMore: false };
-function companyCatalogQuery() {
-  const params = new URLSearchParams({ offset: String(companyCatalogState.offset), limit: String(companyCatalogState.limit) });
-  const fields = {
+const COMPANY_CATALOG_MAX_WINDOW = 100;
+const companyCatalogState = { offset: 0, limit: 25, total: 0, hasMore: false, facetsLoaded: false };
+function fillCompanyCatalogFacet(selectId, items, emptyLabel) {
+  const select = el(selectId);
+  if (!select) return;
+  const current = select.value;
+  select.replaceChildren(new Option(emptyLabel, ""));
+  (items || []).forEach((item) => {
+    const option = new Option(`${item.label || item.value} (${Number(item.count || 0).toLocaleString("zh-CN")})`, item.value);
+    option.title = item.label || item.value;
+    select.append(option);
+  });
+  if ([...select.options].some((option) => option.value === current)) select.value = current;
+}
+async function loadCompanyCatalogFacets() {
+  if (companyCatalogState.facetsLoaded) return;
+  const status = el("company-catalog-status");
+  try {
+    const countries = await api("/api/admin/company-catalog/facets/country");
+    const industries = await api("/api/admin/company-catalog/facets/industry");
+    fillCompanyCatalogFacet("company-catalog-country", countries.items, "全部国家/地区");
+    fillCompanyCatalogFacet("company-catalog-industry", industries.items, "全部行业");
+    companyCatalogState.facetsLoaded = true;
+  } catch (error) {
+    if (status && !status.textContent) status.textContent = `筛选项加载失败：${error.message}`;
+  }
+}
+function companyCatalogFields() {
+  return {
     query: el("company-catalog-query")?.value,
     country: el("company-catalog-country")?.value,
+    region: el("company-catalog-region")?.value,
     industry: el("company-catalog-industry")?.value,
     size: el("company-catalog-size")?.value,
     has_website: el("company-catalog-website")?.value,
   };
+}
+function companyCatalogHasMeaningfulFilter(fields) {
+  return [fields.query, fields.country, fields.region, fields.industry, fields.size]
+    .some((value) => value && value.trim());
+}
+function renderCompanyCatalogEmpty(message) {
+  const body = el("company-catalog-results");
+  if (!body) return;
+  const row = document.createElement("tr"); row.className = "company-catalog-empty";
+  const cell = document.createElement("td"); cell.colSpan = 7; cell.textContent = message;
+  row.append(cell); body.replaceChildren(row);
+}
+function companyVitalityPresentation(item) {
+  const state = item.vitality_state || "unchecked";
+  const labels = {
+    active_verified: "近期可确认",
+    recently_observed: "近期有记录",
+    uncertain: "暂未确认",
+    inactive: "已停止展示",
+    checking: "核验中",
+    queued: "待核验",
+    unchecked: "待核验",
+  };
+  const reasons = {
+    website_identity_match: "官网内容与公司身份一致",
+    http_restricted: "官网可达，但限制自动访问",
+    website_identity_uncertain: "官网可达，暂缺少足够的身份证据",
+    parked_domain: "域名当前为停放或出售页面",
+    nxdomain: "当前没有有效的 DNS 记录",
+    non_public_address: "域名未指向可公开访问的地址",
+    http_4xx: "官网返回访问错误",
+    http_5xx: "官网暂时服务异常",
+    connection_failed: "本次连接未成功",
+    missing_domain: "没有可核验的官网",
+  };
+  const effectiveState = ["unchecked", "queued", "checking"].includes(state)
+    ? (item.vitality_queue_state || state) : state;
+  return { state: effectiveState, label: labels[effectiveState] || "待核验", reason: reasons[item.vitality_reason] || "" };
+}
+function companyCatalogQuery(fields = companyCatalogFields()) {
+  const params = new URLSearchParams({ offset: String(companyCatalogState.offset), limit: String(companyCatalogState.limit) });
   Object.entries(fields).forEach(([key, value]) => { if (value) params.set(key, value.trim()); });
   return params;
 }
@@ -1993,26 +2083,57 @@ async function loadCompanyCatalog() {
   const body = el("company-catalog-results");
   if (!status || !body) return;
   status.className = "admin-credit-result";
+  const fields = companyCatalogFields();
+  if (!companyCatalogHasMeaningfulFilter(fields)) {
+    companyCatalogState.offset = 0; companyCatalogState.total = 0; companyCatalogState.hasMore = false;
+    renderCompanyCatalogEmpty("设置搜索条件后查看候选公司");
+    el("company-catalog-page").textContent = "等待筛选";
+    el("company-catalog-prev").disabled = true; el("company-catalog-next").disabled = true;
+    status.classList.add("error"); status.textContent = "请输入公司关键词或选择至少一个筛选条件";
+    return;
+  }
   status.textContent = "正在查询公司目录…";
   try {
-    const data = await api(`/api/admin/company-catalog/search?${companyCatalogQuery()}`);
-    companyCatalogState.total = Number(data.total || 0);
-    companyCatalogState.hasMore = Boolean(data.has_more);
+    const data = await api(`/api/admin/company-catalog/search?${companyCatalogQuery(fields)}`);
+    companyCatalogState.total = Math.min(COMPANY_CATALOG_MAX_WINDOW, Number(data.total || 0));
+    companyCatalogState.hasMore = Boolean(data.has_more)
+      && companyCatalogState.offset + companyCatalogState.limit < COMPANY_CATALOG_MAX_WINDOW;
     body.replaceChildren();
     (data.items || []).forEach((item) => {
       const row = document.createElement("tr");
       const companyCell = document.createElement("td");
       const company = document.createElement("span"); company.className = "company-catalog-company";
       if (item.logo_url) { const logo = document.createElement("img"); logo.src = item.logo_url; logo.alt = ""; logo.width = 28; logo.height = 28; logo.loading = "lazy"; logo.addEventListener("error", () => logo.remove()); company.append(logo); }
-      const name = document.createElement("span"); name.textContent = item.name || "-"; company.append(name); companyCell.append(company); row.append(companyCell);
-      const cells = [[item.country, item.region, item.locality].filter(Boolean).join(" / "), item.industry || "-", item.size || "-", item.website || "-"];
-      cells.forEach((value) => { const cell = document.createElement("td"); cell.textContent = value; row.append(cell); });
+      const name = document.createElement("span"); name.textContent = item.name_display || "未提供"; company.append(name); companyCell.append(company); row.append(companyCell);
+      const cells = [item.location_label, item.industry_label, item.size_label, item.website_domain];
+      cells.forEach((value, index) => {
+        const cell = document.createElement("td");
+        const display = value || "未提供";
+        if (index === 3 && item.website_url) {
+          const link = document.createElement("a"); link.href = item.website_url; link.target = "_blank"; link.rel = "noopener noreferrer"; link.className = "company-catalog-website"; link.title = `打开 ${display}`;
+          const icon = document.createElement("i"); icon.className = "fa-solid fa-globe"; icon.setAttribute("aria-hidden", "true"); link.append(icon, document.createTextNode(` ${display}`)); cell.append(link);
+        } else cell.textContent = display;
+        row.append(cell);
+      });
+      const vitality = companyVitalityPresentation(item);
+      const vitalityCell = document.createElement("td"); vitalityCell.className = "company-catalog-vitality";
+      const badge = document.createElement("span"); badge.className = `company-vitality-badge is-${vitality.state}`; badge.textContent = vitality.label;
+      const checked = item.vitality_checked_at ? new Date(item.vitality_checked_at) : null;
+      const checkedLabel = checked && !Number.isNaN(checked.valueOf())
+        ? checked.toLocaleDateString("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit" }) : "";
+      badge.title = [vitality.reason, checkedLabel ? `最后核验：${checkedLabel}` : ""].filter(Boolean).join("\n");
+      vitalityCell.append(badge);
+      if (checkedLabel) { const time = document.createElement("small"); time.textContent = checkedLabel; vitalityCell.append(time); }
+      row.append(vitalityCell);
       const linkedinCell = document.createElement("td");
-      if (item.linkedin_url) { const link = document.createElement("a"); link.href = item.linkedin_url; link.target = "_blank"; link.rel = "noopener noreferrer"; link.className = "company-catalog-linkedin"; link.textContent = "Open"; linkedinCell.append(link); } else { linkedinCell.textContent = "-"; }
+      if (item.linkedin_url) {
+        const link = document.createElement("a"); link.href = item.linkedin_url; link.target = "_blank"; link.rel = "noopener noreferrer"; link.className = "company-catalog-linkedin"; link.title = "打开 LinkedIn 公司主页"; link.setAttribute("aria-label", "打开 LinkedIn 公司主页");
+        const icon = document.createElement("i"); icon.className = "fa-brands fa-linkedin-in"; icon.setAttribute("aria-hidden", "true"); link.append(icon); linkedinCell.append(link);
+      } else linkedinCell.textContent = "未提供";
       row.append(linkedinCell);
       body.append(row);
     });
-    if (!body.children.length) { const row = document.createElement("tr"); const cell = document.createElement("td"); cell.colSpan = 6; cell.textContent = "没有匹配的公司"; row.append(cell); body.append(row); }
+    if (!body.children.length) renderCompanyCatalogEmpty("没有匹配的公司");
     const page = Math.floor(companyCatalogState.offset / companyCatalogState.limit) + 1;
     const totalLabel = companyCatalogState.hasMore ? `至少 ${companyCatalogState.total.toLocaleString("zh-CN")}` : companyCatalogState.total.toLocaleString("zh-CN");
     el("company-catalog-page").textContent = `第 ${page} 页（${totalLabel} 家）`;
@@ -2026,6 +2147,265 @@ async function loadCompanyCatalog() {
 el("company-catalog-form")?.addEventListener("submit", (event) => { event.preventDefault(); companyCatalogState.offset = 0; loadCompanyCatalog(); });
 el("company-catalog-prev")?.addEventListener("click", () => { companyCatalogState.offset = Math.max(0, companyCatalogState.offset - companyCatalogState.limit); loadCompanyCatalog(); });
 el("company-catalog-next")?.addEventListener("click", () => { companyCatalogState.offset += companyCatalogState.limit; loadCompanyCatalog(); });
+
+function stopCompanyFinderPolling() {
+  if (state.companyFinder.refreshTimer) window.clearTimeout(state.companyFinder.refreshTimer);
+  state.companyFinder.refreshTimer = null;
+}
+
+function companyFinderFields() {
+  return {
+    query: el("company-finder-query")?.value,
+    country: el("company-finder-country")?.value,
+    region: el("company-finder-region")?.value,
+    industry: el("company-finder-industry")?.value,
+    size: el("company-finder-size")?.value,
+    has_website: "true",
+  };
+}
+
+function companyFinderHasMeaningfulFilter(fields) {
+  return [fields.query, fields.country, fields.region, fields.industry, fields.size]
+    .some((value) => value && value.trim());
+}
+
+function companyFinderQuery(fields = companyFinderFields()) {
+  const params = new URLSearchParams({
+    offset: String(state.companyFinder.offset), limit: String(state.companyFinder.limit),
+  });
+  Object.entries(fields).forEach(([key, value]) => { if (value) params.set(key, value.trim()); });
+  return params;
+}
+
+function renderCompanyFinderEmpty(title, message) {
+  const results = el("company-finder-results");
+  if (!results) return;
+  const panel = document.createElement("section"); panel.className = "company-finder-empty";
+  const icon = document.createElement("i"); icon.className = "fa-regular fa-building"; icon.setAttribute("aria-hidden", "true");
+  const heading = document.createElement("h3"); heading.textContent = title;
+  const copy = document.createElement("p"); copy.textContent = message;
+  panel.append(icon, heading, copy); results.replaceChildren(panel);
+}
+
+function renderCompanyFinderResults(items) {
+  const results = el("company-finder-results");
+  if (!results) return;
+  results.replaceChildren();
+  (items || []).forEach((item) => {
+    const row = document.createElement("article"); row.className = "company-finder-result";
+    const identity = document.createElement("div"); identity.className = "company-finder-identity";
+    if (item.logo_url) {
+      const logo = document.createElement("img"); logo.src = item.logo_url; logo.alt = ""; logo.width = 36; logo.height = 36; logo.loading = "lazy";
+      logo.addEventListener("error", () => logo.remove()); identity.append(logo);
+    }
+    const copy = document.createElement("div");
+    const name = document.createElement("h3"); name.textContent = item.name_display || "未提供名称";
+    const details = document.createElement("p"); details.textContent = [item.location_label, item.industry_label, item.size_label].filter(Boolean).join(" · ") || "公司资料待补充";
+    copy.append(name, details); identity.append(copy);
+
+    const actions = document.createElement("div"); actions.className = "company-finder-result-actions";
+    if (item.website_url) {
+      const website = document.createElement("a"); website.className = "company-finder-website"; website.href = item.website_url; website.target = "_blank"; website.rel = "noopener noreferrer";
+      website.title = `打开 ${item.website_domain || "官网"}`;
+      const icon = document.createElement("i"); icon.className = "fa-solid fa-arrow-up-right-from-square"; icon.setAttribute("aria-hidden", "true");
+      website.append(icon, document.createTextNode(item.website_domain || "打开官网")); actions.append(website);
+    }
+    const handoff = document.createElement("button"); handoff.type = "button"; handoff.className = "company-finder-handoff";
+    handoff.dataset.domain = item.website_domain || ""; handoff.disabled = !handoff.dataset.domain;
+    const handoffIcon = document.createElement("i"); handoffIcon.className = "fa-solid fa-magnifying-glass"; handoffIcon.setAttribute("aria-hidden", "true");
+    handoff.append(handoffIcon, document.createTextNode("查找企业邮箱")); actions.append(handoff);
+    const detail = document.createElement("button"); detail.type = "button"; detail.className = "company-finder-details";
+    detail.dataset.companyId = item.id || ""; detail.disabled = !detail.dataset.companyId;
+    const detailIcon = document.createElement("i"); detailIcon.className = "fa-regular fa-file-lines"; detailIcon.setAttribute("aria-hidden", "true");
+    detail.append(detailIcon, document.createTextNode("查看详情")); actions.append(detail);
+    row.append(identity, actions); results.append(row);
+  });
+}
+
+function companyFinderDetailField(label, value) {
+  const row = document.createElement("div"); row.className = "detail-field company-finder-detail-field";
+  const key = document.createElement("span"); key.textContent = label;
+  const val = document.createElement("strong"); val.textContent = value || "未提供";
+  row.append(key, val); return row;
+}
+
+function companyFinderDetailReason(item) {
+  const reasons = {
+    website_identity_match: "官网可以访问，页面内容与公司名称相符。",
+    http_restricted: "官网可以访问，但自动检查受到访问限制。",
+    website_identity_uncertain: "官网可以访问，但公开内容不足以完成完整身份匹配。",
+  };
+  return reasons[item.vitality_reason] || "最近一次检查发现了可公开访问的公司证据。";
+}
+
+function companyFinderDetailStatus(item) {
+  return item.vitality_state === "recently_observed"
+    ? { label: "近期有记录", className: "is-recently_observed" }
+    : { label: "近期可确认", className: "is-active_verified" };
+}
+
+function renderCompanyFinderDetail(item) {
+  const drawer = el("company-finder-detail-drawer");
+  const content = el("company-finder-detail-content");
+  const actions = el("company-finder-detail-actions");
+  if (!drawer || !content || !actions) return;
+  const status = companyFinderDetailStatus(item);
+  el("company-finder-detail-title").textContent = item.name_display || "公司资料";
+  const badge = el("company-finder-detail-status"); badge.textContent = status.label; badge.className = `company-vitality-badge ${status.className}`;
+  content.replaceChildren(); actions.replaceChildren();
+  content.append(detailSection("公司概览", companyFinderDetailReason(item)));
+  [
+    ["国家/地区", item.location_label], ["行业", item.industry_label],
+    ["公司规模", item.size_label], ["成立年份", item.founded],
+  ].forEach(([label, value]) => content.append(companyFinderDetailField(label, value)));
+  const checked = item.vitality_checked_at ? new Date(item.vitality_checked_at) : null;
+  const checkedLabel = checked && !Number.isNaN(checked.getTime()) ? checked.toLocaleString("zh-CN") : "未提供";
+  content.append(companyFinderDetailField("最近核验", checkedLabel));
+  const evidence = item.vitality_evidence || {};
+  const evidenceSection = detailSection("公开证据", "这项信息用于说明最近一次活跃性判断的依据。");
+  content.append(evidenceSection);
+  [["证据类型", evidence.type || "官网公开证据"], ["可信度", `${Math.round(Number(item.vitality_confidence || 0) * 100)}%`], ["页面标题", evidence.page_title]].forEach(([label, value]) => content.append(companyFinderDetailField(label, value)));
+
+  if (item.website_url) {
+    const website = document.createElement("a"); website.className = "secondary-action company-finder-detail-link"; website.href = item.website_url; website.target = "_blank"; website.rel = "noopener noreferrer";
+    const icon = document.createElement("i"); icon.className = "fa-solid fa-arrow-up-right-from-square"; icon.setAttribute("aria-hidden", "true"); website.append(icon, document.createTextNode("打开官网")); actions.append(website);
+  }
+  if (item.linkedin_url) {
+    const linkedin = document.createElement("a"); linkedin.className = "secondary-action company-finder-detail-link"; linkedin.href = item.linkedin_url; linkedin.target = "_blank"; linkedin.rel = "noopener noreferrer"; linkedin.setAttribute("aria-label", "打开 LinkedIn 公司主页");
+    const icon = document.createElement("i"); icon.className = "fa-brands fa-linkedin-in"; icon.setAttribute("aria-hidden", "true"); linkedin.append(icon, document.createTextNode("LinkedIn")); actions.append(linkedin);
+  }
+  if (item.website_domain) {
+    const handoff = document.createElement("button"); handoff.type = "button"; handoff.className = "primary-action company-finder-detail-handoff"; handoff.dataset.domain = item.website_domain;
+    const icon = document.createElement("i"); icon.className = "fa-solid fa-magnifying-glass"; icon.setAttribute("aria-hidden", "true"); handoff.append(icon, document.createTextNode("查找企业邮箱")); actions.append(handoff);
+  }
+}
+
+function closeCompanyFinderDetail() {
+  const drawer = el("company-finder-detail-drawer");
+  drawer?.classList.remove("open"); drawer?.setAttribute("aria-hidden", "true");
+}
+
+async function openCompanyFinderDetail(companyId) {
+  if (!companyId) return;
+  const drawer = el("company-finder-detail-drawer");
+  const content = el("company-finder-detail-content");
+  if (!drawer || !content) return;
+  el("company-finder-detail-title").textContent = "正在加载公司资料";
+  el("company-finder-detail-status").textContent = "加载中";
+  el("company-finder-detail-status").className = "company-vitality-badge is-checking";
+  content.replaceChildren(); content.append(companyFinderDetailField("状态", "正在读取最近核验信息…"));
+  drawer.classList.add("open"); drawer.setAttribute("aria-hidden", "false");
+  try {
+    const item = await api(`/api/company-finder/companies/${encodeURIComponent(companyId)}`);
+    renderCompanyFinderDetail(item);
+  } catch (error) {
+    el("company-finder-detail-title").textContent = "公司资料暂时不可用";
+    el("company-finder-detail-status").textContent = "暂时无法打开";
+    el("company-finder-detail-status").className = "company-vitality-badge is-uncertain";
+    content.replaceChildren(companyFinderDetailField("说明", error.message));
+    el("company-finder-detail-actions")?.replaceChildren();
+  }
+}
+
+async function loadCompanyFinderFacets() {
+  if (state.companyFinder.facetsLoaded || !state.user?.email_verified) return;
+  try {
+    const [countries, industries] = await Promise.all([
+      api("/api/company-finder/facets/country"), api("/api/company-finder/facets/industry"),
+    ]);
+    fillCompanyCatalogFacet("company-finder-country", countries.items, "全部国家/地区");
+    fillCompanyCatalogFacet("company-finder-industry", industries.items, "全部行业");
+    state.companyFinder.facetsLoaded = true;
+  } catch (error) {
+    const status = el("company-finder-status");
+    if (status && !status.textContent) status.textContent = `筛选项加载失败：${error.message}`;
+  }
+}
+
+function scheduleCompanyFinderRefresh(delaySeconds) {
+  stopCompanyFinderPolling();
+  if (state.companyFinder.refreshAttempts >= 3 || state.view !== "company-finder") return;
+  state.companyFinder.refreshTimer = window.setTimeout(() => {
+    state.companyFinder.refreshTimer = null;
+    if (state.view === "company-finder") loadCompanyFinder({ fromRefresh: true });
+  }, Math.max(2, Math.min(10, delaySeconds || 4)) * 1000);
+}
+
+async function loadCompanyFinder({ fromRefresh = false } = {}) {
+  const status = el("company-finder-status");
+  const pending = el("company-finder-pending");
+  const pendingCopy = el("company-finder-pending-copy");
+  if (!status) return;
+  const fields = companyFinderFields();
+  if (!companyFinderHasMeaningfulFilter(fields)) {
+    stopCompanyFinderPolling(); state.companyFinder.total = 0; state.companyFinder.hasMore = false;
+    el("company-finder-title").textContent = "设置条件后开始查找";
+    el("company-finder-summary").textContent = "仅显示近期有公开活跃证据的公司。";
+    el("company-finder-count").textContent = "0 家";
+    el("company-finder-page").textContent = "等待搜索";
+    el("company-finder-prev").disabled = true; el("company-finder-next").disabled = true;
+    pending.classList.add("hidden"); status.textContent = "请输入公司关键词或选择至少一个筛选条件";
+    renderCompanyFinderEmpty("还没有搜索结果", "输入公司关键词，或至少选择一个筛选条件。");
+    return;
+  }
+  if (!fromRefresh) { stopCompanyFinderPolling(); state.companyFinder.refreshAttempts = 0; }
+  status.className = "company-finder-status"; status.textContent = "正在查找已确认活跃的公司…";
+  try {
+    const data = await api(`/api/company-finder/search?${companyFinderQuery(fields)}`);
+    const items = data.items || [];
+    const pendingCount = Math.max(0, Number(data.pending_count || 0));
+    state.companyFinder.total = Number(data.total || 0);
+    state.companyFinder.hasMore = Boolean(data.has_more);
+    el("company-finder-title").textContent = items.length ? "已找到可继续研究的公司" : "正在确认匹配公司";
+    el("company-finder-count").textContent = `${state.companyFinder.total.toLocaleString("zh-CN")} 家`;
+    el("company-finder-summary").textContent = state.companyFinder.total
+      ? "结果均具有近期公开活跃证据。" : "不会展示尚未完成检查的公司。";
+    if (items.length) renderCompanyFinderResults(items);
+    else if (pendingCount) renderCompanyFinderEmpty("正在检查匹配公司", "完成公开网站检查后，符合条件的公司会显示在这里。");
+    else renderCompanyFinderEmpty("没有已确认活跃的匹配公司", "尝试调整关键词、地区或行业后再次搜索。");
+    const page = Math.floor(state.companyFinder.offset / state.companyFinder.limit) + 1;
+    el("company-finder-page").textContent = state.companyFinder.total ? `第 ${page} 页（${state.companyFinder.total.toLocaleString("zh-CN")} 家）` : "暂无可展示公司";
+    el("company-finder-prev").disabled = state.companyFinder.offset === 0;
+    el("company-finder-next").disabled = !state.companyFinder.hasMore;
+    if (pendingCount) {
+      const retryAfter = Math.max(2, Number(data.refresh_after_seconds || 4));
+      pendingCopy.textContent = `${pendingCount.toLocaleString("zh-CN")} 家匹配公司正在完成公开网站检查，结果会自动更新。`;
+      pending.classList.remove("hidden");
+      status.textContent = items.length ? "已显示完成检查的公司" : "正在等待检查完成";
+      state.companyFinder.refreshAttempts += 1;
+      scheduleCompanyFinderRefresh(retryAfter);
+    } else {
+      pending.classList.add("hidden"); status.classList.add("success"); status.textContent = "查询完成";
+    }
+  } catch (error) {
+    pending.classList.add("hidden"); status.classList.add("error"); status.textContent = error.message;
+  }
+}
+
+el("company-finder-form")?.addEventListener("submit", (event) => {
+  event.preventDefault(); state.companyFinder.offset = 0; loadCompanyFinder();
+});
+el("company-finder-prev")?.addEventListener("click", () => {
+  state.companyFinder.offset = Math.max(0, state.companyFinder.offset - state.companyFinder.limit); loadCompanyFinder();
+});
+el("company-finder-next")?.addEventListener("click", () => {
+  state.companyFinder.offset += state.companyFinder.limit; loadCompanyFinder();
+});
+el("company-finder-results")?.addEventListener("click", (event) => {
+  const detail = event.target.closest(".company-finder-details");
+  if (detail?.dataset.companyId) { openCompanyFinderDetail(detail.dataset.companyId); return; }
+  const detailHandoff = event.target.closest(".company-finder-detail-handoff");
+  if (detailHandoff?.dataset.domain) {
+    closeCompanyFinderDetail(); el("discovery-domain").value = detailHandoff.dataset.domain; switchView("discovery");
+    window.setTimeout(() => el("discovery-first-name")?.focus(), 0); return;
+  }
+  const handoff = event.target.closest(".company-finder-handoff");
+  if (!handoff?.dataset.domain) return;
+  el("discovery-domain").value = handoff.dataset.domain;
+  switchView("discovery");
+  window.setTimeout(() => el("discovery-first-name")?.focus(), 0);
+});
+el("close-company-finder-detail")?.addEventListener("click", closeCompanyFinderDetail);
 
 function showOnboardingStep(step) {
   const dialog = el("onboarding-dialog");
@@ -2424,9 +2804,11 @@ document.addEventListener("click", (event) => {
   if (!el("account-menu").contains(event.target) && !el("account-button").contains(event.target)) el("account-menu").classList.add("hidden");
   const drawer = el("result-detail-drawer");
   if (drawer?.classList.contains("open") && !drawer.contains(event.target) && !event.target.closest(".result-detail-action")) closeResultDetails();
+  const companyDrawer = el("company-finder-detail-drawer");
+  if (companyDrawer?.classList.contains("open") && !companyDrawer.contains(event.target) && !event.target.closest(".company-finder-details")) closeCompanyFinderDetail();
 });
 document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape") { closeNotificationMenu(); el("account-menu").classList.add("hidden"); closeResultDetails(); }
+  if (event.key === "Escape") { closeNotificationMenu(); el("account-menu").classList.add("hidden"); closeResultDetails(); closeCompanyFinderDetail(); }
 });
 el("admin-credit-grant-form")?.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -2861,7 +3243,7 @@ document.querySelectorAll("#workspace-home [data-view]").forEach((button) => but
     setAuthMode(requestedAuthMode);
     el("auth-dialog").showModal();
   }
-  if (["/workspace", "/history", "/lists", "/dashboard", "/admin/credits", "/wallet", "/app/finder", "/app/history", "/app/billing"].includes(window.location.pathname) || window.location.pathname.startsWith("/lists/")) {
+  if (["/workspace", "/history", "/lists", "/dashboard", "/admin/credits", "/wallet", "/app/finder", "/app/company-finder", "/app/history", "/app/billing"].includes(window.location.pathname) || window.location.pathname.startsWith("/lists/")) {
     if (window.location.pathname === "/workspace" && state.user) {
       switchView("workspace");
     } else if ((window.location.pathname === "/lists" || window.location.pathname.startsWith("/lists/"))) {
@@ -2889,6 +3271,15 @@ document.querySelectorAll("#workspace-home [data-view]").forEach((button) => but
       switchView("wallet");
     } else if (window.location.pathname === "/app/finder" && state.user) {
       switchView("discovery");
+    } else if (window.location.pathname === "/app/company-finder" && state.user?.email_verified) {
+      switchView("company-finder");
+    } else if (window.location.pathname === "/app/company-finder") {
+      window.history.replaceState({}, "", "/verify");
+      switchView("single");
+      state.pendingView = "company-finder";
+      setAuthMode("login");
+      el("auth-error").textContent = "请先登录并验证注册邮箱后使用 Company Finder";
+      el("auth-dialog").showModal();
     } else if (state.user?.is_admin) {
       switchView(window.location.pathname === "/admin/credits" ? "admin-credits" : "dashboard");
     } else if (state.user) {

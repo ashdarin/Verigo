@@ -264,6 +264,33 @@ class CompanyCatalogSearchResponse(BaseModel):
     has_more: bool = False
 
 
+class CompanyFinderSearchResponse(CompanyCatalogSearchResponse):
+    pending_count: int = 0
+    refresh_after_seconds: int = 0
+
+
+class CompanyFinderCompanyResponse(BaseModel):
+    id: str
+    name_display: str
+    website_url: str = ""
+    website_domain: str = ""
+    linkedin_url: str = ""
+    logo_url: str = ""
+    country_label: str = ""
+    region_label: str = ""
+    locality_label: str = ""
+    location_label: str = ""
+    industry_label: str = ""
+    size_label: str = ""
+    founded: str | None = None
+    vitality_state: Literal["active_verified", "recently_observed"]
+    vitality_confidence: float = 0.0
+    vitality_checked_at: str = ""
+    vitality_last_public_evidence_at: str = ""
+    vitality_reason: str = ""
+    vitality_evidence: dict[str, Any] = Field(default_factory=dict)
+
+
 class CompanyCatalogFacetResponse(BaseModel):
     items: list[dict[str, Any]]
 
