@@ -16,9 +16,10 @@
   <meta name="twitter:card" content="summary">
   <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"Organization","name":"Verigo","url":"https://verigo.site/","logo":"https://verigo.site/static/favicon.svg"},{"@type":"WebApplication","name":"Verigo","url":"https://verigo.site/","applicationCategory":"BusinessApplication","operatingSystem":"Web","description":"面向销售、招聘与出海团队的邮箱验证、名单清洗和企业邮箱查找工具。","offers":{"@type":"Offer","price":"0.50","priceCurrency":"CNY","description":"100 次批量验证"}},{"@type":"FAQPage","mainEntity":[{"@type":"Question","name":"Catch-all 邮箱是什么意思？","acceptedAnswer":{"@type":"Answer","text":"Catch-all 是企业邮箱域名的一种设置：发往该域名的任意前缀都可能被接收或转发，因此单次验证结果不一定能确认某个具体收件人真实存在。"}},{"@type":"Question","name":"企业邮箱查找和普通验证有什么区别？","acceptedAnswer":{"@type":"Answer","text":"普通验证用于确认已有邮箱是否可用；企业邮箱查找用于获取目标企业的业务联络邮箱，适合销售开发、招聘和商务合作。"}}]}]}</script>
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+  <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" referrerpolicy="no-referrer">
-  <link rel="stylesheet" href="/static/css/app.css?v=retry-reconcile-v1">
-  <link rel="stylesheet" href="/static/css/product.css?v=quality-baseline-v1">
+  <link rel="stylesheet" href="/static/css/app.css?v=ui-20260816-r3">
+  <link rel="stylesheet" href="/static/css/product.css?v=ui-20260816-r3">
 </head>
 <body class="product-surface">
   <header class="topbar">
@@ -73,6 +74,7 @@
         <button id="wallet-nav" class="account-action hidden" type="button" data-view="wallet"><i class="fa-regular fa-credit-card" aria-hidden="true"></i>额度与账单</button>
         <button id="dashboard-nav" class="account-action hidden" type="button" data-view="dashboard"><i class="fa-solid fa-chart-line" aria-hidden="true"></i>运营监控</button>
         <button id="admin-credits-nav" class="account-action hidden" type="button" data-view="admin-credits"><i class="fa-solid fa-sliders" aria-hidden="true"></i>额度管理</button>
+        <button id="system-health-nav" class="account-action hidden" type="button" data-view="system-health"><i class="fa-solid fa-heart-pulse" aria-hidden="true"></i>系统监控</button>
         <div class="account-menu-separator"></div>
         <button id="bind-email-button" type="button" class="hidden">绑定邮箱</button>
         <button id="change-password-button" type="button" class="account-action"><i class="fa-solid fa-lock" aria-hidden="true"></i>修改密码</button>
@@ -210,7 +212,7 @@
 
       <div class="table-toolbar">
         <div class="filters">
-          <input id="result-search" type="search" placeholder="搜索邮箱">
+          <input id="result-search" type="search" placeholder="搜索邮箱" aria-label="搜索邮箱">
           <select id="result-filter" aria-label="筛选验证状态">
             <option value="all">全部结果</option>
             <option value="deliverable">可投递</option>
@@ -445,17 +447,33 @@
         <div><p class="eyebrow">调整操作</p><h2 id="admin-credits-heading">授予或扣减验证次数</h2></div>
       </div>
       <form id="admin-credit-grant-form" class="admin-credit-grant-form">
-        <label for="admin-credit-action">操作</label>
+        <label for="admin-credit-action">操作类型</label>
         <select id="admin-credit-action"><option value="grant">授予额度</option><option value="deduct">扣减额度</option></select>
         <label for="admin-credit-email">用户注册邮箱</label>
-        <input id="admin-credit-email" type="email" autocomplete="email" maxlength="254" required>
-        <button id="admin-account-lookup" class="download-action" type="button">查询账户</button>
-        <label for="admin-credit-amount">充值或退款金额（元）</label>
-        <input id="admin-credit-amount" type="number" inputmode="decimal" min="0.01" max="5000" step="0.01" required>
-        <label for="admin-credit-note">备注</label>
-        <input id="admin-credit-note" type="text" maxlength="200" autocomplete="off">
+        <div class="admin-email-lookup">
+          <input id="admin-credit-email" type="email" autocomplete="email" maxlength="254" placeholder="输入邮箱查询账户" required>
+          <button id="admin-account-lookup" class="lookup-action" type="button"><i class="fa-solid fa-magnifying-glass"></i>查询</button>
+        </div>
+        <div id="admin-account-info" class="admin-account-info hidden">
+          <div class="account-info-row">
+            <span class="info-label">当前付费余额</span>
+            <strong id="account-info-paid" class="info-value">—</strong>
+          </div>
+          <div class="account-info-row">
+            <span class="info-label">体验额度</span>
+            <strong id="account-info-trial" class="info-value">—</strong>
+          </div>
+          <div class="account-info-row">
+            <span class="info-label">已使用</span>
+            <strong id="account-info-used" class="info-value">—</strong>
+          </div>
+        </div>
+        <label for="admin-credit-amount">调整金额（元）</label>
+        <input id="admin-credit-amount" type="number" inputmode="decimal" min="0.01" max="5000" step="0.01" placeholder="0.01 - 5000.00" required>
+        <label for="admin-credit-note">操作备注 <span class="label-optional">（可选）</span></label>
+        <input id="admin-credit-note" type="text" maxlength="200" autocomplete="off" placeholder="说明调整原因">
         <p id="admin-credit-result" class="admin-credit-result" role="status"></p>
-        <button id="admin-credit-submit" class="primary-action" type="submit">确认授予</button>
+        <button id="admin-credit-submit" class="primary-action" type="submit"><i class="fa-solid fa-check"></i>确认操作</button>
       </form>
       <section class="admin-redemption-card" aria-labelledby="admin-redemption-heading">
         <div><p class="eyebrow">临时支付通道</p><h2 id="admin-redemption-heading">生成兑换码</h2><p>完整兑换码仅在生成后展示一次。系统只保存哈希，无法再次查看。</p></div>
@@ -477,7 +495,50 @@
         <div class="admin-company-catalog-pagination"><button id="company-catalog-prev" class="download-action" type="button" disabled>上一页</button><span id="company-catalog-page">-</span><button id="company-catalog-next" class="download-action" type="button" disabled>下一页</button></div>
       </section>
       <section id="admin-account-summary" class="admin-account-summary"><div class="report-card-heading"><div><h2>功能使用趋势</h2><p>单个验证、批量验证与工作邮箱查找</p></div></div><div id="admin-feature-chart" class="admin-feature-chart"></div><div id="admin-feature-legend" class="report-legend"></div></section>
-      <section class="admin-accounts-section"><div class="report-card-heading"><div><h2>全部账户</h2><p id="admin-accounts-meta">按注册时间排序</p></div><button id="admin-accounts-refresh" class="download-action" type="button">刷新</button></div><div id="admin-accounts-list" class="admin-accounts-list"></div><div class="pagination"><span id="admin-accounts-page"></span><div><button id="admin-accounts-prev" class="page-button" type="button">上一页</button><span id="admin-accounts-pages" class="page-numbers"></span><button id="admin-accounts-next" class="page-button" type="button">下一页</button></div></div></section>
+      <section class="admin-accounts-section">
+        <div class="report-card-heading">
+          <div><h2>全部账户</h2><p id="admin-accounts-meta">按注册时间排序</p></div>
+          <div class="admin-accounts-controls">
+            <input id="admin-accounts-search" type="search" placeholder="搜索邮箱..." maxlength="100" aria-label="搜索账户邮箱">
+            <button id="admin-accounts-refresh" class="download-action" type="button">刷新</button>
+          </div>
+        </div>
+        <div id="admin-accounts-list" class="admin-accounts-list"></div>
+        <div class="pagination"><span id="admin-accounts-page"></span><div><button id="admin-accounts-prev" class="page-button" type="button">上一页</button><span id="admin-accounts-pages" class="page-numbers"></span><button id="admin-accounts-next" class="page-button" type="button">下一页</button></div></div>
+      </section>
+    </section>
+  </main>
+
+  <main id="system-health-workspace" class="system-health-workspace hidden">
+    <section class="report-heading admin-report-heading">
+      <div><p class="eyebrow">系统管理</p><h2>系统监控</h2><p class="report-updated">服务状态、队列、数据库与资源</p></div>
+      <div class="report-actions"><button id="system-health-refresh" class="download-action" type="button">刷新</button></div>
+    </section>
+    <section class="report-scorecards admin-scorecards">
+      <article class="report-scorecard"><span>服务状态</span><strong id="health-services-status">—</strong><small id="health-services-detail">检测中</small></article>
+      <article class="report-scorecard"><span>工作进程</span><strong id="health-workers-status">—</strong><small id="health-workers-detail">检测中</small></article>
+      <article class="report-scorecard"><span>待处理任务</span><strong id="health-queue-pending">—</strong><small id="health-queue-running">运行中 —</small></article>
+      <article class="report-scorecard"><span>数据库连接</span><strong id="health-db-connections">—</strong><small id="health-db-detail">检测中</small></article>
+    </section>
+    <section class="report-secondary-grid">
+      <section class="report-card">
+        <div class="report-card-heading"><div><h2>服务状态</h2><p>系统核心服务运行情况</p></div></div>
+        <div id="health-services-list" class="admin-accounts-list"></div>
+      </section>
+      <section class="report-card">
+        <div class="report-card-heading"><div><h2>工作进程</h2><p>邮箱验证 Worker 状态</p></div></div>
+        <div id="health-workers-list" class="admin-accounts-list"></div>
+      </section>
+    </section>
+    <section class="report-secondary-grid">
+      <section class="report-card">
+        <div class="report-card-heading"><div><h2>系统资源</h2><p>CPU、内存与磁盘使用</p></div></div>
+        <div id="health-resources-list" class="admin-accounts-list"></div>
+      </section>
+      <section class="report-card">
+        <div class="report-card-heading"><div><h2>数据库</h2><p>连接池与查询性能</p></div></div>
+        <div id="health-database-list" class="admin-accounts-list"></div>
+      </section>
     </section>
   </main>
 
@@ -491,7 +552,7 @@
 
   <main id="history-workspace" class="history-workspace hidden">
     <section class="report-heading"><div><p class="eyebrow">账户</p><h1>历史记录</h1><p class="report-updated">按名单名称查看过去的验证任务</p></div><button id="history-refresh" class="download-action" type="button">刷新</button></section>
-    <section class="report-card history-card"><div class="table-toolbar"><div class="history-search-controls"><input id="history-search" type="search" placeholder="搜索文件名或名单名称"><select id="history-filter" aria-label="筛选任务"><option value="all">全部</option><option value="completed">已完成</option><option value="running">验证中</option><option value="failed">失败</option><option value="stopped">已停止</option></select></div></div><div id="history-list" class="history-list"></div><div class="pagination"><span id="history-page-info"></span><div><button id="history-prev" class="page-button" type="button">上一页</button><span id="history-pages" class="page-numbers"></span><button id="history-next" class="page-button" type="button">下一页</button></div></div></section>
+    <section class="report-card history-card"><div class="table-toolbar"><div class="history-search-controls"><input id="history-search" type="search" placeholder="搜索文件名或名单名称" aria-label="搜索文件名或名单名称"><select id="history-filter" aria-label="筛选任务"><option value="all">全部</option><option value="completed">已完成</option><option value="running">验证中</option><option value="failed">失败</option><option value="stopped">已停止</option></select></div></div><div id="history-list" class="history-list"></div><div class="pagination"><span id="history-page-info"></span><div><button id="history-prev" class="page-button" type="button">上一页</button><span id="history-pages" class="page-numbers"></span><button id="history-next" class="page-button" type="button">下一页</button></div></div></section>
   </main>
   <footer class="site-footer">
     <span>Verigo · 邮箱验证、名单清洗与企业邮箱查找</span>
@@ -657,6 +718,6 @@
   </dialog>
 
   <script src="/static/js/i18n.js?v=locale-v2" defer></script>
-  <script src="/static/js/app.js?v=retry-reconcile-v1" defer></script>
+  <script src="/static/js/app.js?v=ui-20260816-r3" defer></script>
 </body>
 </html>

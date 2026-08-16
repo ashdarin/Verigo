@@ -193,7 +193,7 @@ async function api(url, options = {}) {
 }
 
 function switchView(view) {
-  const adminView = view === "dashboard" || view === "admin-credits";
+  const adminView = view === "dashboard" || view === "admin-credits" || view === "system-health";
   if (adminView && !state.user?.is_admin) {
     if (!state.user) {
       el("auth-dialog").showModal();
@@ -205,12 +205,18 @@ function switchView(view) {
   const discovery = view === "discovery";
   const dashboard = view === "dashboard";
   const adminCredits = view === "admin-credits";
+  const systemHealth = view === "system-health";
   const wallet = view === "wallet";
   const workspace = view === "workspace";
   const history = view === "history";
   if (wallet && !state.user) { state.pendingView = view; el("auth-dialog").showModal(); setAuthMode("login"); el("auth-error").textContent = VerigoI18n.text("请先登录后查看账户数据"); return; }
   if (workspace && !state.user) { state.pendingView = "workspace"; el("auth-dialog").showModal(); setAuthMode("login"); el("auth-error").textContent = "Please sign in to open your workspace"; return; }
-  if (history && !state.user) { el("auth-dialog").showModal(); return; }
+  if (history && !state.user) {
+    el("auth-dialog").showModal();
+    setAuthMode("login");
+    el("auth-error").textContent = "请先登录后查看历史记录";
+    return;
+  }
   if (discovery && !state.user) {
     el("auth-dialog").showModal();
     setAuthMode("login");
@@ -221,16 +227,17 @@ function switchView(view) {
   const marketing = view === "single" || view === "batch";
   document.querySelectorAll(".public-marketing").forEach((section) => section.classList.toggle("workspace-mode-hidden", !marketing));
   const setHidden = (id, hidden) => el(id)?.classList.toggle("hidden", hidden);
-  setHidden("verify-workspace", discovery || dashboard || adminCredits || wallet || workspace || history);
+  setHidden("verify-workspace", discovery || dashboard || adminCredits || systemHealth || wallet || workspace || history);
   setHidden("workspace-home", !workspace);
   setHidden("discovery-workspace", !discovery);
   setHidden("dashboard-workspace", !dashboard);
   setHidden("admin-credits-workspace", !adminCredits);
+  setHidden("system-health-workspace", !systemHealth);
   setHidden("wallet-workspace", !wallet);
   setHidden("history-workspace", !history);
   setHidden("single-panel", view !== "single");
   setHidden("batch-panel", view !== "batch");
-  if (!discovery && !dashboard && !adminCredits && !wallet && !workspace && !history) {
+  if (!discovery && !dashboard && !adminCredits && !systemHealth && !wallet && !workspace && !history) {
     el("verify-eyebrow").textContent = VerigoI18n.text(view === "single" ? "免费单个验证" : "收费批量验证");
     el("verify-heading").textContent = VerigoI18n.text(view === "single" ? "验证单个收件地址" : "批量验证收件地址");
   }
@@ -253,6 +260,12 @@ function switchView(view) {
     state.metricsTimer = null;
     loadAdminAccounts();
     loadAdminFeatureUsage();
+  } else if (systemHealth) {
+    document.title = "系统监控 | Verigo";
+    if (window.location.pathname !== "/admin/system") window.history.pushState({}, "", "/admin/system");
+    clearInterval(state.metricsTimer);
+    state.metricsTimer = null;
+    loadSystemHealth();
   } else if (wallet) {
     document.title = `${VerigoI18n.text("资金与使用")} | Verigo`;
     if (window.location.pathname !== "/wallet") window.history.pushState({}, "", "/wallet");
@@ -461,32 +474,61 @@ function renderProviderQuality(quality) {
     other: "\u5176\u4ed6\u90ae\u7bb1",
   };
   const rows = Array.isArray(quality?.providers) ? quality.providers : [];
-  const baselineRows = Array.isArray(quality?.baseline?.providers) ? quality.baseline.providers : [];
-  const baselineByProvider = new Map(baselineRows.map((item) => [item.provider, item]));
-  const rate = (value) => value == null ? "\u2014" : `${Number(value).toFixed(1)}%`;
+  const rate = (value) => value == null ? "\u2014" : Number(value).toFixed(1);
+  const getQualityColor = (value) => {
+    if (value == null) return "#e8eaed";
+    const num = Number(value);
+    if (num >= 90) return "#34a853";
+    if (num >= 75) return "#fbbc04";
+    return "#ea4335";
+  };
+  const getQualityLevel = (value) => {
+    if (value == null) return "unknown";
+    const num = Number(value);
+    if (num >= 90) return "excellent";
+    if (num >= 75) return "good";
+    return "poor";
+  };
   body.innerHTML = rows.map((item) => {
     const processed = Math.max(0, Number(item.processed) || 0);
-    const baseline = baselineByProvider.get(item.provider) || {};
-    const usableDays = Math.max(0, Number(baseline.usable_days) || 0);
-    const baselineDays = Math.max(1, Number(baseline.days) || 7);
+    const deliverableRate = rate(item.deliverable_rate);
+    const unconfirmedRate = rate(item.unconfirmed_rate);
+    const reviewRate = rate(item.review_completion_rate);
+    const deliverableNum = Number(item.deliverable_rate) || 0;
+    const unconfirmedNum = Number(item.unconfirmed_rate) || 0;
+    const reviewNum = Number(item.review_completion_rate) || 0;
     const latencySample = Math.max(0, Number(item.latency_sample) || 0);
-    const reviewLatencySample = Math.max(0, Number(item.review_latency_sample) || 0);
-    const initialDuration = latencySample
-      ? `${formatDuration(item.p50_seconds)} / ${formatDuration(item.p95_seconds)}`
-      : "\u2014";
-    const reviewDuration = reviewLatencySample
-      ? `${formatDuration(item.review_p50_seconds)} / ${formatDuration(item.review_p95_seconds)}`
-      : "\u2014";
-    const duration = `<span class="provider-latency"><span>\u9996\u6b21 ${initialDuration}</span><small>\u590d\u6838 ${reviewDuration}</small></span>`;
-    const reference = baseline.baseline_unconfirmed_rate == null
-      ? "\u2014"
-      : `${rate(baseline.baseline_unconfirmed_rate)} / ${formatDuration(baseline.baseline_p95_seconds)}`;
-    const suggestion = baseline.ready
-      ? `${rate(baseline.suggested_unconfirmed_percent)} / ${formatDuration(baseline.suggested_p95_seconds)}`
-      : "\u5f85\u6570\u636e\u5145\u8db3";
-    const readiness = `${usableDays}/${baselineDays} ${baseline.ready ? "\u53ef\u6821\u51c6" : "\u91c7\u96c6\u4e2d"}`;
-    return `<tr><th scope="row">${labels[item.provider] || labels.other}</th><td>${processed.toLocaleString("zh-CN")}</td><td>${rate(item.deliverable_rate)}</td><td>${rate(item.unconfirmed_rate)}</td><td>${rate(item.review_completion_rate)}</td><td>${duration}</td><td>${readiness}</td><td>${reference}</td><td>${suggestion}</td></tr>`;
-  }).join("") || '<tr><td colspan="9" class="provider-quality-empty">\u6700\u8fd1 24 \u5c0f\u65f6\u6682\u65e0\u5df2\u5b8c\u6210\u7ed3\u679c</td></tr>';
+    const initialDuration = latencySample ? `${formatDuration(item.p50_seconds)} / ${formatDuration(item.p95_seconds)}` : "\u2014";
+    return `<tr>
+      <th scope="row"><strong>${labels[item.provider] || labels.other}</strong></th>
+      <td>${processed.toLocaleString("zh-CN")}</td>
+      <td>
+        <div class="quality-progress-wrapper">
+          <div class="quality-progress-bar">
+            <div class="quality-progress-fill" style="width:${deliverableNum}%;background:${getQualityColor(deliverableNum)}"></div>
+          </div>
+          <span class="quality-value">${deliverableRate}%</span>
+        </div>
+      </td>
+      <td>
+        <div class="quality-progress-wrapper">
+          <div class="quality-progress-bar">
+            <div class="quality-progress-fill" style="width:${unconfirmedNum}%;background:${getQualityColor(unconfirmedNum)}"></div>
+          </div>
+          <span class="quality-value">${unconfirmedRate}%</span>
+        </div>
+      </td>
+      <td>
+        <div class="quality-progress-wrapper">
+          <div class="quality-progress-bar">
+            <div class="quality-progress-fill" style="width:${reviewNum}%;background:${getQualityColor(reviewNum)}"></div>
+          </div>
+          <span class="quality-value">${reviewRate}%</span>
+        </div>
+      </td>
+      <td><span class="provider-latency"><span>\u9996\u6b21 ${initialDuration}</span></span></td>
+    </tr>`;
+  }).join("") || '<tr><td colspan="6" class="provider-quality-empty">\u6700\u8fd1 24 \u5c0f\u65f6\u6682\u65e0\u5df2\u5b8c\u6210\u7ed3\u679c</td></tr>';
 }
 
 async function loadDashboardMetrics() {
@@ -585,8 +627,8 @@ document.querySelectorAll("[data-mode]").forEach((button) => {
   });
 });
 
-batchInput.addEventListener("input", updateCount);
-singleInput.addEventListener("input", updateCount);
+batchInput?.addEventListener("input", updateCount);
+singleInput?.addEventListener("input", updateCount);
 el("clean-email-input")?.addEventListener("click", () => {
   batchInput.value = splitEmails(batchInput.value).join("\n");
   batchInput.focus();
@@ -634,19 +676,19 @@ async function importFile(file) {
   updateCount();
 }
 
-el("file-input").addEventListener("change", (event) => importFile(event.target.files[0]));
+el("file-input")?.addEventListener("change", (event) => importFile(event.target.files[0]));
 const dropzone = el("file-dropzone");
-["dragenter", "dragover"].forEach((name) => dropzone.addEventListener(name, (event) => {
+["dragenter", "dragover"].forEach((name) => dropzone?.addEventListener(name, (event) => {
   event.preventDefault();
   dropzone.classList.add("dragging");
 }));
-["dragleave", "drop"].forEach((name) => dropzone.addEventListener(name, (event) => {
+["dragleave", "drop"].forEach((name) => dropzone?.addEventListener(name, (event) => {
   event.preventDefault();
   dropzone.classList.remove("dragging");
 }));
-dropzone.addEventListener("drop", (event) => importFile(event.dataTransfer.files[0]));
+dropzone?.addEventListener("drop", (event) => importFile(event.dataTransfer.files[0]));
 
-startButton.addEventListener("click", async () => {
+startButton?.addEventListener("click", async () => {
   const emails = currentEmails();
   errorBox.textContent = "";
   if (!emails.length) {
@@ -829,15 +871,15 @@ function resultMeta(item) {
 }
 
 function consumerResultAction(item) {
-  if (item.progress_state === "pending" || item.progress_state === "verifying") return VerigoI18n.text("正在确认，请稍候。");
-  if (item.progress_state === "failed") return VerigoI18n.text("本次验证未完成，请稍后再次验证。");
-  if (item.skipped) return VerigoI18n.text("验证已停止，尚未形成结论。");
-  if (item.deliverable === true) return VerigoI18n.text("可以联系。首次发送建议小批量进行。");
-  if (item.risk_signals?.mailbox_full?.detected === true) return VerigoI18n.text("暂不建议发送，等待对方清理收件箱后再联系。");
-  if (item.failure_reason === "domain_nxdomain") return VerigoI18n.text("请检查域名拼写后再联系。");
-  if (item.failure_reason === "mx_missing") return VerigoI18n.text("请确认该域名是否用于接收邮件。");
-  if (item.deliverable === false) return VerigoI18n.text("建议更换或人工确认该联系地址。");
-  return retryReviewStatus(item) || VerigoI18n.text("暂时无法确认，建议稍后再次验证。");
+  if (item.progress_state === "pending" || item.progress_state === "verifying") return VerigoI18n.text("正在验证中...");
+  if (item.progress_state === "failed") return VerigoI18n.text("验证失败，请重新验证");
+  if (item.skipped) return VerigoI18n.text("验证已取消");
+  if (item.deliverable === true) return VerigoI18n.text("有效邮箱，可直接使用");
+  if (item.risk_signals?.mailbox_full?.detected === true) return VerigoI18n.text("收件箱已满，暂时无法接收邮件");
+  if (item.failure_reason === "domain_nxdomain") return VerigoI18n.text("域名不存在，请检查拼写");
+  if (item.failure_reason === "mx_missing") return VerigoI18n.text("该域名未配置邮件服务");
+  if (item.deliverable === false) return VerigoI18n.text("无效邮箱，建议删除");
+  return retryReviewStatus(item) || VerigoI18n.text("状态未知，建议稍后重试");
 }
 
 function renderResults() {
@@ -1021,6 +1063,20 @@ function openResultDetails(item) {
   const checkClass = (value) => value === true ? "check-good" : value === false ? "check-bad" : "check-pending";
   const content = el("result-detail-content");
   content.replaceChildren();
+  content.append(detailSection("验证结论", "先确认当前结论和建议，再查看检查项与技术信息。"));
+  const fields = [
+    ["邮箱状态", statusLabel],
+    ["下一步", consumerResultAction(item)],
+  ];
+  const reviewStatus = retryReviewStatus(item);
+  if (reviewStatus) fields.push(["复核状态", reviewStatus]);
+  fields.forEach(([label, value]) => {
+    const row = document.createElement("div"); row.className = "detail-field detail-conclusion-field";
+    const key = document.createElement("span"); key.textContent = label;
+    const val = document.createElement("strong"); val.textContent = value;
+    row.append(key, val); content.append(row);
+  });
+
   content.append(detailSection("可投递性检查"));
   const checkGrid = document.createElement("div");
   checkGrid.className = "detail-check-grid";
@@ -1053,19 +1109,61 @@ function openResultDetails(item) {
     item.append(key, val, detail); riskGrid.append(item);
   });
   content.append(riskGrid);
-  content.append(detailSection("验证结论"));
-  const fields = [
-    ["邮箱状态", statusLabel],
-    ["下一步", consumerResultAction(item)],
-  ];
-  const reviewStatus = retryReviewStatus(item);
-  if (reviewStatus) fields.push(["复核状态", reviewStatus]);
-  fields.forEach(([label, value]) => {
-    const row = document.createElement("div"); row.className = "detail-field";
-    const key = document.createElement("span"); key.textContent = label;
-    const val = document.createElement("strong"); val.textContent = value;
-    row.append(key, val); content.append(row);
-  });
+  // Add technical details section if available
+  const hasTechnicalDetails = item.smtp_result || item.smtp_raw_result || item.message || item.failure_reason || item.verification_method;
+  if (hasTechnicalDetails && ["done", "completed"].includes(item.progress_state)) {
+    const technicalDetails = document.createElement("details");
+    technicalDetails.className = "technical-details";
+    const technicalSummary = document.createElement("summary");
+    const technicalSummaryTitle = document.createElement("strong");
+    technicalSummaryTitle.textContent = "技术详情";
+    const technicalSummaryNote = document.createElement("span");
+    technicalSummaryNote.textContent = "仅供参考，帮助诊断问题";
+    technicalSummary.append(technicalSummaryTitle, technicalSummaryNote);
+    technicalDetails.append(technicalSummary);
+    const technicalBody = document.createElement("div");
+    technicalBody.className = "technical-details-body";
+
+    const technicalFields = [];
+
+    // Verification method
+    if (item.verification_method) {
+      technicalFields.push(["验证方式", item.verification_method]);
+    }
+
+    // Failure reason (human-readable)
+    if (item.failure_reason) {
+      const reasonMap = {
+        "domain_nxdomain": "域名不存在 (NXDOMAIN)",
+        "mx_missing": "邮件服务器未配置",
+        "smtp_connection_failed": "SMTP连接失败",
+        "smtp_reject": "邮件服务器拒绝",
+        "mailbox_not_found": "邮箱不存在",
+        "mailbox_full": "邮箱已满",
+        "timeout": "验证超时",
+      };
+      const reasonText = reasonMap[item.failure_reason] || item.failure_reason;
+      technicalFields.push(["失败原因", reasonText]);
+    }
+
+    // SMTP response (most detailed)
+    const smtpResponse = item.smtp_result || item.smtp_raw_result || item.message;
+    if (smtpResponse && smtpResponse !== "正在验证" && smtpResponse !== item.verification_method) {
+      technicalFields.push(["服务器响应", smtpResponse]);
+    }
+
+    technicalFields.forEach(([label, value]) => {
+      const row = document.createElement("div"); row.className = "detail-field technical-detail";
+      const key = document.createElement("span"); key.textContent = label;
+      const val = document.createElement("span");
+      val.className = "technical-value";
+      val.textContent = value;
+      row.append(key, val); technicalBody.append(row);
+    });
+    technicalDetails.append(technicalBody);
+    content.append(technicalDetails);
+  }
+
   drawer.classList.add("open"); drawer.setAttribute("aria-hidden", "false");
 }
 
@@ -1112,26 +1210,26 @@ el("copy-unknown-button")?.addEventListener("click", () => copyEmails("unknown")
 el("copy-all-button")?.addEventListener("click", () => copyEmails("all"));
 
 let searchTimer = null;
-el("result-search").addEventListener("input", () => {
+el("result-search")?.addEventListener("input", () => {
   clearTimeout(searchTimer);
   state.page = 0;
   searchTimer = setTimeout(() => loadResults(), 250);
 });
-el("result-filter").addEventListener("change", async () => {
+el("result-filter")?.addEventListener("change", async () => {
   state.page = 0;
   await loadResults();
 });
-el("previous-page").addEventListener("click", async () => {
+el("previous-page")?.addEventListener("click", async () => {
   if (state.page === 0) return;
   state.page -= 1;
   await loadResults();
 });
-el("next-page").addEventListener("click", async () => {
+el("next-page")?.addEventListener("click", async () => {
   if ((state.page + 1) * pageSize >= state.resultsAvailable) return;
   state.page += 1;
   await loadResults();
 });
-el("download-button").addEventListener("click", async () => {
+el("download-button")?.addEventListener("click", async () => {
   if (!state.jobId) return;
   try {
     const response = await fetch(`/api/jobs/${state.jobId}/download`, { headers: jobHeaders() });
@@ -1147,7 +1245,7 @@ el("download-button").addEventListener("click", async () => {
     errorBox.textContent = error.message;
   }
 });
-el("stop-job-button").addEventListener("click", async () => {
+el("stop-job-button")?.addEventListener("click", async () => {
   if (!state.jobId) return;
   const button = el("stop-job-button");
   button.disabled = true;
@@ -1163,7 +1261,7 @@ el("stop-job-button").addEventListener("click", async () => {
     button.disabled = false;
   }
 });
-el("resume-job-button").addEventListener("click", async () => {
+el("resume-job-button")?.addEventListener("click", async () => {
   if (!state.jobId) return;
   const button = el("resume-job-button");
   button.disabled = true;
@@ -1501,7 +1599,7 @@ async function pollDiscovery() {
   }
 }
 
-el("discovery-start").addEventListener("click", async () => {
+el("discovery-start")?.addEventListener("click", async () => {
   const error = el("discovery-error");
   error.textContent = "";
   if (isYahooEmail(`probe@${el("discovery-domain").value}`)) {
@@ -1552,7 +1650,7 @@ el("discovery-start").addEventListener("click", async () => {
   }
 });
 
-el("discovery-verify").addEventListener("click", async () => {
+el("discovery-verify")?.addEventListener("click", async () => {
   const error = el("discovery-error");
   const button = el("discovery-verify");
   error.textContent = "";
@@ -1588,7 +1686,7 @@ el("discovery-verify").addEventListener("click", async () => {
   }
 });
 el("discovery-export-button")?.addEventListener("click", () => { if (!state.discovery.jobId) return; window.location.href = `/api/jobs/${encodeURIComponent(state.discovery.jobId)}/download`; });
-el("discovery-stop-button").addEventListener("click", async () => {
+el("discovery-stop-button")?.addEventListener("click", async () => {
   if (!state.discovery.jobId) return;
   const button = el("discovery-stop-button");
   button.disabled = true;
@@ -1720,17 +1818,17 @@ function updateAccount() {
       ? `Trial credits valid until ${VerigoI18n.formatDate(state.user.trial_credit_expires_at)}`
       : `体验额度有效至 ${VerigoI18n.formatDate(state.user.trial_credit_expires_at)}`
     : "";
-  el("bind-email-button").classList.toggle("hidden", !state.user?.needs_email_binding);
-  el("dashboard-nav").classList.toggle("hidden", !state.user?.is_admin);
-  el("admin-credits-nav").classList.toggle("hidden", !state.user?.is_admin);
-  el("wallet-nav").classList.toggle("hidden", !state.user);
-  el("workspace-nav").classList.toggle("hidden", !state.user);
-  el("notification-button").classList.toggle("hidden", !state.user);
-  el("claim-trial-button").classList.toggle(
-    "hidden", !state.user || state.user.needs_email_binding || state.user.email_verified,
-  );
-  el("recent-block").classList.toggle("hidden", !state.user);
-  el("account-menu").classList.add("hidden");
+  const setHidden = (id, hidden) => el(id)?.classList.toggle("hidden", hidden);
+  setHidden("bind-email-button", !state.user?.needs_email_binding);
+  setHidden("dashboard-nav", !state.user?.is_admin);
+  setHidden("admin-credits-nav", !state.user?.is_admin);
+  setHidden("system-health-nav", !state.user?.is_admin);
+  setHidden("wallet-nav", !state.user);
+  setHidden("workspace-nav", !state.user);
+  setHidden("notification-button", !state.user);
+  setHidden("claim-trial-button", !state.user || state.user.needs_email_binding || state.user.email_verified);
+  setHidden("recent-block", !state.user);
+  el("account-menu")?.classList.add("hidden");
   closeNotificationMenu();
   if (state.user) {
     loadRecentJobs();
@@ -1780,9 +1878,9 @@ async function loadWorkspaceHome() {
 
 /* Lists were intentionally retired from the product UI. */
 /* Retired list workspace kept out of the UI. */
-el("dashboard-refresh").addEventListener("click", loadDashboardMetrics);
+el("dashboard-refresh")?.addEventListener("click", loadDashboardMetrics);
 async function loadWallet() { const data = await api("/api/wallet"); const set=(id,v)=>el(id).textContent=Number(v||0).toLocaleString("zh-CN"); set("wallet-available",data.available_verifications); el("wallet-paid").textContent=`${Number(data.paid_verifications||0).toLocaleString("zh-CN")} 次`; el("wallet-used").textContent=`${Number(data.paid_verifications_used||0).toLocaleString("zh-CN")} 次`; el("wallet-recharged").textContent=`¥${(Number(data.cumulative_recharge_fen||0)/100).toFixed(2)}`; el("wallet-value").textContent=`¥${Number(data.remaining_paid_value_yuan||0).toFixed(2)}`; el("wallet-spent").textContent=`¥${Number(data.paid_used_value_yuan||0).toFixed(2)}`; el("wallet-price").textContent=`100 次 ¥${(data.price_fen_per_100/100).toFixed(2)}`; el("wallet-trial-note").textContent=data.trial_verifications?`另有 ${data.trial_verifications} 体验次数`:"不含体验次数"; el("wallet-updated").textContent=`更新于 ${new Date().toLocaleString("zh-CN")}`; const days=data.usage_daily||[]; const max=Math.max(1,...days.map(x=>x.verifications)); el("wallet-usage-chart").innerHTML=days.map(x=>`<div class="wallet-bar" style="height:${Math.max(4,x.verifications/max*180)}px"><span>${x.verifications}</span></div>`).join(""); el("wallet-transactions").innerHTML=(data.transactions||[]).map(x=>`<div class="wallet-transaction"><div><strong>${x.title}</strong><small>${x.credits>0?"+":""}${x.credits} 次 ${x.note||""}</small></div><div><strong>${x.amount_fen==null?"—":`${x.credits<0?"-":"+"}¥${(x.amount_fen/100).toFixed(2)}`}</strong><small>${new Date(x.created_at).toLocaleString("zh-CN")}</small></div></div>`).join("")||"暂无资金流水"; }
-el("wallet-refresh").addEventListener("click", loadWallet);
+el("wallet-refresh")?.addEventListener("click", loadWallet);
 
 function focusRedemptionForm() {
   window.setTimeout(() => {
@@ -1972,7 +2070,7 @@ async function syncOnboarding() {
 document.querySelectorAll("[data-close-onboarding]").forEach((button) => button.addEventListener("click", () => {
   clearTimeout(state.onboardingTimer); el("onboarding-dialog").close();
 }));
-el("onboarding-email-form").addEventListener("submit", async (event) => {
+el("onboarding-email-form")?.addEventListener("submit", async (event) => {
   event.preventDefault();
   const submit = event.currentTarget.querySelector("button[type=submit]");
   submit.disabled = true; el("onboarding-email-error").textContent = "";
@@ -1985,12 +2083,12 @@ el("onboarding-email-form").addEventListener("submit", async (event) => {
     el("onboarding-check-email").focus();
   } catch (error) { el("onboarding-email-error").textContent = error.message; } finally { submit.disabled = false; }
 });
-el("onboarding-resend").addEventListener("click", async () => {
+el("onboarding-resend")?.addEventListener("click", async () => {
   const button = el("onboarding-resend"); button.disabled = true; el("onboarding-email-error").textContent = "";
   try { await api("/api/auth/email-verification/request", { method: "POST" }); el("onboarding-email-error").textContent = "新的验证码已发送。"; }
   catch (error) { el("onboarding-email-error").textContent = error.message; } finally { button.disabled = false; }
 });
-el("onboarding-check-form").addEventListener("submit", async (event) => {
+el("onboarding-check-form")?.addEventListener("submit", async (event) => {
   event.preventDefault();
   const submit = event.currentTarget.querySelector("button[type=submit]");
   submit.disabled = true; el("onboarding-check-error").textContent = "";
@@ -2003,17 +2101,17 @@ el("onboarding-check-form").addEventListener("submit", async (event) => {
     syncOnboarding();
   } catch (error) { el("onboarding-check-error").textContent = error.message; } finally { submit.disabled = false; }
 });
-el("onboarding-go-wallet").addEventListener("click", () => { el("onboarding-dialog").close(); switchView("wallet"); });
-el("onboarding-finish").addEventListener("click", () => el("onboarding-dialog").close());
+el("onboarding-go-wallet")?.addEventListener("click", () => { el("onboarding-dialog").close(); switchView("wallet"); });
+el("onboarding-finish")?.addEventListener("click", () => el("onboarding-dialog").close());
 
 function refreshPurchasePrice() {
   const packages = Math.max(1, Math.min(1000, Number(el("purchase-packages").value) || 1));
   el("purchase-packages").value = String(packages);
   el("purchase-button").textContent = `购买 ${(packages * 100).toLocaleString("zh-CN")} 次 · ¥${(packages * 0.5).toFixed(2)}`;
 }
-el("purchase-packages").addEventListener("input", refreshPurchasePrice);
-el("close-purchase").addEventListener("click", () => el("purchase-dialog").close());
-el("purchase-button").addEventListener("click", async () => {
+el("purchase-packages")?.addEventListener("input", refreshPurchasePrice);
+el("close-purchase")?.addEventListener("click", () => el("purchase-dialog").close());
+el("purchase-button")?.addEventListener("click", async () => {
   const button = el("purchase-button"); button.disabled = true; el("purchase-status").className = "purchase-status"; el("purchase-status").textContent = "";
   try {
     const order = await api("/api/billing/orders", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ packages: Number(el("purchase-packages").value) }) });
@@ -2026,8 +2124,11 @@ el("purchase-button").addEventListener("click", async () => {
 });
 async function loadAdminAccounts(){try{const data=await api(`/api/admin/accounts/list?offset=${state.adminAccountOffset}&limit=50`),rows=data.items,summary=data.summary||{};el("admin-metric-users").textContent=data.total.toLocaleString("zh-CN");el("admin-metric-paid").textContent=Number(summary.paid_verifications||0).toLocaleString("zh-CN");el("admin-metric-trial").textContent=Number(summary.trial_verifications||0).toLocaleString("zh-CN");el("admin-metric-used").textContent=Number(summary.used_verifications||0).toLocaleString("zh-CN");el("admin-accounts-meta").textContent=`共 ${data.total} 个账户，按注册时间排序`;el("admin-accounts-list").innerHTML=rows.map(r=>`<button class="admin-account-row" data-email="${r.email}" type="button"><strong>${r.email}</strong><span>付费 ${r.paid_verifications}</span><span>体验 ${r.trial_verifications}</span><span>已用 ${r.used_verifications}</span></button>`).join("")||"暂无账户";el("admin-accounts-page").textContent=`${data.offset+1}-${Math.min(data.offset+data.limit,data.total)} / ${data.total}`;el("admin-accounts-prev").disabled=!data.offset;el("admin-accounts-next").disabled=data.offset+data.limit>=data.total;const page=Math.floor(data.offset/data.limit);renderPageNumbers(el("admin-accounts-pages"),page,Math.max(1,Math.ceil(data.total/data.limit)),nextPage=>{state.adminAccountOffset=nextPage*data.limit;loadAdminAccounts();});document.querySelectorAll(".admin-account-row").forEach(b=>b.addEventListener("click",()=>{el("admin-credit-email").value=b.dataset.email;el("admin-account-lookup").click();}));}catch(error){["admin-metric-users","admin-metric-paid","admin-metric-trial","admin-metric-used"].forEach(id=>el(id).textContent="—");el("admin-accounts-meta").textContent=`账户数据加载失败：${error.message}`;el("admin-accounts-list").textContent="请刷新后重试";}}
 async function loadAdminFeatureUsage(){const data=await api("/api/admin/feature-usage");const days=data.daily||[];const width=620,height=350,p={top:18,right:12,bottom:30,left:30},max=Math.max(1,...days.flatMap(day=>[day.single,day.batch,day.discovery]));const x=index=>p.left+(days.length>1?index*(width-p.left-p.right)/(days.length-1):(width-p.left-p.right)/2),point=(value,index)=>`${x(index)},${p.top+(height-p.top-p.bottom)*(1-value/max)}`;const series=[["single","single"],["batch","batch"],["discovery","discovery"]];const grid=[0,.5,1].map(step=>{const y=p.top+(height-p.top-p.bottom)*step;return `<line class="admin-feature-grid" x1="${p.left}" y1="${y}" x2="${width-p.right}" y2="${y}"/><text class="admin-feature-axis" x="0" y="${y+4}">${Math.round(max*(1-step))}</text>`;}).join("");const labels=days.map((day,index)=>index%2&&days.length>8?"":`<text class="admin-feature-axis" text-anchor="middle" x="${x(index)}" y="${height-8}">${day.day.slice(5).replace("-","/")}</text>`).join("");const lines=series.map(([key,name])=>`<polyline class="admin-feature-line-${name}" points="${days.map((day,index)=>point(day[key],index)).join(" ")}" fill="none" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>${days.map((day,index)=>{const [px,py]=point(day[key],index).split(",");return `<circle cx="${px}" cy="${py}" r="3" fill="currentColor" class="admin-feature-line-${name}"><title>${day.day} ${key} ${day[key]}</title></circle>`;}).join("")}`).join("");el("admin-feature-chart").innerHTML=`<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="功能使用趋势">${grid}${lines}${labels}</svg>`;el("admin-feature-legend").innerHTML=`<span>单个 ${data.totals.single}</span><span>批量 ${data.totals.batch}</span><span>查找 ${data.totals.discovery}</span>`;}
-el("admin-accounts-refresh").addEventListener("click",()=>{state.adminAccountOffset=0;loadAdminAccounts();});el("admin-accounts-prev").addEventListener("click",()=>{state.adminAccountOffset=Math.max(0,state.adminAccountOffset-50);loadAdminAccounts();});el("admin-accounts-next").addEventListener("click",()=>{state.adminAccountOffset+=50;loadAdminAccounts();});
-el("admin-account-lookup").addEventListener("click", async()=>{try{await api(`/api/admin/accounts?email=${encodeURIComponent(el("admin-credit-email").value)}`);}catch(error){el("admin-credit-result").textContent=error.message;}});
+el("admin-accounts-refresh")?.addEventListener("click",()=>{state.adminAccountOffset=0;loadAdminAccounts();});el("admin-accounts-prev")?.addEventListener("click",()=>{state.adminAccountOffset=Math.max(0,state.adminAccountOffset-50);loadAdminAccounts();});el("admin-accounts-next")?.addEventListener("click",()=>{state.adminAccountOffset+=50;loadAdminAccounts();});
+el("admin-account-lookup")?.addEventListener("click", async()=>{const email=el("admin-credit-email").value;if(!email){el("admin-credit-result").className="admin-credit-result error";el("admin-credit-result").textContent="请输入邮箱地址";return;}const btn=el("admin-account-lookup");const originalText=btn.innerHTML;btn.disabled=true;btn.innerHTML='<i class="fa-solid fa-spinner fa-spin"></i>查询中';el("admin-credit-result").className="admin-credit-result";el("admin-credit-result").textContent="";try{const account=await api(`/api/admin/accounts?email=${encodeURIComponent(email)}`);el("account-info-paid").textContent=account.paid_verifications||0;el("account-info-trial").textContent=account.trial_verifications||0;el("account-info-used").textContent=account.used_verifications||0;el("admin-account-info").classList.remove("hidden");el("admin-credit-result").className="admin-credit-result success";el("admin-credit-result").textContent=`找到账户：${account.email}`;}catch(error){el("admin-account-info").classList.add("hidden");el("admin-credit-result").className="admin-credit-result error";el("admin-credit-result").textContent=error.message;}finally{btn.disabled=false;btn.innerHTML=originalText;}});
+el("admin-credit-action")?.addEventListener("change",()=>{const action=el("admin-credit-action").value;const btn=el("admin-credit-submit");btn.innerHTML=action==="deduct"?'<i class="fa-solid fa-minus"></i>确认扣减':'<i class="fa-solid fa-check"></i>确认授予';});
+el("system-health-refresh")?.addEventListener("click",()=>loadSystemHealth());
+async function loadSystemHealth(){try{const data=await api("/api/admin/system-health");const services=data.services||[];const workers=data.workers||[];const queue=data.queue||{};const database=data.database||{};const resources=data.resources||{};const servicesOk=services.filter(s=>s.status==="running").length;const workersActive=workers.filter(w=>w.status==="active").length;function getProgressLevel(percent){return percent>=85?"level-danger":percent>=70?"level-warn":"level-good";}el("health-services-status").textContent=`${servicesOk}/${services.length}`;el("health-services-detail").textContent=servicesOk===services.length?"全部正常":"部分异常";el("health-workers-status").textContent=`${workersActive}/${workers.length}`;el("health-workers-detail").textContent=workersActive===workers.length?"全部活跃":"部分停止";el("health-queue-pending").textContent=(queue.pending||0).toLocaleString("zh-CN");el("health-queue-running").textContent=`运行中 ${queue.running||0}`;el("health-db-connections").textContent=`${database.active||0}/${database.max||0}`;el("health-db-detail").textContent=database.idle_in_transaction>0?`${database.idle_in_transaction} 空闲事务`:"连接正常";el("health-services-list").innerHTML=services.map(s=>`<div class="health-item-row"><div class="health-item-name"><i class="fa-solid fa-${s.status==="running"?"circle-check":"circle-xmark"}"></i><strong>${s.name}</strong></div><span class="health-status-badge status-${s.status==="running"?"running":"stopped"}"><i class="fa-solid fa-${s.status==="running"?"play":"stop"}"></i>${s.status==="running"?"运行中":"已停止"}</span></div>`).join("")||"<div style=\"padding:24px;text-align:center;color:#80868b;\">无数据</div>";el("health-workers-list").innerHTML=workers.map(w=>`<div class="health-item-row"><div class="health-item-name"><i class="fa-solid fa-robot"></i><strong>${w.name||w.id||"未知"}</strong></div><div class="health-item-meta"><small>处理 ${w.processed||0} 个</small><span class="health-status-badge status-${w.status==="active"?"active":"inactive"}"><i class="fa-solid fa-${w.status==="active"?"bolt":"pause"}"></i>${w.status==="active"?"活跃":w.status}</span></div></div>`).join("")||"<div style=\"padding:24px;text-align:center;color:#80868b;\">无数据</div>";const cpuPercent=resources.cpu_percent||0;const memPercent=resources.memory_percent||0;const diskPercent=resources.disk_percent||0;el("health-resources-list").innerHTML=`<div class="health-metric-card"><div class="health-metric-icon icon-cpu"><i class="fa-solid fa-microchip"></i></div><div class="health-metric-content"><span class="health-metric-label">CPU 使用率</span><span class="health-metric-value">${cpuPercent}%</span><div class="health-progress-bar"><div class="health-progress-fill ${getProgressLevel(cpuPercent)}" style="width:${cpuPercent}%"></div></div></div></div><div class="health-metric-card"><div class="health-metric-icon icon-memory"><i class="fa-solid fa-memory"></i></div><div class="health-metric-content"><span class="health-metric-label">内存使用率</span><span class="health-metric-value">${memPercent}%</span><div class="health-metric-detail">${resources.memory_used||"—"} / ${resources.memory_total||"—"}</div><div class="health-progress-bar"><div class="health-progress-fill ${getProgressLevel(memPercent)}" style="width:${memPercent}%"></div></div></div></div><div class="health-metric-card"><div class="health-metric-icon icon-disk"><i class="fa-solid fa-hard-drive"></i></div><div class="health-metric-content"><span class="health-metric-label">磁盘使用率</span><span class="health-metric-value">${diskPercent}%</span><div class="health-metric-detail">${resources.disk_used||"—"} / ${resources.disk_total||"—"}</div><div class="health-progress-bar"><div class="health-progress-fill ${getProgressLevel(diskPercent)}" style="width:${diskPercent}%"></div></div></div></div>`;el("health-database-list").innerHTML=`<div class="health-item-row"><div class="health-item-name"><i class="fa-solid fa-link"></i><strong>活跃连接</strong></div><span style="font-weight:700;font-size:16px;color:#1a73e8;">${database.active||0}</span></div><div class="health-item-row"><div class="health-item-name"><i class="fa-solid fa-pause"></i><strong>空闲连接</strong></div><span style="font-weight:600;font-size:15px;color:#5f6368;">${database.idle||0}</span></div><div class="health-item-row"><div class="health-item-name"><i class="fa-solid fa-hourglass-half"></i><strong>空闲事务</strong></div><span class="health-status-badge status-${database.idle_in_transaction>0?"inactive":"active"}">${database.idle_in_transaction||0}</span></div><div class="health-item-row"><div class="health-item-name"><i class="fa-solid fa-database"></i><strong>最大连接数</strong></div><span style="font-weight:600;font-size:15px;color:#5f6368;">${database.max||0}</span></div><div class="health-item-row"><div class="health-item-name"><i class="fa-solid fa-list"></i><strong>待处理任务</strong></div><div class="health-item-meta"><small>运行中 ${queue.running||0}</small><span style="font-weight:700;font-size:16px;color:#e37400;">${queue.pending||0}</span></div></div>`;}catch(error){el("health-services-status").textContent="—";el("health-services-detail").textContent="加载失败";el("health-workers-status").textContent="—";el("health-workers-detail").textContent=error.message;el("health-queue-pending").textContent="—";el("health-queue-running").textContent="—";el("health-db-connections").textContent="—";el("health-db-detail").textContent="请刷新重试";}}
 function notificationUiText(zh, en) {
   return VerigoI18n.locale === "en" ? en : zh;
 }
@@ -2267,7 +2368,7 @@ async function loadNotifications({ append = false } = {}) {
   }
 }
 
-el("notification-button").addEventListener("click", async () => {
+el("notification-button")?.addEventListener("click", async () => {
   const menu = el("notification-menu");
   const opening = menu.classList.contains("hidden");
   if (!opening) { closeNotificationMenu(); return; }
@@ -2276,37 +2377,37 @@ el("notification-button").addEventListener("click", async () => {
   el("account-menu").classList.add("hidden");
   await loadNotifications();
 });
-el("notification-close").addEventListener("click", closeNotificationMenu);
+el("notification-close")?.addEventListener("click", closeNotificationMenu);
 document.querySelectorAll("[data-notification-filter]").forEach((button) => button.addEventListener("click", () => {
   state.notificationFilter = button.dataset.notificationFilter;
   localStorage.setItem("verigo_notification_filter", state.notificationFilter);
   renderNotifications();
 }));
-el("notification-list").addEventListener("scroll", (event) => {
+el("notification-list")?.addEventListener("scroll", (event) => {
   const list = event.currentTarget;
   const nearBottom = list.scrollHeight - list.scrollTop - list.clientHeight <= 48;
   if (nearBottom) loadNotifications({ append: true });
 });
-el("notification-refresh").addEventListener("click", () => loadNotifications());
-el("notification-settings").addEventListener("click", () => {
+el("notification-refresh")?.addEventListener("click", () => loadNotifications());
+el("notification-settings")?.addEventListener("click", () => {
   const preferences = el("notification-preferences"); preferences.classList.toggle("hidden"); updateNotificationChrome();
 });
-el("notification-compact").addEventListener("change", (event) => {
+el("notification-compact")?.addEventListener("change", (event) => {
   state.notificationPreferences.compact = event.target.checked;
   localStorage.setItem("verigo_notification_compact", event.target.checked ? "1" : "0");
   applyNotificationPreferences();
 });
-el("notification-auto-refresh").addEventListener("change", (event) => {
+el("notification-auto-refresh")?.addEventListener("change", (event) => {
   state.notificationPreferences.autoRefresh = event.target.checked;
   localStorage.setItem("verigo_notification_auto_refresh", event.target.checked ? "1" : "0");
   scheduleNotificationPolling();
 });
-el("notification-reset-preferences").addEventListener("click", () => {
+el("notification-reset-preferences")?.addEventListener("click", () => {
   state.notificationPreferences = { compact: false, autoRefresh: true };
   localStorage.removeItem("verigo_notification_compact"); localStorage.removeItem("verigo_notification_auto_refresh");
   applyNotificationPreferences(); scheduleNotificationPolling();
 });
-el("notification-mark-all").addEventListener("click", async () => {
+el("notification-mark-all")?.addEventListener("click", async () => {
   if (!state.notificationUnread) return;
   const previous = state.notifications.map((notification) => notification.read_at);
   state.notifications.forEach((notification) => { if (!notification.read_at) notification.read_at = new Date().toISOString(); });
@@ -2322,12 +2423,12 @@ document.addEventListener("click", (event) => {
   if (!el("notification-menu").contains(event.target) && !el("notification-button").contains(event.target)) closeNotificationMenu();
   if (!el("account-menu").contains(event.target) && !el("account-button").contains(event.target)) el("account-menu").classList.add("hidden");
   const drawer = el("result-detail-drawer");
-  if (drawer?.classList.contains("open") && event.target === drawer) closeResultDetails();
+  if (drawer?.classList.contains("open") && !drawer.contains(event.target) && !event.target.closest(".result-detail-action")) closeResultDetails();
 });
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") { closeNotificationMenu(); el("account-menu").classList.add("hidden"); closeResultDetails(); }
 });
-el("admin-credit-grant-form").addEventListener("submit", async (event) => {
+el("admin-credit-grant-form")?.addEventListener("submit", async (event) => {
   event.preventDefault();
   const submit = el("admin-credit-submit");
   const result = el("admin-credit-result");
@@ -2361,22 +2462,22 @@ el("admin-credit-grant-form").addEventListener("submit", async (event) => {
   }
 });
 
-el("account-button").addEventListener("click", () => {
+el("account-button")?.addEventListener("click", () => {
   if (state.user) el("account-menu").classList.toggle("hidden");
   else el("auth-dialog").showModal();
 });
-el("logout-button").addEventListener("click", async () => {
+el("logout-button")?.addEventListener("click", async () => {
   await api("/api/auth/logout", { method: "POST" });
   state.user = null;
   updateAccount();
 });
-el("delete-account-button").addEventListener("click", () => {
+el("delete-account-button")?.addEventListener("click", () => {
   el("account-menu").classList.add("hidden");
   el("delete-account-confirm").checked = false;
   el("delete-account-error").textContent = "";
   el("delete-account-dialog").showModal();
 });
-el("change-password-button").addEventListener("click", () => {
+el("change-password-button")?.addEventListener("click", () => {
   el("account-menu").classList.add("hidden");
   el("change-password-form").reset();
   el("change-password-error").textContent = "";
@@ -2446,7 +2547,7 @@ function openApiKeysDialog() {
   loadApiKeys();
 }
 
-el("api-nav").addEventListener("click", () => {
+el("api-nav")?.addEventListener("click", () => {
   if (el("onboarding-dialog")?.open) el("onboarding-dialog").close();
   if (!state.user) {
     el("auth-dialog").showModal();
@@ -2456,10 +2557,10 @@ el("api-nav").addEventListener("click", () => {
   }
   openApiKeysDialog();
 });
-el("close-api-keys").addEventListener("click", () => el("api-keys-dialog").close());
-el("api-keys-dialog").addEventListener("close", clearCreatedApiKey);
-el("api-keys-refresh").addEventListener("click", loadApiKeys);
-el("api-key-create-form").addEventListener("submit", async (event) => {
+el("close-api-keys")?.addEventListener("click", () => el("api-keys-dialog").close());
+el("api-keys-dialog")?.addEventListener("close", clearCreatedApiKey);
+el("api-keys-refresh")?.addEventListener("click", loadApiKeys);
+el("api-key-create-form")?.addEventListener("submit", async (event) => {
   event.preventDefault();
   const submit = el("api-key-create-submit");
   submit.disabled = true;
@@ -2480,7 +2581,7 @@ el("api-key-create-form").addEventListener("submit", async (event) => {
     submit.disabled = false;
   }
 });
-el("copy-api-key").addEventListener("click", async () => {
+el("copy-api-key")?.addEventListener("click", async () => {
   const token = el("api-key-token").value;
   if (!token) return;
   try {
@@ -2492,8 +2593,8 @@ el("copy-api-key").addEventListener("click", async () => {
     el("copy-api-key").textContent = VerigoI18n.text("已复制");
   }
 });
-el("close-change-password").addEventListener("click", () => el("change-password-dialog").close());
-el("change-password-form").addEventListener("submit", async (event) => {
+el("close-change-password")?.addEventListener("click", () => el("change-password-dialog").close());
+el("change-password-form")?.addEventListener("submit", async (event) => {
   event.preventDefault();
   const submit = event.currentTarget.querySelector('button[type="submit"]');
   submit.disabled = true;
@@ -2514,8 +2615,8 @@ el("change-password-form").addEventListener("submit", async (event) => {
     submit.disabled = false;
   }
 });
-el("close-delete-account").addEventListener("click", () => el("delete-account-dialog").close());
-el("delete-account-form").addEventListener("submit", async (event) => {
+el("close-delete-account")?.addEventListener("click", () => el("delete-account-dialog").close());
+el("delete-account-form")?.addEventListener("submit", async (event) => {
   event.preventDefault();
   const submit = event.currentTarget.querySelector("button[type='submit']");
   submit.disabled = true;
@@ -2540,12 +2641,12 @@ function claimTrialCredits() {
   el("email-verification-dialog").showModal();
 }
 
-el("claim-trial-button").addEventListener("click", claimTrialCredits);
-el("close-email-verification").addEventListener("click", () => el("email-verification-dialog").close());
+el("claim-trial-button")?.addEventListener("click", claimTrialCredits);
+el("close-email-verification")?.addEventListener("click", () => el("email-verification-dialog").close());
 document.querySelectorAll("[data-close-email-verification]").forEach((button) => {
   button.addEventListener("click", () => el("email-verification-dialog").close());
 });
-el("email-verification-request-form").addEventListener("submit", async (event) => {
+el("email-verification-request-form")?.addEventListener("submit", async (event) => {
   event.preventDefault();
   const submit = event.currentTarget.querySelector("button[type='submit']");
   submit.disabled = true;
@@ -2561,7 +2662,7 @@ el("email-verification-request-form").addEventListener("submit", async (event) =
     submit.disabled = false;
   }
 });
-el("email-verification-confirm-form").addEventListener("submit", async (event) => {
+el("email-verification-confirm-form")?.addEventListener("submit", async (event) => {
   event.preventDefault();
   const submit = event.currentTarget.querySelector("button[type='submit']");
   submit.disabled = true;
@@ -2590,12 +2691,12 @@ function openBindEmailDialog() {
   el("bind-email-dialog").showModal();
 }
 
-el("bind-email-button").addEventListener("click", openBindEmailDialog);
-el("close-bind-email").addEventListener("click", () => el("bind-email-dialog").close());
+el("bind-email-button")?.addEventListener("click", openBindEmailDialog);
+el("close-bind-email")?.addEventListener("click", () => el("bind-email-dialog").close());
 document.querySelectorAll("[data-close-bind-email]").forEach((button) => {
   button.addEventListener("click", () => el("bind-email-dialog").close());
 });
-el("bind-email-request-form").addEventListener("submit", async (event) => {
+el("bind-email-request-form")?.addEventListener("submit", async (event) => {
   event.preventDefault();
   el("bind-email-error").textContent = "";
   try {
@@ -2608,7 +2709,7 @@ el("bind-email-request-form").addEventListener("submit", async (event) => {
     el("bind-email-confirm-form").classList.remove("hidden");
   } catch (error) { el("bind-email-error").textContent = error.message; }
 });
-el("bind-email-confirm-form").addEventListener("submit", async (event) => {
+el("bind-email-confirm-form")?.addEventListener("submit", async (event) => {
   event.preventDefault();
   el("bind-email-confirm-error").textContent = "";
   try {
@@ -2664,8 +2765,8 @@ async function loadPublicConfig() {
 }
 
 document.querySelectorAll("[data-auth-mode]").forEach((button) => button.addEventListener("click", () => setAuthMode(button.dataset.authMode)));
-el("close-auth").addEventListener("click", () => el("auth-dialog").close());
-el("auth-form").addEventListener("submit", async (event) => {
+el("close-auth")?.addEventListener("click", () => el("auth-dialog").close());
+el("auth-form")?.addEventListener("submit", async (event) => {
   event.preventDefault();
   const submit = el("auth-submit");
   submit.disabled = true;
@@ -2706,16 +2807,16 @@ el("auth-form").addEventListener("submit", async (event) => {
   }
 });
 
-el("open-reset").addEventListener("click", () => {
+el("open-reset")?.addEventListener("click", () => {
   el("auth-dialog").close();
   el("reset-request-form").classList.remove("hidden");
   el("reset-confirm-form").classList.add("hidden");
   el("reset-error").textContent = "";
   el("reset-dialog").showModal();
 });
-el("close-reset").addEventListener("click", () => el("reset-dialog").close());
+el("close-reset")?.addEventListener("click", () => el("reset-dialog").close());
 document.querySelectorAll("[data-close-reset]").forEach((button) => button.addEventListener("click", () => el("reset-dialog").close()));
-el("reset-request-form").addEventListener("submit", async (event) => {
+el("reset-request-form")?.addEventListener("submit", async (event) => {
   event.preventDefault();
   el("reset-error").textContent = "";
   try {
@@ -2727,7 +2828,7 @@ el("reset-request-form").addEventListener("submit", async (event) => {
     el("reset-confirm-form").classList.remove("hidden");
   } catch (error) { el("reset-error").textContent = error.message; }
 });
-el("reset-confirm-form").addEventListener("submit", async (event) => {
+el("reset-confirm-form")?.addEventListener("submit", async (event) => {
   event.preventDefault();
   el("reset-confirm-error").textContent = "";
   try {
@@ -2741,7 +2842,7 @@ el("reset-confirm-form").addEventListener("submit", async (event) => {
   } catch (error) { el("reset-confirm-error").textContent = error.message; }
 });
 
-el("refresh-jobs").addEventListener("click", loadRecentJobs);
+el("refresh-jobs")?.addEventListener("click", loadRecentJobs);
 el("workspace-history-link")?.addEventListener("click", () => {
   switchView("single");
   window.setTimeout(() => el("recent-block")?.scrollIntoView({ behavior: "smooth", block: "start" }), 0);
@@ -2777,7 +2878,13 @@ document.querySelectorAll("#workspace-home [data-view]").forEach((button) => but
       return;
     } else if (window.location.pathname === "/history" || window.location.pathname === "/app/history") {
       if (state.user) switchView("history");
-      else { window.history.replaceState({}, "", "/"); switchView("single"); }
+      else {
+        window.history.replaceState({}, "", "/verify");
+        switchView("single");
+        setAuthMode("login");
+        el("auth-error").textContent = "请先登录后查看历史记录";
+        el("auth-dialog").showModal();
+      }
     } else if ((window.location.pathname === "/wallet" || window.location.pathname === "/app/billing") && state.user) {
       switchView("wallet");
     } else if (window.location.pathname === "/app/finder" && state.user) {
@@ -2790,7 +2897,13 @@ document.querySelectorAll("#workspace-home [data-view]").forEach((button) => but
     } else {
       el("auth-dialog").showModal();
       setAuthMode("login");
-      el("auth-error").textContent = "请登录有运营监控权限的账户";
+      const requestedPath = window.location.pathname;
+      const gateMessage = requestedPath === "/app/finder"
+        ? "请先登录后使用企业邮箱查找"
+        : (requestedPath === "/wallet" || requestedPath === "/app/billing")
+          ? "请先登录后查看账户数据"
+          : "请登录有运营监控权限的账户";
+      el("auth-error").textContent = gateMessage;
     }
   }
   if (state.jobId) {

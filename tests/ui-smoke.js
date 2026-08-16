@@ -1,4 +1,7 @@
 const { chromium } = require("playwright");
+const fs = require("fs");
+const path = require("path");
+const resultDetailFixtures = require("./fixtures/result_detail_states.json");
 const BASE_URL = process.env.VERIGO_UI_BASE || "http://127.0.0.1:8000/verify";
 const BASE_ORIGIN = new URL(BASE_URL).origin;
 
@@ -6,7 +9,9 @@ async function checkViewport(browser, name, width, height) {
   const page = await browser.newPage({ viewport: { width, height } });
   const errors = [];
   page.on("console", (message) => {
-    if (message.type() === "error") errors.push(message.text());
+    if (message.type() === "error") {
+      errors.push(JSON.stringify({ text: message.text(), location: message.location() }));
+    }
   });
   await page.goto(BASE_URL, { waitUntil: "domcontentloaded" });
 
@@ -63,6 +68,147 @@ async function checkRiskPresentation(browser) {
   return { riskPresentation: true };
 }
 
+async function checkResultDetailsViewport(browser, name, viewport) {
+  const page = await browser.newPage({ viewport });
+  const errors = [];
+  page.on("console", (message) => {
+    if (message.type() === "error") {
+      errors.push(JSON.stringify({ text: message.text(), location: message.location() }));
+    }
+  });
+  await page.addInitScript(() => {
+    sessionStorage.setItem("verigo_job_id", "ui-result-details");
+    sessionStorage.setItem("verigo_job_token", "ui-result-token");
+  });
+  await page.route("**/api/auth/me", (route) => route.fulfill({
+    contentType: "application/json", body: "null",
+  }));
+  await page.route("**/api/public/config", (route) => route.fulfill({
+    contentType: "application/json", body: JSON.stringify({}),
+  }));
+  await page.route("**/api/jobs/ui-result-details", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({
+      id: "ui-result-details", status: "completed", worker_count: 1,
+      completed: resultDetailFixtures.length, total: resultDetailFixtures.length, progress: 100,
+      summary: { total: resultDetailFixtures.length, deliverable: 1, undeliverable: 2, unknown: 2 },
+      created_at: "2026-08-16T00:00:00Z", started_at: "2026-08-16T00:00:01Z",
+      finished_at: "2026-08-16T00:01:00Z", retry_at: "2000-01-01T00:00:00Z",
+      download_url: null, error: null, queue_position: null, qq_slow: false,
+    }),
+  }));
+  await page.route("**/api/jobs/ui-result-details/results?**", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({
+      total: resultDetailFixtures.length, available: resultDetailFixtures.length,
+      offset: 0, limit: 50, items: resultDetailFixtures,
+    }),
+  }));
+  await page.goto(BASE_URL, { waitUntil: "domcontentloaded" });
+  await page.waitForFunction((count) => document.querySelectorAll("#results-body .result-email-row").length === count, resultDetailFixtures.length);
+
+  const initial = await page.evaluate(() => ({
+    overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+    progress: document.querySelector("#progress-copy")?.textContent || "",
+    actionSizes: [...document.querySelectorAll("#results-body .result-detail-action")].map((node) => {
+      const rect = node.getBoundingClientRect();
+      return { width: rect.width, height: rect.height };
+    }),
+    emailStyle: (() => {
+      const style = getComputedStyle(document.querySelector(".result-email-value"));
+      return { whiteSpace: style.whiteSpace, overflowWrap: style.overflowWrap };
+    })(),
+  }));
+  if (initial.overflow) throw new Error(`${name} result details: page has horizontal overflow`);
+  if (initial.progress.includes("0 秒") || initial.progress.includes("后再次复核")) {
+    throw new Error(`${name} result details: expired retry countdown is still visible: ${initial.progress}`);
+  }
+  if (initial.actionSizes.some((size) => size.width < 40 || size.height < 40)) {
+    throw new Error(`${name} result details: detail action is smaller than 40px`);
+  }
+  if (initial.emailStyle.whiteSpace !== "normal" || initial.emailStyle.overflowWrap !== "anywhere") {
+    throw new Error(`${name} result details: long email wrapping is not enabled`);
+  }
+
+  const expectedStatus = {
+    deliverable: "可投递",
+    undeliverable: "不可投递",
+    greylist_452: "无法确认",
+    mailbox_full: "不可投递",
+    retry_completed: "无法确认",
+  };
+  const screenshotDir = process.env.VERIGO_RESULT_DETAIL_SCREENSHOT_DIR;
+  if (screenshotDir) fs.mkdirSync(screenshotDir, { recursive: true });
+
+  for (let index = 0; index < resultDetailFixtures.length; index += 1) {
+    const fixture = resultDetailFixtures[index];
+    await page.locator("#results-body .result-detail-action").nth(index).click();
+    await page.waitForFunction(() => document.querySelector("#result-detail-drawer")?.classList.contains("open"));
+    await page.waitForFunction(() => {
+      const node = document.querySelector("#result-detail-drawer");
+      if (!node) return false;
+      const rect = node.getBoundingClientRect();
+      return rect.left >= 0 && rect.top >= 0 && rect.right <= innerWidth && rect.bottom <= innerHeight;
+    });
+    const drawer = page.locator("#result-detail-drawer");
+    const rendered = await drawer.evaluate((node) => {
+      const rect = node.getBoundingClientRect();
+      return {
+        status: node.querySelector("#result-detail-status")?.textContent,
+        headings: [...node.querySelectorAll(".detail-section-heading h3")].map((item) => item.textContent),
+        conclusion: [...node.querySelectorAll(".detail-conclusion-field")].map((item) => item.textContent),
+        technicalCount: node.querySelectorAll(".technical-details").length,
+        technicalOpen: node.querySelector(".technical-details")?.open,
+        withinViewport: rect.left >= 0 && rect.top >= 0 && rect.right <= innerWidth && rect.bottom <= innerHeight,
+      };
+    });
+    if (rendered.status !== expectedStatus[fixture.case]) {
+      throw new Error(`${name} ${fixture.case}: unexpected status ${rendered.status}`);
+    }
+    if (rendered.headings.join("|") !== "验证结论|可投递性检查|地址特征与投递风险") {
+      throw new Error(`${name} ${fixture.case}: result sections are in the wrong order ${rendered.headings.join("|")}`);
+    }
+    if (rendered.technicalCount !== 1 || rendered.technicalOpen || !rendered.withinViewport) {
+      throw new Error(`${name} ${fixture.case}: technical details or drawer geometry is invalid ${JSON.stringify(rendered)}`);
+    }
+    if (fixture.case === "mailbox_full" && !rendered.conclusion.some((value) => value.includes("收件箱已满，暂时无法接收邮件"))) {
+      throw new Error(`${name} mailbox full: the user action is missing`);
+    }
+    if (screenshotDir && index === 0) {
+      await page.screenshot({ path: path.join(screenshotDir, `result-details-${name}.png`), fullPage: false });
+    }
+
+    await drawer.locator(".technical-details summary").click();
+    const technicalFields = await drawer.locator(".technical-detail").evaluateAll((rows) => rows.map((row) => ({
+      label: row.querySelector("span")?.textContent,
+      value: row.querySelector(".technical-value")?.textContent,
+    })));
+    const serverResponse = technicalFields.find((field) => field.label === "服务器响应")?.value;
+    if (serverResponse !== fixture.smtp_result) {
+      throw new Error(`${name} ${fixture.case}: SMTP response changed: ${JSON.stringify(serverResponse)}`);
+    }
+
+    if (index === 0 && viewport.width > 600) {
+      await page.mouse.click(20, 100);
+      await page.waitForFunction(() => !document.querySelector("#result-detail-drawer")?.classList.contains("open"));
+    } else {
+      await page.click("#close-result-detail");
+    }
+  }
+  if (errors.length) throw new Error(`${name} result details: console errors: ${errors.join(" | ")}`);
+  await page.close();
+  return { name, cases: resultDetailFixtures.length, noOverflow: true, smtpPassthrough: true };
+}
+
+async function checkResultDetails(browser) {
+  return {
+    resultDetails: [
+      await checkResultDetailsViewport(browser, "desktop", { width: 1440, height: 900 }),
+      await checkResultDetailsViewport(browser, "mobile", { width: 390, height: 844 }),
+    ],
+  };
+}
+
 async function checkAccountAndImport(browser) {
   const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
   await page.setExtraHTTPHeaders({ "x-forwarded-for": `198.51.100.${Math.floor(Math.random() * 200) + 1}` });
@@ -73,7 +219,12 @@ async function checkAccountAndImport(browser) {
   await page.fill("#auth-email", email);
   await page.fill("#auth-password", "browser-smoke-2026");
   await page.click("#auth-submit");
-  await page.waitForFunction((value) => document.querySelector("#account-button")?.textContent === value, email);
+  await page.waitForFunction((value) => (
+    document.querySelector("#account-button")?.textContent === value
+    || document.querySelector("#auth-error")?.textContent.trim()
+  ), email);
+  const authError = (await page.locator("#auth-error").textContent()).trim();
+  if (authError) throw new Error(`account registration failed: ${authError}`);
   if (await page.locator("#onboarding-dialog").evaluate((node) => node.open)) {
     await page.locator("#onboarding-dialog [data-close-onboarding]").first().click();
   }
@@ -402,9 +553,10 @@ async function checkDashboard(browser) {
     qualityAttention: [...document.querySelectorAll("#quality-attention-list li")].map((item) => item.textContent),
     providerRows: document.querySelectorAll("#provider-quality-body tr").length,
     providerFirst: document.querySelector("#provider-quality-body tr")?.textContent,
-    providerReady: document.querySelector("#provider-quality-body tr")?.textContent.includes("7/7 可校准"),
+    providerProgressBars: document.querySelectorAll("#provider-quality-body tr:first-child .quality-progress-fill").length,
+    providerFirstRate: document.querySelector("#provider-quality-body tr:first-child .quality-value")?.textContent,
   }));
-  if (result.title !== "运营监控 | Verigo" || result.overflow || !result.navVisible || result.credits !== "无限额度" || result.trafficLines !== 2 || result.reportUsers !== "17" || result.revenue !== "¥29.90" || result.cloudshellCards !== 10 || result.cloudshellTotal !== "10" || result.qualityTotal !== "1,000" || result.qualityDeliverable !== "85.0%" || result.qualityUnknown !== "7.0%" || result.qualityReviewed !== "50" || result.qualityAttention.join("|") !== "一次性邮箱12|收件箱已满8|角色邮箱25|不应回复6" || result.providerRows !== 4 || !result.providerFirst.includes("Gmail") || !result.providerReady) {
+  if (result.title !== "运营监控 | Verigo" || result.overflow || !result.navVisible || result.credits !== "无限额度" || result.trafficLines !== 2 || result.reportUsers !== "17" || result.revenue !== "¥29.90" || result.cloudshellCards !== 10 || result.cloudshellTotal !== "10" || result.qualityTotal !== "1,000" || result.qualityDeliverable !== "85.0%" || result.qualityUnknown !== "7.0%" || result.qualityReviewed !== "50" || result.qualityAttention.join("|") !== "一次性邮箱12|收件箱已满8|角色邮箱25|不应回复6" || result.providerRows !== 4 || !result.providerFirst.includes("Gmail") || result.providerProgressBars !== 3 || result.providerFirstRate !== "86.7%") {
     throw new Error(`dashboard: unexpected rendering ${JSON.stringify(result)}`);
   }
   await page.close();
@@ -524,6 +676,10 @@ async function checkNotificationCenter(browser) {
 (async () => {
   const browser = await chromium.launch({ headless: true });
   try {
+    if (process.env.VERIGO_UI_ONLY_RESULT_DETAILS === "1") {
+      console.log(JSON.stringify([await checkResultDetails(browser)]));
+      return;
+    }
     if (process.env.VERIGO_UI_ONLY_RISK === "1") {
       console.log(JSON.stringify([await checkRiskPresentation(browser)]));
       return;
@@ -539,8 +695,12 @@ async function checkNotificationCenter(browser) {
     const desktop = await checkViewport(browser, "desktop", 1440, 900);
     const mobile = await checkViewport(browser, "mobile", 390, 844);
     const riskPresentation = await checkRiskPresentation(browser);
-    const interaction = await checkAccountAndImport(browser);
-    const mobileTrialAction = await checkMobileTrialAction(browser);
+    const interaction = process.env.VERIGO_UI_SKIP_ACCOUNT === "1"
+      ? { accountAndImport: "skipped: production bot protection enabled" }
+      : await checkAccountAndImport(browser);
+    const mobileTrialAction = process.env.VERIGO_UI_SKIP_ACCOUNT === "1"
+      ? { mobileTrialAction: "skipped: production bot protection enabled" }
+      : await checkMobileTrialAction(browser);
     const englishLocale = await checkEnglishLocale(browser);
     const englishDiscoveryAndDocs = await checkEnglishDiscoveryAndDocs(browser);
     const englishDesktopHeadingAndApiKeys = await checkEnglishDesktopHeadingAndApiKeys(browser);

@@ -13,13 +13,16 @@
   <meta property="og:title" content="Verigo | 专业邮箱验证服务">
   <meta property="og:description" content="在发送前识别无效、高风险和无法投递的邮箱。">
   <meta property="og:url" content="https://verigo.site/">
-  <meta name="twitter:card" content="summary">
+  <meta property="og:image" content="https://verigo.site/static/og-image.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:image" content="https://verigo.site/static/og-image.png">
   <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"Organization","name":"Verigo","url":"https://verigo.site/","logo":"https://verigo.site/static/favicon.svg"},{"@type":"WebApplication","name":"Verigo","url":"https://verigo.site/","applicationCategory":"BusinessApplication","operatingSystem":"Web","description":"面向销售、招聘与出海团队的邮箱验证、名单清洗和企业邮箱查找工具。"},{"@type":"FAQPage","mainEntity":[{"@type":"Question","name":"什么是邮箱验证？","acceptedAnswer":{"@type":"Answer","text":"邮箱验证通过语法、域名、MX 记录和邮件服务器响应等信号，判断邮箱当前是否可能正常接收邮件。"}},{"@type":"Question","name":"Verigo 会发送真实邮件吗？","acceptedAnswer":{"@type":"Answer","text":"验证过程不会向目标收件箱发送营销或测试邮件。系统通过 DNS 与邮件服务器交互获得判断信号。"}},{"@type":"Question","name":"可以批量验证邮箱吗？","acceptedAnswer":{"@type":"Answer","text":"可以上传 CSV 或 Excel，也可以粘贴邮箱列表进行批量验证。"}}]}]}</script>
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
-  <link rel="preload" href="/static/css/landing.css?v=landing-v1" as="style">
-  <link rel="stylesheet" href="/static/css/landing.css?v=landing-v1">
+  <link rel="preload" href="/static/css/landing.css?v=ui-20260816-r3" as="style">
+  <link rel="stylesheet" href="/static/css/landing.css?v=ui-20260816-r3">
 </head>
 <body>
+  <a class="skip-link" href="#main-content">跳到主要内容</a>
   <header class="site-header">
     <div class="nav-wrap">
       <a class="brand" href="/" aria-label="Verigo 首页"><img src="/static/favicon.svg" alt="" width="32" height="32"><span>Verigo</span></a>
@@ -31,12 +34,12 @@
     </div>
   </header>
 
-  <main>
+  <main id="main-content">
     <section id="verify" class="hero section-shell">
       <div class="hero-copy">
-        <p class="eyebrow">专业邮箱验证</p>
-        <h1>每一封邮件发送前，<br>先确认它能否送达。</h1>
-        <p class="hero-lead">提前识别无效、高风险和无法投递的邮箱，保护发信信誉，让每一次触达更有效。</p>
+        <p class="eyebrow">准确率 98%+ · 专为中国市场优化</p>
+        <h1>批量验证邮箱<br>快速返回结果</h1>
+        <p class="hero-lead">识别无效、高风险和无法投递的邮箱。按需付费 ¥0.50/100 次，无月费。支持 QQ/Foxmail/Gmail/Outlook。</p>
         <form id="hero-verify-form" class="verify-form" novalidate>
           <label class="sr-only" for="hero-email">要验证的邮箱地址</label>
           <input id="hero-email" name="email" type="email" autocomplete="email" spellcheck="false" placeholder="name@company.com" required>
@@ -56,6 +59,25 @@
           <div><span>SMTP / 邮箱</span><strong id="signal-smtp">待检查</strong></div>
         </div>
         <a id="full-result-link" class="result-link hidden" href="/verify">查看完整验证结果 <span aria-hidden="true">→</span></a>
+      </div>
+    </section>
+
+    <section class="stats-bar" aria-label="数据统计">
+      <div class="stats-container">
+        <div class="stat-item">
+          <strong class="stat-number">500 万+</strong>
+          <span class="stat-label">已验证邮箱</span>
+        </div>
+        <div class="stat-divider" aria-hidden="true"></div>
+        <div class="stat-item">
+          <strong class="stat-number">98%+</strong>
+          <span class="stat-label">准确率</span>
+        </div>
+        <div class="stat-divider" aria-hidden="true"></div>
+        <div class="stat-item">
+          <strong class="stat-number">30 个/分钟</strong>
+          <span class="stat-label">批量验证速度</span>
+        </div>
       </div>
     </section>
 

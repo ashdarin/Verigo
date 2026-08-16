@@ -277,3 +277,337 @@ body.product-surface { min-width: 320px; margin: 0; color: var(--product-ink); b
 @media (prefers-reduced-motion: reduce) {
   .product-surface * { transition: none !important; scroll-behavior: auto !important; }
 }
+
+/* UI refinement: keep the verification workspace scannable while preserving
+   the existing result copy and interaction hooks. */
+.product-surface .workspace,
+.product-surface .discovery-workspace {
+  border-color: #d4e1d9;
+  background: #fff;
+}
+
+.product-surface .control-panel {
+  background: #f8fbf9;
+}
+
+.product-surface .panel-heading,
+.product-surface .results-header {
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--product-line);
+}
+
+.product-surface .panel-heading h2,
+.product-surface .results-header h2 {
+  letter-spacing: 0;
+}
+
+.product-surface .verification-type-tabs {
+  margin: 20px 0 22px;
+}
+
+.product-surface .progress-section {
+  margin: 22px 0 18px;
+  padding: 14px 16px 15px;
+  border: 1px solid var(--product-line);
+  border-radius: 6px;
+  background: #f8fbf9;
+}
+
+.product-surface .progress-track {
+  height: 8px;
+  background: #e2ebe5;
+}
+
+.product-surface .progress-bar {
+  background: var(--product-green);
+}
+
+.product-surface .summary-grid {
+  border-color: #d4e1d9;
+  background: #fbfdfc;
+}
+
+.product-surface .metric {
+  min-height: 86px;
+  transition: background .15s ease;
+}
+
+.product-surface .metric:hover {
+  background: #f4faf6;
+}
+
+.product-surface .table-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px;
+  border: 1px solid var(--product-line);
+  border-radius: 6px;
+  background: #fbfdfc;
+}
+
+.product-surface .filters {
+  flex: 1 1 250px;
+}
+
+.product-surface .table-actions {
+  flex: 1 1 420px;
+}
+
+.product-surface .table-wrap {
+  max-height: min(600px, calc(100vh - 390px));
+  min-height: 190px;
+  scrollbar-gutter: stable;
+}
+
+.product-surface .table-wrap table {
+  min-width: 680px;
+}
+
+.product-surface table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  border-bottom-color: #cbdad1;
+  background: #f1f7f3;
+}
+
+.product-surface table tbody tr {
+  transition: background .15s ease;
+}
+
+.product-surface table tbody tr:hover {
+  background: #f7fbf8;
+}
+
+.product-surface table td {
+  padding-top: 14px;
+  padding-bottom: 14px;
+}
+
+.product-surface .result-email-content {
+  align-items: flex-start;
+}
+
+.product-surface .result-email-value {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  line-height: 1.45;
+}
+
+.product-surface .result-pill {
+  min-height: 26px;
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 9px;
+}
+
+.product-surface .detail-cell {
+  max-width: 250px;
+  color: #52625a;
+}
+
+.product-surface .result-detail-action {
+  width: 40px;
+  height: 40px;
+  border-color: #cbdad1;
+  color: #52625a;
+}
+
+.product-surface .result-detail-action:hover,
+.product-surface .result-detail-action:focus-visible {
+  border-color: var(--product-green);
+  background: var(--product-green-pale);
+  color: var(--product-green-dark);
+}
+
+.product-surface .result-detail-drawer {
+  width: min(500px, 100vw);
+  height: 100vh;
+  height: 100dvh;
+  padding: 24px 26px 28px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border-left-color: #cbdad1;
+}
+
+body.product-surface:has(.result-detail-drawer.open) {
+  overflow: hidden;
+}
+
+body.product-surface:has(.result-detail-drawer.open)::before {
+  content: "";
+  position: fixed;
+  z-index: 49;
+  inset: 0;
+  background: rgba(16, 37, 28, .30);
+}
+
+.product-surface .drawer-heading {
+  position: sticky;
+  top: -24px;
+  z-index: 2;
+  margin: -24px -26px 0;
+  padding: 24px 26px 18px;
+  background: #fff;
+}
+
+.product-surface .result-detail-content {
+  gap: 0;
+  margin-top: 2px;
+}
+
+.product-surface .detail-section-heading {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--product-line);
+}
+
+.product-surface .detail-section-heading:first-child {
+  margin-top: 2px;
+  padding-top: 0;
+  border-top: 0;
+}
+
+.product-surface .detail-check {
+  background: #fbfdfc;
+}
+
+.product-surface .detail-field {
+  grid-template-columns: minmax(92px, 0.34fr) minmax(0, 1fr);
+  align-items: start;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--product-line);
+  border-radius: 5px;
+  background: #fbfdfc;
+}
+
+.product-surface .detail-field + .detail-field {
+  margin-top: 7px;
+}
+
+.product-surface .detail-field.technical-detail {
+  margin-top: 8px;
+  border-color: #e0e7e3;
+  background: #f6f8f7;
+}
+
+.product-surface .detail-conclusion-field {
+  border-color: #c7dfd1;
+  background: #f2faf5;
+}
+
+.product-surface .technical-details {
+  margin-top: 20px;
+  border: 1px solid var(--product-line);
+  border-radius: 6px;
+  background: #f8faf9;
+}
+
+.product-surface .technical-details summary {
+  min-height: 58px;
+  display: grid;
+  align-content: center;
+  gap: 3px;
+  padding: 11px 38px 11px 14px;
+  color: var(--product-ink);
+  cursor: pointer;
+  list-style-position: outside;
+}
+
+.product-surface .technical-details summary strong {
+  font-size: 13px;
+}
+
+.product-surface .technical-details summary span {
+  color: var(--product-muted);
+  font-size: 11px;
+}
+
+.product-surface .technical-details-body {
+  padding: 0 12px 12px;
+  border-top: 1px solid var(--product-line);
+}
+
+.product-surface .technical-details-body .technical-detail {
+  margin-bottom: 0;
+}
+
+.product-surface .result-detail-actions {
+  position: sticky;
+  bottom: -28px;
+  z-index: 2;
+  margin: 18px -26px -28px;
+  padding: 16px 26px 28px;
+  border-top: 1px solid var(--product-line);
+  background: #fff;
+}
+
+@media (max-width: 980px) {
+  .product-surface .table-wrap {
+    max-height: none;
+  }
+
+  .product-surface .table-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .product-surface .filters,
+  .product-surface .table-actions {
+    flex-basis: auto;
+  }
+}
+
+@media (max-width: 600px) {
+  .product-surface .panel-heading,
+  .product-surface .results-header {
+    padding-bottom: 15px;
+  }
+
+  .product-surface .progress-section {
+    margin-top: 18px;
+    padding: 13px 14px 14px;
+  }
+
+  .product-surface .table-toolbar {
+    padding: 10px;
+  }
+
+  .product-surface .table-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .product-surface .table-actions .download-action,
+  .product-surface .table-actions .stop-action {
+    min-height: 42px;
+    padding: 5px 8px;
+    white-space: normal;
+  }
+
+  .product-surface .result-detail-drawer {
+    padding: 22px 16px 24px;
+  }
+
+  .product-surface .drawer-heading {
+    top: -22px;
+    margin: -22px -16px 0;
+    padding: 22px 16px 16px;
+  }
+
+  .product-surface .detail-field {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+
+  .product-surface .result-detail-actions {
+    bottom: -24px;
+    margin: 16px -16px -24px;
+    padding: 14px 16px 24px;
+  }
+}

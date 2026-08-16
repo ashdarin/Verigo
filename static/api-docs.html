@@ -5,12 +5,21 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="index,follow">
   <meta name="description" content="Verigo API 文档：通过程序化接口提交邮箱验证任务并获取可解释的验证结果。">
-  <title>Verigo API Documentation</title>
+  <title>API 文档 | Verigo</title>
   <link rel="canonical" href="https://verigo.site/api-docs">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="API 文档 | Verigo">
+  <meta property="og:description" content="通过程序化接口提交邮箱验证任务并获取可解释的验证结果。">
+  <meta property="og:url" content="https://verigo.site/api-docs">
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+  <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" referrerpolicy="no-referrer">
   <style>
     :root { color-scheme: light; font-family: Arial, sans-serif; color: #17212b; background: #f6f8fa; }
     body { margin: 0; line-height: 1.55; }
+    :focus-visible { outline: 2px solid #0969da; outline-offset: 2px; }
+    .skip-link { position: absolute; top: -64px; left: 16px; z-index: 100; padding: 10px 18px; border-radius: 6px; background: #112e3b; color: #fff; font-weight: 700; text-decoration: none; transition: top .18s ease; }
+    .skip-link:focus-visible { top: 12px; }
     header { background: #112e3b; color: #fff; padding: 28px 20px; }
     main, .header-inner { max-width: 920px; margin: 0 auto; }
     .header-inner { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
@@ -32,8 +41,9 @@
   </style>
 </head>
 <body>
+  <a class="skip-link" href="#main-content">跳到主要内容</a>
   <header><div class="header-inner"><div><h1>Verigo API</h1><p id="docs-subtitle">邮箱验证服务的程序化接口</p></div><button id="docs-locale-toggle" class="locale-toggle" type="button" aria-label="Switch to English" title="Switch to English"><i class="fa-solid fa-globe" aria-hidden="true"></i><span id="docs-locale-code">CN</span></button></div></header>
-  <main>
+  <main id="main-content">
     <section id="docs-zh">
       <p class="note">在官网登录后，点击顶部导航栏中的 <strong>Developer API</strong>，即可创建、复制和撤销 API Key。</p>
       <p>Base URL: <code>https://verigo.site</code>。完整机器可读规范见 <a href="/openapi.json">OpenAPI JSON</a>。</p>
@@ -104,6 +114,7 @@ curl https://verigo.site/api/jobs/JOB_ID/results?limit=100 \
         document.getElementById("docs-tail-zh").hidden = english;
         document.getElementById("docs-tail-en").hidden = !english;
         document.getElementById("docs-subtitle").textContent = english ? "Programmatic email verification" : "邮箱验证服务的程序化接口";
+        document.querySelector(".skip-link").textContent = english ? "Skip to main content" : "跳到主要内容";
         document.getElementById("docs-locale-code").textContent = english ? "EN" : "CN";
         const label = english ? "Switch to Chinese" : "Switch to English";
         const toggle = document.getElementById("docs-locale-toggle");
