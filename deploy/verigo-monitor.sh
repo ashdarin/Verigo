@@ -13,6 +13,10 @@ repeat_minutes=${VERIGO_ALERT_REPEAT_MINUTES:-360}
 disk_limit=${VERIGO_MONITOR_DISK_PERCENT:-85}
 backup_max_age_hours=${VERIGO_MONITOR_BACKUP_MAX_AGE_HOURS:-27}
 queue_limit=${VERIGO_MONITOR_QUEUE_LIMIT:-10}
+queue_oldest_seconds=${VERIGO_MONITOR_QUEUE_OLDEST_SECONDS:-900}
+running_without_lease_seconds=${VERIGO_MONITOR_RUNNING_WITHOUT_LEASE_SECONDS:-300}
+worker_heartbeat_seconds=${VERIGO_MONITOR_WORKER_HEARTBEAT_SECONDS:-300}
+provider_cooldown_max_seconds=${VERIGO_MONITOR_PROVIDER_COOLDOWN_MAX_SECONDS:-1800}
 provider_pressure_limit=${VERIGO_MONITOR_PROVIDER_PRESSURE_LAST_60_SECONDS:-1}
 public_base_url=${VERIGO_MONITOR_PUBLIC_BASE_URL:-https://verigo.site}
 readiness_url=${VERIGO_MONITOR_READINESS_URL:-http://127.0.0.1:18000/api/internal/readiness}
@@ -131,8 +135,28 @@ fi
 
 if [[ ! -r "$database_env_file" ]]; then
     issues+=("database environment file is unavailable")
-elif ! (
+else
+    if ! queue_health_alerts=$(
+        set -a
+        # shellcheck disable=SC1090
+        source "$database_env_file"
+        set +a
+        PYTHONPATH=/opt/verigo/current /opt/verigo/.venv/bin/python \
+            /opt/verigo/current/scripts/queue_health_alerts.py \
+            --queue-oldest-seconds "$queue_oldest_seconds" \
+            --running-without-lease-seconds "$running_without_lease_seconds" \
+            --worker-heartbeat-seconds "$worker_heartbeat_seconds" \
+            --provider-cooldown-max-seconds "$provider_cooldown_max_seconds"
+    ); then
+        issues+=("queue health query failed")
+    elif [[ -n "$queue_health_alerts" ]]; then
+        issues+=("queue health: ${queue_health_alerts}")
+    fi
+fi
+
+if [[ -r "$database_env_file" ]] && ! (
     set -a
+    # shellcheck disable=SC1090
     source "$database_env_file"
     set +a
     PYTHONPATH=/opt/verigo/current /opt/verigo/.venv/bin/python - <<'PY'

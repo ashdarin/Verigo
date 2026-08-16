@@ -3,6 +3,9 @@ const VerigoI18n = (() => {
     // Keep the verification workspace fully localized even when legacy catalog keys are mojibake.
     "单个邮箱": "Single email", "批量名单": "Bulk list", "验证任务": "Verification job", "跳到主要内容": "Skip to main content",
     "无法确认": "Unable to confirm", "复制可投递": "Copy deliverable", "复制不可投递": "Copy undeliverable",
+    "对候选地址执行语法、域名和邮箱服务器检查。": "Run syntax, domain, and mail-server checks for each candidate address.",
+    "下载 CSV，保留状态、验证方式和服务器响应。": "Download a CSV with status, validation method, and server response.",
+    "每条结果附带验证方式和服务器响应。": "Each result includes its validation method and server response.",
     "复制无法确认": "Copy unable to confirm", "复制全部": "Copy all", "状态": "Status",
     "邮箱": "Email", "结果": "Result", "操作": "Actions", "下一步": "Next step", "筛选验证状态": "Filter by status",
     "全部": "All", "可投递": "Deliverable", "不可投递": "Undeliverable", "详情": "Details",

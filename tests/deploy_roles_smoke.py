@@ -25,6 +25,14 @@ assert "VERIGO_MONITOR_POSTGRES_TUNNEL_UNIT" in monitor
 assert "verigo-monitor-probe/results" in monitor
 assert "VERIGO_MONITOR_ASSET_MARKER" in monitor
 assert "VERIGO_MONITOR_DATABASE_ENV_FILE" in monitor
+assert "queue_health_alerts.py" in monitor
+for value in (
+    "VERIGO_MONITOR_QUEUE_OLDEST_SECONDS",
+    "VERIGO_MONITOR_RUNNING_WITHOUT_LEASE_SECONDS",
+    "VERIGO_MONITOR_WORKER_HEARTBEAT_SECONDS",
+    "VERIGO_MONITOR_PROVIDER_COOLDOWN_MAX_SECONDS",
+):
+    assert value in (deploy / "verigo-monitor.env.example").read_text(encoding="utf-8")
 assert "OnUnitActiveSec=1m" in (deploy / "verigo-monitor.timer").read_text(encoding="utf-8")
 
 assert "disable_units caddy verigo-monitor.timer" in release
