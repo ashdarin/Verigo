@@ -144,8 +144,12 @@ with TestClient(service_module.app) as client:
     response = client.get("/companies/company-2", headers=headers)
     assert response.status_code == 404, response.text
     service_module.vitality_store.complete(
-        {"company_id": "company-1", "domain": "boost-your-sales.eu", "normalized_name": "Boost-Your-Sales"},
-        {"state": "active_verified", "reason": "website_identity_match", "confidence": 0.95},
+        {"company_id": "company-1", "domain": "boost-your-sales.eu", "normalized_name": "Boost-Your-Sales", "country": "germany"},
+        {
+            "state": "active_verified", "reason": "website_legal_identity_match",
+            "confidence": 0.95, "evidence_kind": "official_website_legal",
+            "evidence_strength": "strong", "page_title": "Boost Your Sales",
+        },
     )
     response = client.get(
         "/search", params={"country": "germany", "visibility": "public"}, headers=headers,
@@ -158,7 +162,9 @@ with TestClient(service_module.app) as client:
     detail = response.json()
     assert detail["name_display"] == "Boost-Your-Sales"
     assert detail["vitality_state"] == "active_verified"
-    assert detail["vitality_evidence"]["type"] == "官网公开证据"
+    assert detail["vitality_evidence"]["kind"] == "official_website_legal"
+    assert detail["vitality_evidence"]["type"] == "德国官网法律信息与公司身份相符"
+    assert detail["vitality_evidence"]["source"] == "official_website"
     response = client.get("/facets/industry", headers=headers)
     assert response.status_code == 200, response.text
     assert response.json()["items"] == [

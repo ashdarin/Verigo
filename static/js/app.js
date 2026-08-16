@@ -2059,6 +2059,10 @@ function companyVitalityPresentation(item) {
   };
   const reasons = {
     website_identity_match: "官网内容与公司身份一致",
+    website_legal_identity_match: "官网身份与当地企业法律信息一致",
+    website_title_identity_match: "官网标题与公司身份一致",
+    website_content_identity_match: "官网正文与公司身份一致",
+    website_domain_alignment: "官网域名与公司品牌一致",
     http_restricted: "官网可达，但限制自动访问",
     website_identity_uncertain: "官网可达，暂缺少足够的身份证据",
     parked_domain: "域名当前为停放或出售页面",
@@ -2246,6 +2250,10 @@ function companyFinderDetailField(label, value) {
 function companyFinderDetailReason(item) {
   const reasons = {
     website_identity_match: "官网可以访问，页面内容与公司名称相符。",
+    website_legal_identity_match: "官网可以访问，页面同时包含公司身份和当地企业法律信息。",
+    website_title_identity_match: "官网可以访问，页面标题与公司名称相符。",
+    website_content_identity_match: "官网可以访问，正文中的公司身份与目录记录相符。",
+    website_domain_alignment: "官网可以访问，域名与公司品牌相符；系统会更频繁复核这项证据。",
     http_restricted: "官网可以访问，但自动检查受到访问限制。",
     website_identity_uncertain: "官网可以访问，但公开内容不足以完成完整身份匹配。",
   };
@@ -2276,9 +2284,21 @@ function renderCompanyFinderDetail(item) {
   const checkedLabel = checked && !Number.isNaN(checked.getTime()) ? checked.toLocaleString("zh-CN") : "未提供";
   content.append(companyFinderDetailField("最近核验", checkedLabel));
   const evidence = item.vitality_evidence || {};
-  const evidenceSection = detailSection("公开证据", "这项信息用于说明最近一次活跃性判断的依据。");
+  const evidenceSection = detailSection("公开证据", evidence.summary || "这项信息用于说明最近一次活跃性判断的依据。");
   content.append(evidenceSection);
-  [["证据类型", evidence.type || "官网公开证据"], ["可信度", `${Math.round(Number(item.vitality_confidence || 0) * 100)}%`], ["页面标题", evidence.page_title]].forEach(([label, value]) => content.append(companyFinderDetailField(label, value)));
+  const observed = evidence.observed_at ? new Date(evidence.observed_at) : null;
+  const observedLabel = observed && !Number.isNaN(observed.getTime()) ? observed.toLocaleString("zh-CN") : "";
+  const strength = evidence.strength === "moderate" ? "中等" : "强";
+  const evidenceFields = [
+    ["证据类型", evidence.type || "官网内容与公司身份相符"],
+    ["证据来源", evidence.source === "official_website" ? "公司官网" : "公开网站"],
+    ["证据强度", strength],
+    ["可信度", `${Math.round(Number(item.vitality_confidence || 0) * 100)}%`],
+  ];
+  if (evidence.kind === "official_website_legal" && evidence.market) evidenceFields.push(["适用市场", evidence.market]);
+  if (observedLabel) evidenceFields.push(["证据发现", observedLabel]);
+  if (evidence.page_title) evidenceFields.push(["页面标题", evidence.page_title]);
+  evidenceFields.forEach(([label, value]) => content.append(companyFinderDetailField(label, value)));
 
   if (item.website_url) {
     const website = document.createElement("a"); website.className = "secondary-action company-finder-detail-link company-finder-detail-website"; website.href = item.website_url; website.target = "_blank"; website.rel = "noopener noreferrer";

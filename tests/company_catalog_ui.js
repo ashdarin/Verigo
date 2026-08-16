@@ -29,7 +29,7 @@ const company = {
   vitality_queue_state: "",
   vitality_confidence: 0.91,
   vitality_checked_at: "2026-08-16T08:00:00+00:00",
-  vitality_reason: "website_identity_match",
+  vitality_reason: "website_legal_identity_match",
 };
 
 async function mockApi(page) {
@@ -64,7 +64,13 @@ async function mockApi(page) {
       counters.publicSearch += 1;
       payload = { total: 1, offset: 0, limit: 25, has_more: false, pending_count: 2, refresh_after_seconds: 4, items: [company] };
     } else if (url.pathname === "/api/company-finder/companies/company-1") {
-      payload = { ...company, vitality_evidence: { type: "官网公开证据", page_title: "Boost Your Sales", reason: "website_identity_match" } };
+      payload = { ...company, vitality_evidence: {
+        kind: "official_website_legal", type: "德国官网法律信息与公司身份相符",
+        summary: "官网同时包含公司身份和所在市场常见的企业登记或法律信息。",
+        source: "official_website", strength: "strong", market: "德国",
+        observed_at: "2026-08-16T08:00:00+00:00", page_title: "Boost Your Sales",
+        reason: "website_legal_identity_match",
+      } };
     } else if (url.pathname === "/api/notifications") {
       payload = { items: [], unread: 0 };
     } else if (url.pathname === "/api/public/config") {
@@ -115,10 +121,16 @@ async function checkPublicFinderViewport(browser, name, viewport) {
     status: document.querySelector("#company-finder-detail-status")?.textContent || "",
     website: document.querySelector("#company-finder-detail-actions a")?.href,
   }));
-  if (!detail.text.includes("管理咨询") || !detail.text.includes("官网公开证据") || detail.status !== "近期可确认") {
+  if (!detail.text.includes("管理咨询") || !detail.text.includes("德国官网法律信息与公司身份相符")
+    || !detail.text.includes("证据来源公司官网") || !detail.text.includes("证据强度强")
+    || !detail.text.includes("适用市场德国") || detail.status !== "近期可确认") {
     throw new Error(`${name}: company detail drawer is incomplete: ${JSON.stringify(detail)}`);
   }
   if (detail.website !== "https://boost-your-sales.eu/") throw new Error(`${name}: company detail website is incorrect`);
+  if (screenshotDir) {
+    fs.mkdirSync(screenshotDir, { recursive: true });
+    await page.locator("#company-finder-detail-drawer").screenshot({ path: path.join(screenshotDir, `${name}-detail.png`) });
+  }
   for (const selector of [".company-finder-detail-website", ".company-finder-detail-linkedin"]) {
     await page.locator(selector).evaluate((node) => {
       node.addEventListener("click", (event) => event.preventDefault(), { once: true });

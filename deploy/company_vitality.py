@@ -17,7 +17,8 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 
 ACTIVE_TTL = timedelta(days=30)
-RECENT_TTL = timedelta(days=1)
+MODERATE_TTL = timedelta(days=7)
+RETRY_TTL = timedelta(days=1)
 UNCERTAIN_TTL = timedelta(days=3)
 INACTIVE_TTL = timedelta(days=30)
 CLAIM_TTL = timedelta(minutes=15)
@@ -47,9 +48,47 @@ _TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
 _NOISE_RE = re.compile(r"<(script|style|noscript)[^>]*>.*?</\1>", re.IGNORECASE | re.DOTALL)
 _TAG_RE = re.compile(r"<[^>]+>")
 _COMMON_COMPANY_TOKENS = frozenset({
-    "and", "company", "co", "corporation", "corp", "group", "holding", "holdings",
-    "inc", "international", "limited", "llc", "ltd", "plc", "the",
+    "ag", "and", "bv", "company", "co", "corporation", "corp", "gmbh", "group",
+    "holding", "holdings", "inc", "international", "limited", "llc", "ltd", "nv",
+    "oy", "plc", "sa", "sarl", "spa", "the",
 })
+
+_MARKET_ALIASES = {
+    "al": "albania", "ar": "argentina", "au": "australia", "be": "belgium",
+    "br": "brazil", "cn": "china", "de": "germany", "es": "spain", "fr": "france",
+    "gb": "united kingdom", "in": "india", "it": "italy", "jp": "japan",
+    "kr": "south korea", "mx": "mexico", "nl": "netherlands", "uk": "united kingdom",
+}
+_PRIORITY_MARKETS = frozenset({
+    "australia", "belgium", "brazil", "canada", "china", "france", "germany", "india",
+    "italy", "japan", "mexico", "netherlands", "south korea", "spain", "switzerland",
+    "united kingdom", "united states",
+})
+_MARKET_LEGAL_PATTERNS = {
+    "albania": (r"\bnipt\b", r"qendra komb[eë]tare e biznesit"),
+    "argentina": (r"\bcuit\b", r"inspecci[oó]n general de justicia"),
+    "australia": (r"\babn\s*(?:no\.?\s*)?\d", r"\bacn\s*\d", r"australian business number"),
+    "belgium": (r"ondernemingsnummer", r"num[eé]ro d['’]entreprise", r"\b(?:kbo|bce)\s*\d"),
+    "brazil": (r"\bcnpj\b",),
+    "china": (r"统一社会信用代码", r"icp备案", r"\b[a-z津京沪渝冀豫云辽黑湘皖鲁新苏浙赣鄂桂甘晋蒙陕吉闽贵粤青藏川宁琼]icp备"),
+    "france": (r"\bsiret\b", r"\bsiren\b", r"mentions l[eé]gales", r"registre du commerce"),
+    "germany": (r"\bimpressum\b", r"handelsregister", r"gesch[aä]ftsf[uü]hrer", r"ust[.-]?id"),
+    "india": (r"corporate identity number", r"\bgstin\b", r"\bcin\s*[:#]"),
+    "italy": (r"partita iva", r"registro imprese"),
+    "japan": (r"法人番号", r"会社概要", r"特定商取引法"),
+    "mexico": (r"registro federal de contribuyentes", r"\brfc\s*[:#]"),
+    "netherlands": (r"kamer van koophandel", r"\bkvk\s*(?:nummer)?\s*\d"),
+    "south korea": (r"사업자등록번호", r"법인등록번호"),
+    "spain": (r"registro mercantil", r"\bc\.?i\.?f\.\b", r"aviso legal"),
+    "united kingdom": (r"companies house", r"company (?:registration )?number", r"registered in (?:england|scotland|wales)"),
+}
+
+SEARCH_PRIORITY_BASE = 10
+RECENT_RECHECK_PRIORITY = 25
+LEGACY_RECHECK_PRIORITY = 35
+ACTIVE_RECHECK_PRIORITY = 50
+UNCERTAIN_RECHECK_PRIORITY = 80
+INACTIVE_RECHECK_PRIORITY = 120
 
 
 def utc_now() -> datetime:
@@ -88,6 +127,47 @@ def normalize_domain(value: object) -> str:
     if any(not re.fullmatch(r"[a-z0-9-]+", label) for label in labels):
         return ""
     return host.removeprefix("www.")
+
+
+def normalize_market(value: object) -> str:
+    market = re.sub(r"\s+", " ", str(value or "").strip().lower().replace("_", " "))
+    return _MARKET_ALIASES.get(market, market)
+
+
+def _market_boost(country: object) -> int:
+    return 5 if normalize_market(country) in _PRIORITY_MARKETS else 0
+
+
+def search_priority(rank: int, country: object = "") -> int:
+    return max(1, SEARCH_PRIORITY_BASE + min(max(0, rank) // 5, 12) - _market_boost(country))
+
+
+def refresh_priority(state: object, country: object = "", evidence_kind: object = "") -> int:
+    if str(evidence_kind or "") == "legacy_website_identity":
+        base = LEGACY_RECHECK_PRIORITY
+    else:
+        base = {
+            "recently_observed": RECENT_RECHECK_PRIORITY,
+            "active_verified": ACTIVE_RECHECK_PRIORITY,
+            "uncertain": UNCERTAIN_RECHECK_PRIORITY,
+            "inactive": INACTIVE_RECHECK_PRIORITY,
+        }.get(str(state or ""), UNCERTAIN_RECHECK_PRIORITY)
+    return max(1, base - _market_boost(country))
+
+
+def _legacy_evidence(reason: object, state: object = "") -> tuple[str, str]:
+    mapped = {
+        "website_legal_identity_match": ("official_website_legal", "strong"),
+        "website_title_identity_match": ("official_website_title", "strong"),
+        "website_content_identity_match": ("official_website_content", "strong"),
+        "website_domain_alignment": ("official_website_domain", "moderate"),
+        "website_identity_match": ("legacy_website_identity", "strong"),
+    }.get(str(reason or ""))
+    if mapped:
+        return mapped
+    if str(state or "") == "active_verified":
+        return "legacy_website_identity", "strong"
+    return "", ""
 
 
 def _status_payload(row: sqlite3.Row | None, queue_state: str = "") -> dict[str, object]:
@@ -131,6 +211,7 @@ class VitalityStore:
                     company_id TEXT PRIMARY KEY,
                     domain TEXT NOT NULL,
                     normalized_name TEXT NOT NULL DEFAULT '',
+                    country TEXT NOT NULL DEFAULT '',
                     state TEXT NOT NULL DEFAULT 'queued',
                     confidence REAL NOT NULL DEFAULT 0,
                     dns_status TEXT NOT NULL DEFAULT '',
@@ -140,6 +221,8 @@ class VitalityStore:
                     is_parked INTEGER NOT NULL DEFAULT 0,
                     identity_score REAL NOT NULL DEFAULT 0,
                     reason TEXT NOT NULL DEFAULT 'not_checked',
+                    evidence_kind TEXT NOT NULL DEFAULT '',
+                    evidence_strength TEXT NOT NULL DEFAULT '',
                     checked_at TEXT,
                     last_public_evidence_at TEXT,
                     consecutive_failures INTEGER NOT NULL DEFAULT 0,
@@ -152,6 +235,7 @@ class VitalityStore:
                     company_id TEXT PRIMARY KEY,
                     domain TEXT NOT NULL,
                     normalized_name TEXT NOT NULL DEFAULT '',
+                    country TEXT NOT NULL DEFAULT '',
                     priority INTEGER NOT NULL DEFAULT 100,
                     attempts INTEGER NOT NULL DEFAULT 0,
                     available_at TEXT NOT NULL,
@@ -160,6 +244,29 @@ class VitalityStore:
                     updated_at TEXT NOT NULL
                 )
             """)
+            table_columns = {
+                table: {
+                    str(row[1]) for row in connection.execute(f"PRAGMA table_info({table})")
+                }
+                for table in ("company_vitality", "vitality_queue")
+            }
+            for table, columns in {
+                "company_vitality": (
+                    ("country", "TEXT NOT NULL DEFAULT ''"),
+                    ("evidence_kind", "TEXT NOT NULL DEFAULT ''"),
+                    ("evidence_strength", "TEXT NOT NULL DEFAULT ''"),
+                ),
+                "vitality_queue": (("country", "TEXT NOT NULL DEFAULT ''"),),
+            }.items():
+                for name, definition in columns:
+                    if name not in table_columns[table]:
+                        connection.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
+            connection.execute(
+                """UPDATE company_vitality
+                SET evidence_kind='legacy_website_identity', evidence_strength='strong'
+                WHERE evidence_kind='' AND state='active_verified'
+                  AND reason='website_identity_match'"""
+            )
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS vitality_due_idx ON company_vitality(next_check_at)"
             )
@@ -169,15 +276,16 @@ class VitalityStore:
             )
 
     @staticmethod
-    def _item_identity(item: dict[str, object]) -> tuple[str, str, str]:
+    def _item_identity(item: dict[str, object]) -> tuple[str, str, str, str]:
         company_id = str(item.get("id") or "").strip()
         domain = normalize_domain(item.get("website_domain") or item.get("website_url") or item.get("website"))
         name = str(item.get("name_display") or item.get("name") or "").strip()
-        return company_id, domain, name
+        country = normalize_market(item.get("country"))
+        return company_id, domain, name, country
 
     def annotate_and_enqueue(self, items: list[dict[str, object]]) -> None:
         identities = [self._item_identity(item) for item in items]
-        ids = [company_id for company_id, _, _ in identities if company_id]
+        ids = [company_id for company_id, _, _, _ in identities if company_id]
         if not ids:
             for item in items:
                 item.update(_status_payload(None))
@@ -200,24 +308,45 @@ class VitalityStore:
                 ).fetchall()
             }
             queue_size = int(connection.execute("SELECT count(*) FROM vitality_queue").fetchone()[0])
-            for company_id, domain, name in identities:
+            for rank, (company_id, domain, name, country) in enumerate(identities):
                 if not company_id or not domain:
                     continue
                 row = existing.get(company_id)
+                requested_priority = search_priority(rank, country)
+                if row is not None:
+                    connection.execute(
+                        """UPDATE company_vitality
+                        SET domain=?, normalized_name=?, country=? WHERE company_id=?""",
+                        (domain, name, country, company_id),
+                    )
+                if company_id in queued:
+                    connection.execute(
+                        """UPDATE vitality_queue SET domain=?, normalized_name=?, country=?,
+                            priority=MIN(priority, ?), updated_at=? WHERE company_id=?""",
+                        (domain, name, country, requested_priority, now_text, company_id),
+                    )
                 due_at = parse_time(row["next_check_at"]) if row else None
-                needs_queue = row is None or (due_at is not None and due_at <= now)
+                needs_queue = (
+                    row is None
+                    or (row is not None and row["evidence_kind"] == "legacy_website_identity")
+                    or (due_at is not None and due_at <= now)
+                )
                 if needs_queue and company_id not in queued and queue_size < MAX_QUEUE_SIZE:
                     if row is None:
                         connection.execute("""
                             INSERT OR IGNORE INTO company_vitality (
-                                company_id, domain, normalized_name, state, reason, updated_at
-                            ) VALUES (?, ?, ?, 'queued', 'not_checked', ?)
-                        """, (company_id, domain, name, now_text))
+                                company_id, domain, normalized_name, country, state, reason, updated_at
+                            ) VALUES (?, ?, ?, ?, 'queued', 'not_checked', ?)
+                        """, (company_id, domain, name, country, now_text))
                     connection.execute("""
                         INSERT OR IGNORE INTO vitality_queue (
-                            company_id, domain, normalized_name, available_at, created_at, updated_at
-                        ) VALUES (?, ?, ?, ?, ?, ?)
-                    """, (company_id, domain, name, now_text, now_text, now_text))
+                            company_id, domain, normalized_name, country, priority,
+                            available_at, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        company_id, domain, name, country, requested_priority,
+                        now_text, now_text, now_text,
+                    ))
                     queued[company_id] = "queued"
                     queue_size += 1
 
@@ -227,7 +356,7 @@ class VitalityStore:
                 ).fetchall()
             }
 
-        for item, (company_id, domain, _) in zip(items, identities, strict=True):
+        for item, (company_id, domain, _, _) in zip(items, identities, strict=True):
             if not domain:
                 item.update({
                     **_status_payload(None),
@@ -245,7 +374,9 @@ class VitalityStore:
         try:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute("""
-                SELECT q.*, v.state, v.consecutive_failures, v.last_public_evidence_at
+                SELECT q.*, v.state, v.consecutive_failures, v.last_public_evidence_at,
+                    v.evidence_kind AS last_evidence_kind,
+                    v.evidence_strength AS last_evidence_strength
                 FROM vitality_queue q
                 LEFT JOIN company_vitality v ON v.company_id = q.company_id
                 WHERE q.available_at <= ? AND (q.claimed_at IS NULL OR q.claimed_at < ?)
@@ -279,19 +410,29 @@ class VitalityStore:
         reason = str(observation.get("reason") or "worker_error")
         previous_evidence = str(task.get("last_public_evidence_at") or "")
         previous_failures = int(task.get("consecutive_failures") or 0)
+        previous_kind = str(task.get("last_evidence_kind") or "")
+        previous_strength = str(task.get("last_evidence_strength") or "")
+        observed_kind = str(observation.get("evidence_kind") or "")
+        observed_strength = str(observation.get("evidence_strength") or "")
+        if not observed_kind:
+            observed_kind, observed_strength = _legacy_evidence(reason, observed_state)
 
         if observed_state == "active_verified":
             state = observed_state
             confidence = float(observation.get("confidence") or 0.0)
             failures = 0
             evidence_at = checked_at
+            evidence_kind = observed_kind
+            evidence_strength = observed_strength or "strong"
             next_check = now + ACTIVE_TTL
         elif observed_state == "recently_observed":
             state = observed_state
             confidence = float(observation.get("confidence") or 0.0)
             failures = 0
             evidence_at = checked_at
-            next_check = now + RECENT_TTL
+            evidence_kind = observed_kind
+            evidence_strength = observed_strength or "moderate"
+            next_check = now + MODERATE_TTL
         elif reason == "nxdomain" and previous_failures == 0:
             # Require a second observation before hiding a company so a DNS
             # resolver incident cannot invalidate a large candidate set.
@@ -299,30 +440,48 @@ class VitalityStore:
             confidence = 0.55
             failures = 1
             evidence_at = previous_evidence
-            next_check = now + RECENT_TTL
+            evidence_kind = previous_kind
+            evidence_strength = previous_strength
+            next_check = now + RETRY_TTL
+        elif reason == "website_identity_uncertain" and previous_evidence and previous_failures == 0:
+            # A classifier upgrade must not remove an existing public company
+            # on its first weaker observation. Recheck once on the next day.
+            state = "recently_observed"
+            confidence = 0.5
+            failures = 1
+            evidence_at = previous_evidence
+            evidence_kind = previous_kind
+            evidence_strength = previous_strength
+            next_check = now + RETRY_TTL
         elif reason in _STRONG_INACTIVE_REASONS:
             state = "inactive"
             confidence = float(observation.get("confidence") or 0.9)
             failures = previous_failures + 1
             evidence_at = previous_evidence
+            evidence_kind = previous_kind
+            evidence_strength = previous_strength
             next_check = now + INACTIVE_TTL
         else:
             failures = previous_failures + 1
             state = "recently_observed" if previous_evidence and reason in _TRANSIENT_REASONS else "uncertain"
             confidence = 0.5 if state == "recently_observed" else float(observation.get("confidence") or 0.25)
             evidence_at = previous_evidence
-            next_check = now + (RECENT_TTL if state == "recently_observed" else UNCERTAIN_TTL)
+            evidence_kind = previous_kind
+            evidence_strength = previous_strength
+            next_check = now + (RETRY_TTL if state == "recently_observed" else UNCERTAIN_TTL)
 
         with self.connect() as connection:
             connection.execute("""
                 INSERT INTO company_vitality (
-                    company_id, domain, normalized_name, state, confidence, dns_status,
+                    company_id, domain, normalized_name, country, state, confidence, dns_status,
                     http_status, final_url, page_title, is_parked, identity_score, reason,
-                    checked_at, last_public_evidence_at, consecutive_failures, next_check_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    evidence_kind, evidence_strength, checked_at, last_public_evidence_at,
+                    consecutive_failures, next_check_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(company_id) DO UPDATE SET
                     domain = excluded.domain,
                     normalized_name = excluded.normalized_name,
+                    country = excluded.country,
                     state = excluded.state,
                     confidence = excluded.confidence,
                     dns_status = excluded.dns_status,
@@ -332,6 +491,8 @@ class VitalityStore:
                     is_parked = excluded.is_parked,
                     identity_score = excluded.identity_score,
                     reason = excluded.reason,
+                    evidence_kind = excluded.evidence_kind,
+                    evidence_strength = excluded.evidence_strength,
                     checked_at = excluded.checked_at,
                     last_public_evidence_at = excluded.last_public_evidence_at,
                     consecutive_failures = excluded.consecutive_failures,
@@ -339,11 +500,13 @@ class VitalityStore:
                     updated_at = excluded.updated_at
             """, (
                 company_id, str(task["domain"]), str(task.get("normalized_name") or ""),
-                state, confidence, str(observation.get("dns_status") or ""),
+                normalize_market(task.get("country")), state, confidence,
+                str(observation.get("dns_status") or ""),
                 observation.get("http_status"), str(observation.get("final_url") or ""),
                 str(observation.get("page_title") or "")[:500], int(bool(observation.get("is_parked"))),
-                float(observation.get("identity_score") or 0.0), reason, checked_at,
-                evidence_at or None, failures, iso_at(next_check), iso_at(now),
+                float(observation.get("identity_score") or 0.0), reason,
+                evidence_kind, evidence_strength, checked_at, evidence_at or None,
+                failures, iso_at(next_check), iso_at(now),
             ))
             connection.execute("DELETE FROM vitality_queue WHERE company_id = ?", (company_id,))
 
@@ -356,18 +519,29 @@ class VitalityStore:
             if not remaining:
                 return 0
             rows = connection.execute("""
-                SELECT company_id, domain, normalized_name FROM company_vitality
-                WHERE next_check_at IS NOT NULL AND next_check_at <= ?
+                SELECT company_id, domain, normalized_name, country, state, evidence_kind
+                FROM company_vitality
+                WHERE (evidence_kind = 'legacy_website_identity'
+                       OR (next_check_at IS NOT NULL AND next_check_at <= ?))
                   AND company_id NOT IN (SELECT company_id FROM vitality_queue)
-                ORDER BY next_check_at ASC LIMIT ?
+                ORDER BY CASE
+                    WHEN evidence_kind = 'legacy_website_identity' THEN 1
+                    WHEN state = 'recently_observed' THEN 2
+                    WHEN state = 'active_verified' THEN 3
+                    WHEN state = 'uncertain' THEN 4
+                    ELSE 5 END,
+                    next_check_at ASC
+                LIMIT ?
             """, (now_text, remaining)).fetchall()
             for row in rows:
                 connection.execute("""
                     INSERT OR IGNORE INTO vitality_queue (
-                        company_id, domain, normalized_name, available_at, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?)
+                        company_id, domain, normalized_name, country, priority,
+                        available_at, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
-                    row["company_id"], row["domain"], row["normalized_name"],
+                    row["company_id"], row["domain"], row["normalized_name"], row["country"],
+                    refresh_priority(row["state"], row["country"], row["evidence_kind"]),
                     now_text, now_text, now_text,
                 ))
                 inserted += 1
@@ -385,7 +559,23 @@ class VitalityStore:
             checking = int(connection.execute(
                 "SELECT count(*) FROM vitality_queue WHERE claimed_at IS NOT NULL"
             ).fetchone()[0])
-        return {"enabled": True, "states": states, "queued": queued, "checking": checking}
+            evidence = {
+                str(row["evidence_kind"] or "none"): int(row["count"])
+                for row in connection.execute(
+                    "SELECT evidence_kind, count(*) AS count FROM company_vitality "
+                    "GROUP BY evidence_kind"
+                ).fetchall()
+            }
+            priorities = {
+                str(row["priority"]): int(row["count"])
+                for row in connection.execute(
+                    "SELECT priority, count(*) AS count FROM vitality_queue GROUP BY priority"
+                ).fetchall()
+            }
+        return {
+            "enabled": True, "states": states, "queued": queued, "checking": checking,
+            "evidence": evidence, "queue_priorities": priorities,
+        }
 
     def get(self, company_id: str) -> dict[str, object] | None:
         """Return the latest public vitality observation for one company."""
@@ -412,6 +602,9 @@ class VitalityStore:
             "page_title": str(row["page_title"] or ""),
             "is_parked": bool(row["is_parked"]),
             "identity_score": float(row["identity_score"] or 0.0),
+            "evidence_kind": str(row["evidence_kind"] or ""),
+            "evidence_strength": str(row["evidence_strength"] or ""),
+            "country": str(row["country"] or ""),
         })
         return payload
 
@@ -463,7 +656,27 @@ def _page_text(body: bytes, content_type: str) -> tuple[str, str]:
     return title[:500], visible
 
 
-def classify_page(company_name: str, domain: str, body: bytes, content_type: str = "") -> dict[str, object]:
+def _identity_match_score(tokens: list[str], text: str) -> float:
+    if not tokens or not text:
+        return 0.0
+    matches = sum(1 for token in tokens if token in text)
+    score = matches / len(tokens)
+    compact_name = "".join(tokens)
+    compact_text = re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "", text[:30_000])
+    if compact_name and len(compact_name) >= 4 and compact_name in compact_text:
+        return 1.0
+    return score
+
+
+def _legal_evidence_market(country: object, text: str) -> str:
+    market = normalize_market(country)
+    patterns = _MARKET_LEGAL_PATTERNS.get(market, ())
+    return market if any(re.search(pattern, text, re.IGNORECASE) for pattern in patterns) else ""
+
+
+def classify_page(
+    company_name: str, domain: str, body: bytes, content_type: str = "", country: str = "",
+) -> dict[str, object]:
     title, visible = _page_text(body, content_type)
     evidence_text = f"{title.lower()} {visible[:120_000]}"
     if any(phrase in evidence_text for phrase in _PARKING_PHRASES):
@@ -477,23 +690,47 @@ def classify_page(company_name: str, domain: str, body: bytes, content_type: str
         if len(token) > 1 and token not in _COMMON_COMPANY_TOKENS
     ]
     unique_tokens = list(dict.fromkeys(name_tokens))
-    matches = sum(1 for token in unique_tokens if token in evidence_text)
-    identity_score = matches / len(unique_tokens) if unique_tokens else 0.0
-    compact_name = "".join(unique_tokens)
-    compact_text = re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "", evidence_text[:30_000])
-    if compact_name and len(compact_name) >= 4 and compact_name in compact_text:
-        identity_score = 1.0
+    title_score = _identity_match_score(unique_tokens, title.lower())
+    body_text = visible
+    if title:
+        body_text = body_text.replace(title.lower(), " ", 1)
+    body_score = _identity_match_score(unique_tokens, body_text)
+    identity_score = max(title_score, body_score)
     domain_token = domain.split(".", 1)[0].replace("-", "").replace("_", "")
     compact_tokens = "".join(unique_tokens)
-    if domain_token and compact_tokens and len(domain_token) >= 4:
-        if domain_token in compact_tokens or compact_tokens in domain_token:
-            identity_score = max(identity_score, 0.7)
+    domain_aligned = bool(
+        domain_token and compact_tokens and len(domain_token) >= 4
+        and (domain_token in compact_tokens or compact_tokens in domain_token)
+    )
+    legal_market = _legal_evidence_market(country, evidence_text)
 
-    if identity_score >= 0.45:
+    if legal_market and identity_score >= 0.45:
         return {
-            "state": "active_verified", "confidence": min(0.98, 0.7 + identity_score * 0.28),
-            "reason": "website_identity_match", "is_parked": False,
+            "state": "active_verified", "confidence": min(0.99, 0.82 + identity_score * 0.17),
+            "reason": "website_legal_identity_match", "evidence_kind": "official_website_legal",
+            "evidence_strength": "strong", "evidence_market": legal_market, "is_parked": False,
             "identity_score": identity_score, "page_title": title,
+        }
+    if title_score >= 0.45:
+        return {
+            "state": "active_verified", "confidence": min(0.98, 0.76 + title_score * 0.22),
+            "reason": "website_title_identity_match", "evidence_kind": "official_website_title",
+            "evidence_strength": "strong", "is_parked": False,
+            "identity_score": identity_score, "page_title": title,
+        }
+    if body_score >= 0.45:
+        return {
+            "state": "active_verified", "confidence": min(0.96, 0.7 + body_score * 0.24),
+            "reason": "website_content_identity_match", "evidence_kind": "official_website_content",
+            "evidence_strength": "strong", "is_parked": False,
+            "identity_score": identity_score, "page_title": title,
+        }
+    if domain_aligned:
+        return {
+            "state": "recently_observed", "confidence": 0.64,
+            "reason": "website_domain_alignment", "evidence_kind": "official_website_domain",
+            "evidence_strength": "moderate", "is_parked": False,
+            "identity_score": max(identity_score, 0.4), "page_title": title,
         }
     return {
         "state": "uncertain", "confidence": 0.35, "reason": "website_identity_uncertain",
@@ -556,7 +793,10 @@ def probe_company(task: dict[str, object], timeout: float = 5.0) -> dict[str, ob
                 "checked_at": checked_at,
             }
 
-        result = classify_page(str(task.get("normalized_name") or ""), domain, body, content_type)
+        result = classify_page(
+            str(task.get("normalized_name") or ""), domain, body, content_type,
+            normalize_market(task.get("country")),
+        )
         result.update({
             "dns_status": "ok", "http_status": status, "final_url": final_url,
             "checked_at": checked_at,

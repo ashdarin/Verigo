@@ -64,6 +64,53 @@ def linkedin_url(value: object) -> str:
     return parsed.geturl()
 
 
+def public_evidence_payload(
+    vitality: dict[str, object], company: dict[str, object],
+) -> dict[str, object]:
+    kind = str(vitality.get("evidence_kind") or "legacy_website_identity")
+    presentations = {
+        "official_website_legal": (
+            "官网法律信息与公司身份相符",
+            "官网同时包含公司身份和所在市场常见的企业登记或法律信息。",
+        ),
+        "official_website_title": (
+            "官网标题与公司身份相符",
+            "官网页面标题与公司名称一致，并且网站可以公开访问。",
+        ),
+        "official_website_content": (
+            "官网公开内容与公司身份相符",
+            "官网正文中的公司身份信息与目录记录一致。",
+        ),
+        "official_website_domain": (
+            "官网域名与公司品牌相符",
+            "网站可以公开访问，域名与公司品牌一致；该证据会更频繁复核。",
+        ),
+        "legacy_website_identity": (
+            "官网内容与公司身份相符",
+            "此前官网检查确认了公司身份，系统正在按新证据标准复核。",
+        ),
+    }
+    evidence_type, summary = presentations.get(kind, presentations["legacy_website_identity"])
+    market = str(company.get("country_label") or "")
+    if kind == "official_website_legal" and market:
+        evidence_type = f"{market}官网法律信息与公司身份相符"
+    return {
+        "kind": kind,
+        "type": evidence_type,
+        "summary": summary,
+        "source": "official_website",
+        "strength": str(vitality.get("evidence_strength") or "strong"),
+        "market": market,
+        "observed_at": vitality.get("vitality_last_public_evidence_at") or "",
+        "reason": vitality["vitality_reason"],
+        "dns_status": vitality["dns_status"],
+        "http_status": vitality["http_status"],
+        "final_url": vitality["final_url"],
+        "page_title": vitality["page_title"],
+        "identity_score": vitality["identity_score"],
+    }
+
+
 def search(
     _: Annotated[None, Depends(require_token)],
     country: str | None = Query(default=None, max_length=80),
@@ -225,15 +272,7 @@ def company_detail(
             "vitality_checked_at", "vitality_last_public_evidence_at", "vitality_reason",
         )
     })
-    item["vitality_evidence"] = {
-        "type": "官网公开证据",
-        "reason": vitality["vitality_reason"],
-        "dns_status": vitality["dns_status"],
-        "http_status": vitality["http_status"],
-        "final_url": vitality["final_url"],
-        "page_title": vitality["page_title"],
-        "identity_score": vitality["identity_score"],
-    }
+    item["vitality_evidence"] = public_evidence_payload(vitality, item)
     return item
 
 
