@@ -402,6 +402,23 @@ class VitalityStore:
         finally:
             connection.close()
 
+    def release_claims(self) -> int:
+        """Release orphaned claims when the single systemd worker starts."""
+        now_text = iso_at()
+        with self.connect() as connection:
+            released = connection.execute(
+                """UPDATE vitality_queue SET claimed_at=NULL, updated_at=?
+                WHERE claimed_at IS NOT NULL""",
+                (now_text,),
+            ).rowcount
+            connection.execute(
+                """UPDATE company_vitality SET state='queued', updated_at=?
+                WHERE state='checking'
+                  AND company_id IN (SELECT company_id FROM vitality_queue)""",
+                (now_text,),
+            )
+        return max(0, released)
+
     def complete(self, task: dict[str, object], observation: dict[str, object]) -> None:
         company_id = str(task["company_id"])
         now = utc_now()

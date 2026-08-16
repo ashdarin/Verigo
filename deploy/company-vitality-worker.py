@@ -19,6 +19,9 @@ PROBE_TIMEOUT = max(2.0, min(10.0, float(os.getenv("COMPANY_FINDER_VITALITY_TIME
 
 def run() -> None:
     store = VitalityStore(DATABASE_PATH)
+    released = store.release_claims()
+    if released:
+        print(f"released {released} orphaned vitality claims", flush=True)
     futures: dict[Future[dict[str, object]], dict[str, object]] = {}
     last_due_scan = 0.0
     with ThreadPoolExecutor(max_workers=CONCURRENCY, thread_name_prefix="company-vitality") as executor:

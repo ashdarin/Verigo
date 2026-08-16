@@ -176,6 +176,12 @@ with store.connect() as connection:
     assert connection.execute(
         "SELECT priority FROM vitality_queue WHERE company_id='company-1'"
     ).fetchone()[0] == 5
+assert store.claim_next()["company_id"] == "company-1"
+assert store.release_claims() == 1
+with store.connect() as connection:
+    assert connection.execute(
+        "SELECT claimed_at FROM vitality_queue WHERE company_id='company-1'"
+    ).fetchone()[0] is None
 
 legacy_path = temp_dir / "legacy.sqlite"
 with sqlite3.connect(legacy_path) as connection:
