@@ -91,8 +91,8 @@ Hunter Discover 采用“搜索或筛选 -> 有界候选集 -> Domain Search / E
 - **P1 已上线**：搜索必须带公司关键词或有意义筛选，默认仅查带官网的记录，且最多可查看 100 家候选公司。
 - **P2 已完成并转为公开门槛**：Company Finder 专用节点使用 SQLite WAL 缓存活跃性证据，由独立的低优先级 Worker 以 2 个并发进行 DNS/HTTP/停放页/身份匹配检查。它的 CPU 上限为 40%、内存上限为 192 MB，与查询服务和邮箱验证 Worker 隔离。普通用户搜索只接收 `active_verified` 和 `recently_observed`，`uncertain`、`inactive` 及尚未完成检查的候选不会直接展示。
 - **P3 已上线**：新增登录且已验证邮箱用户专用的 `/app/company-finder` 页面和 `/api/company-finder/search`、`/api/company-finder/facets/{facet}` 接口。页面支持公司关键词、国家/地区、行业、规模筛选，提供官网入口，并可将域名交给现有企业邮箱查找流程；管理员原有 Company Catalog 保持不变。
-- **P4 实现完成**：新增 `/api/company-finder/companies/{company_id}` 详情接口和 Company Finder 详情抽屉。详情接口在专用目录服务侧再次执行活跃性门槛，只返回 `active_verified`、`recently_observed` 记录；`uncertain`、`inactive`、未完成检查或不存在的记录统一返回 404。详情展示规范化公司资料、最近核验时间、可信度、公开证据类型和可读说明，并保留官网、LinkedIn 与企业邮箱查找入口。SMTP 结果文案未改动。代码与本地验收已完成，生产发布沿用现有 release 流程。
-- **生产验收（2026-08-16）**：`/api/health` 返回 `status=ok`、`database=ok`；Web、worker API、Company Finder SSH 隧道均为 active。专用目录健康统计为 304 条 `active_verified`、2 条 `inactive`、247 条 `uncertain`，`queued=0`、`checking=0`。公开搜索实测只返回活跃状态；未完成检查的候选通过 `pending_count` 返回并由前端最多短轮询 3 次。
+- **P4 已上线**：新增 `/api/company-finder/companies/{company_id}` 详情接口和 Company Finder 详情抽屉。详情接口在专用目录服务侧再次执行活跃性门槛，只返回 `active_verified`、`recently_observed` 记录；`uncertain`、`inactive`、未完成检查或不存在的记录统一返回 404。详情展示规范化公司资料、最近核验时间、可信度、公开证据类型和可读说明，并保留官网、LinkedIn 与企业邮箱查找入口。SMTP 结果文案未改动。
+- **生产验收（2026-08-16）**：`/api/health` 返回 `status=ok`、`database=ok`；Web、worker API、Company Finder SSH 隧道、EC2 目录服务和活跃度 Worker 均为 active。专用目录健康统计为 389 条 `active_verified`、2 条 `inactive`、333 条 `uncertain`，`queued=0`、`checking=0`。公开搜索返回的样本详情均为 HTTP 200，并包含官网公开证据。上海应用发布不会自动更新隧道后的 EC2 目录服务；后续发布必须同步 `deploy/company-finder-service.py` 与 `deploy/company_vitality.py`，再重启 `company-finder.service` 并做详情回归。
 - 管理员结果现在显示“待核验、近期可确认、近期有记录、暂未确认、已停止展示”状态；普通用户只看到有近期公开活跃证据的结果。
 - 单次 NXDOMAIN 只标为“暂未确认”并在 24 小时后复查，避免 DNS 故障造成批量误隐藏；连续两次才停止对普通用户展示。
 
