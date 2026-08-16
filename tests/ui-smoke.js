@@ -54,13 +54,15 @@ async function checkRiskPresentation(browser) {
     const disposable = riskSignalPresentation.find((item) => item.key === "disposable_provider");
     const pending = riskSignalStatus(disposable, { detected: false });
     const detected = riskSignalStatus(disposable, { detected: true });
+    const notChecked = riskSignalStatus(disposable, {});
     const detail = riskSignalDetail(disposable, {
       detected: true, detail: "internal detail must not render",
     });
-    return { pending, detected, detail };
+    return { pending, detected, notChecked, detail };
   });
-  if (result.pending.value !== "\u6682\u65e0\u6cd5\u786e\u8ba4"
+  if (result.pending.value !== "\u672a\u53d1\u73b0\u8be5\u7279\u5f81"
     || result.detected.value !== "\u4e00\u6b21\u6027\u90ae\u7bb1\u670d\u52a1"
+    || result.notChecked.value !== "\u672c\u6b21\u672a\u68c0\u6d4b"
     || result.detail.includes("internal detail")) {
     throw new Error(`risk presentation: unexpected rendering ${JSON.stringify(result)}`);
   }
@@ -83,9 +85,13 @@ async function checkResultDetailsViewport(browser, name, viewport) {
   await page.route("**/api/auth/me", (route) => route.fulfill({
     contentType: "application/json", body: "null",
   }));
+  await page.route("**/api/auth/public-config", (route) => route.fulfill({
+    contentType: "application/json", body: JSON.stringify({}),
+  }));
   await page.route("**/api/public/config", (route) => route.fulfill({
     contentType: "application/json", body: JSON.stringify({}),
   }));
+  await page.route("**/api/analytics/engage", (route) => route.fulfill({ status: 204 }));
   await page.route("**/api/jobs/ui-result-details", (route) => route.fulfill({
     contentType: "application/json",
     body: JSON.stringify({
@@ -118,6 +124,7 @@ async function checkResultDetailsViewport(browser, name, viewport) {
       const style = getComputedStyle(document.querySelector(".result-email-value"));
       return { whiteSpace: style.whiteSpace, overflowWrap: style.overflowWrap };
     })(),
+    operationColumnWidth: document.querySelector("#results-panel thead th:last-child, .results-panel thead th:last-child")?.getBoundingClientRect().width,
   }));
   if (initial.overflow) throw new Error(`${name} result details: page has horizontal overflow`);
   if (initial.progress.includes("0 秒") || initial.progress.includes("后再次复核")) {
@@ -125,6 +132,9 @@ async function checkResultDetailsViewport(browser, name, viewport) {
   }
   if (initial.actionSizes.some((size) => size.width < 40 || size.height < 40)) {
     throw new Error(`${name} result details: detail action is smaller than 40px`);
+  }
+  if (initial.operationColumnWidth < 64 || initial.operationColumnWidth > 96) {
+    throw new Error(`${name} result details: operation column width is invalid ${initial.operationColumnWidth}`);
   }
   if (initial.emailStyle.whiteSpace !== "normal" || initial.emailStyle.overflowWrap !== "anywhere") {
     throw new Error(`${name} result details: long email wrapping is not enabled`);
@@ -139,6 +149,9 @@ async function checkResultDetailsViewport(browser, name, viewport) {
   };
   const screenshotDir = process.env.VERIGO_RESULT_DETAIL_SCREENSHOT_DIR;
   if (screenshotDir) fs.mkdirSync(screenshotDir, { recursive: true });
+  if (screenshotDir) {
+    await page.screenshot({ path: path.join(screenshotDir, `result-table-${name}.png`), fullPage: false });
+  }
 
   for (let index = 0; index < resultDetailFixtures.length; index += 1) {
     const fixture = resultDetailFixtures[index];
@@ -157,6 +170,8 @@ async function checkResultDetailsViewport(browser, name, viewport) {
         status: node.querySelector("#result-detail-status")?.textContent,
         headings: [...node.querySelectorAll(".detail-section-heading h3")].map((item) => item.textContent),
         conclusion: [...node.querySelectorAll(".detail-conclusion-field")].map((item) => item.textContent),
+        conclusionSummary: node.querySelector(".detail-conclusion-summary strong")?.textContent,
+        riskValues: [...node.querySelectorAll(".detail-risk-grid strong")].map((item) => item.textContent),
         technicalCount: node.querySelectorAll(".technical-details").length,
         technicalOpen: node.querySelector(".technical-details")?.open,
         withinViewport: rect.left >= 0 && rect.top >= 0 && rect.right <= innerWidth && rect.bottom <= innerHeight,
@@ -168,7 +183,7 @@ async function checkResultDetailsViewport(browser, name, viewport) {
     if (rendered.headings.join("|") !== "验证结论|可投递性检查|地址特征与投递风险") {
       throw new Error(`${name} ${fixture.case}: result sections are in the wrong order ${rendered.headings.join("|")}`);
     }
-    if (rendered.technicalCount !== 1 || rendered.technicalOpen || !rendered.withinViewport) {
+    if (!rendered.conclusionSummary || rendered.riskValues.some((value) => /未识别|暂无法确认/.test(value)) || rendered.technicalCount !== 1 || rendered.technicalOpen || !rendered.withinViewport) {
       throw new Error(`${name} ${fixture.case}: technical details or drawer geometry is invalid ${JSON.stringify(rendered)}`);
     }
     if (fixture.case === "mailbox_full" && !rendered.conclusion.some((value) => value.includes("收件箱已满，暂时无法接收邮件"))) {
