@@ -329,7 +329,11 @@ class VitalityStore:
                 due_at = parse_time(row["next_check_at"]) if row else None
                 needs_queue = (
                     row is None
-                    or (row is not None and row["evidence_kind"] == "legacy_website_identity")
+                    or (
+                        row is not None
+                        and row["evidence_kind"] == "legacy_website_identity"
+                        and row["reason"] == "website_identity_match"
+                    )
                     or (due_at is not None and due_at <= now)
                 )
                 if needs_queue and company_id not in queued and queue_size < MAX_QUEUE_SIZE:
@@ -539,7 +543,8 @@ class VitalityStore:
             rows = connection.execute("""
                 SELECT company_id, domain, normalized_name, country, state, evidence_kind
                 FROM company_vitality
-                WHERE (evidence_kind = 'legacy_website_identity'
+                WHERE ((evidence_kind = 'legacy_website_identity'
+                        AND reason = 'website_identity_match')
                        OR (next_check_at IS NOT NULL AND next_check_at <= ?))
                   AND company_id NOT IN (SELECT company_id FROM vitality_queue)
                 ORDER BY CASE

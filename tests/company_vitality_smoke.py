@@ -163,6 +163,7 @@ with store.connect() as connection:
     connection.execute(
         """UPDATE company_vitality
         SET evidence_kind='legacy_website_identity', evidence_strength='strong',
+            reason='website_identity_match',
             next_check_at='2099-01-01T00:00:00+00:00'
         WHERE company_id='company-1'"""
     )
@@ -182,6 +183,12 @@ with store.connect() as connection:
     assert connection.execute(
         "SELECT claimed_at FROM vitality_queue WHERE company_id='company-1'"
     ).fetchone()[0] is None
+    connection.execute("DELETE FROM vitality_queue WHERE company_id='company-1'")
+    connection.execute(
+        """UPDATE company_vitality SET reason='connection_failed',
+            next_check_at='2099-01-01T00:00:00+00:00' WHERE company_id='company-1'"""
+    )
+assert store.enqueue_due() == 0
 
 legacy_path = temp_dir / "legacy.sqlite"
 with sqlite3.connect(legacy_path) as connection:
