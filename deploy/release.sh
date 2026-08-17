@@ -83,14 +83,25 @@ restart_edge_workers() {
 }
 
 assert_edge_worker_release() {
-    local workers=() unit pid cwd
+    local workers=() units=() unit pid cwd matched
     mapfile -t workers < <(edge_worker_units)
-    for unit in "${workers[@]}"; do
-        systemctl is-active --quiet "$unit"
-        pid=$(systemctl show --property MainPID --value "$unit")
-        [[ "$pid" =~ ^[1-9][0-9]*$ ]]
-        cwd=$(readlink -f "/proc/${pid}/cwd")
-        [[ "$cwd" == "$release_path" ]] || {
+    units=(verigo-supervisor "${workers[@]}" verigo-qq-worker)
+    for unit in "${units[@]}"; do
+        matched=false
+        for _ in {1..30}; do
+            pid=$(systemctl show --property MainPID --value "$unit")
+            cwd=""
+            if systemctl is-active --quiet "$unit" \
+                && [[ "$pid" =~ ^[1-9][0-9]*$ ]]; then
+                cwd=$(readlink -f "/proc/${pid}/cwd" 2>/dev/null || true)
+                if [[ "$cwd" == "$release_path" ]]; then
+                    matched=true
+                    break
+                fi
+            fi
+            sleep 1
+        done
+        [[ "$matched" == "true" ]] || {
             echo "$unit is still running $cwd instead of $release_path" >&2
             return 1
         }
