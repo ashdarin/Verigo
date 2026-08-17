@@ -36,9 +36,35 @@ $remote = "$UserName@$HostName"
 $sshOptions = @(
     "-F", "/dev/null", "-i", $KeyPath,
     "-o", "BatchMode=yes",
+    "-o", "ConnectTimeout=15",
     "-o", "StrictHostKeyChecking=yes",
     "-o", "UserKnownHostsFile=$KnownHostsPath"
 )
+
+function Invoke-NativeWithRetry {
+    param(
+        [Parameter(Mandatory)]
+        [scriptblock]$Operation,
+        [Parameter(Mandatory)]
+        [string]$Description,
+        [ValidateRange(1, 8)]
+        [int]$MaxAttempts = 5
+    )
+
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        & $Operation
+        $exitCode = $LASTEXITCODE
+        if ($exitCode -eq 0) {
+            return
+        }
+        if ($attempt -eq $MaxAttempts) {
+            throw "$Description failed after $MaxAttempts attempts (exit code $exitCode)."
+        }
+        $delaySeconds = [Math]::Min(15, [int][Math]::Pow(2, $attempt))
+        Write-Warning "$Description failed on attempt $attempt; retrying in $delaySeconds seconds."
+        Start-Sleep -Seconds $delaySeconds
+    }
+}
 
 try {
     $version = (git -C $repoRoot rev-parse HEAD).Trim()
@@ -56,13 +82,16 @@ try {
     git -C $repoRoot archive --format=tar.gz --output=$archive HEAD
     if ($LASTEXITCODE -ne 0) { throw "Could not create the release archive." }
 
-    & $ssh @sshOptions $remote "rm -rf -- $ReleaseRoot; install -d -m 700 $ReleaseRoot"
-    if ($LASTEXITCODE -ne 0) { throw "Could not prepare the remote release directory." }
-    & $scp @sshOptions $archive "${remote}:$ReleaseRoot/release.tar.gz"
-    if ($LASTEXITCODE -ne 0) { throw "Could not upload the release archive." }
+    Invoke-NativeWithRetry -Description "Prepare remote release directory" -Operation {
+        & $ssh @sshOptions $remote "rm -rf -- $ReleaseRoot; install -d -m 700 $ReleaseRoot"
+    }
+    Invoke-NativeWithRetry -Description "Upload release archive" -Operation {
+        & $scp @sshOptions $archive "${remote}:$ReleaseRoot/release.tar.gz"
+    }
     $maintenanceValue = if ($Maintenance) { "true" } else { "false" }
-    & $ssh @sshOptions $remote "tar -xzf $ReleaseRoot/release.tar.gz -C $ReleaseRoot; printf '%s\n' $version > $ReleaseRoot/.verigo-release; sudo -n /usr/local/sbin/verigo-apply-release $Role $ReleaseRoot $maintenanceValue"
-    if ($LASTEXITCODE -ne 0) { throw "Release failed; the server rollback was attempted." }
+    Invoke-NativeWithRetry -Description "Apply release" -Operation {
+        & $ssh @sshOptions $remote "tar -xzf $ReleaseRoot/release.tar.gz -C $ReleaseRoot; printf '%s\n' $version > $ReleaseRoot/.verigo-release; sudo -n /usr/local/sbin/verigo-apply-release $Role $ReleaseRoot $maintenanceValue"
+    }
 } finally {
     Remove-Item -LiteralPath $archive -Force -ErrorAction SilentlyContinue
 }
