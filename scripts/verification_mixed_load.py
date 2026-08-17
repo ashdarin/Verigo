@@ -93,14 +93,31 @@ def _reports(job_ids: Iterable[tuple[str, str]]) -> tuple[list[TaskReport], int,
             rows = {str(row["id"]): row for row in cur.fetchall()}
             cur.execute(
                 """
-                SELECT
-                    COUNT(*) FILTER (WHERE completed_at IS NULL) AS active_leases,
-                    (SELECT COUNT(*) FROM verification_probe_leases) AS probe_leases,
-                    (SELECT COUNT(*) FROM verification_probe_waiters) AS probe_waiters
+                SELECT COUNT(*) AS active_leases
                 FROM job_leases
-                """
+                WHERE job_id = ANY(%s) AND completed_at IS NULL
+                """,
+                (ids,),
             )
-            active = cur.fetchone()
+            active_leases = int(cur.fetchone()["active_leases"] or 0)
+            cur.execute(
+                """
+                SELECT COUNT(*) AS probe_leases
+                FROM verification_probe_leases
+                WHERE owner_job_id = ANY(%s)
+                """,
+                (ids,),
+            )
+            probe_leases = int(cur.fetchone()["probe_leases"] or 0)
+            cur.execute(
+                """
+                SELECT COUNT(*) AS probe_waiters
+                FROM verification_probe_waiters
+                WHERE job_id = ANY(%s)
+                """,
+                (ids,),
+            )
+            probe_waiters = int(cur.fetchone()["probe_waiters"] or 0)
     reports = []
     for target, job_id in job_ids:
         row = rows[job_id]
@@ -119,9 +136,9 @@ def _reports(job_ids: Iterable[tuple[str, str]]) -> tuple[list[TaskReport], int,
         )
     return (
         reports,
-        int(active["active_leases"] or 0),
-        int(active["probe_leases"] or 0),
-        int(active["probe_waiters"] or 0),
+        active_leases,
+        probe_leases,
+        probe_waiters,
     )
 
 
