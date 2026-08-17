@@ -61,6 +61,7 @@ from app.db.auth import auth_store
 
 logger = logging.getLogger(__name__)
 CODEARTS_TARGET = "codearts"
+SMTP_REVIEW_CANARY_LIST_NAME = "__smtp_review_canary__"
 EMAIL_CHARACTERS = re.compile(r"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+$")
 
 CSV_FIELDS = [
@@ -653,6 +654,8 @@ def enqueue_background_retry(
                 if route == ROUTE_ALTERNATE
                 else source.cross_route_attempts
             ),
+            list_name=parent.list_name,
+            is_cache_refresh=parent.is_cache_refresh,
         )
         job_store.add(retry_job)
         event_time = utc_now()
@@ -706,7 +709,11 @@ def finish_initial_job(job: Job) -> Job:
     cache_and_release_probe_results(job.results, owner_job_id=job.id)
     visible = sync_parent_job(job) if job.parent_id else job
     visible = visible or job
-    if job.is_cache_refresh:
+    canary_review = (
+        job.is_cache_refresh
+        and job.list_name == SMTP_REVIEW_CANARY_LIST_NAME
+    )
+    if job.is_cache_refresh and not canary_review:
         return visible
     retry_emails = [
         str(result["email"])
@@ -716,7 +723,7 @@ def finish_initial_job(job: Job) -> Job:
         and not result.get("greylist_retry_exhausted")
     ]
     enqueue_background_retry(visible, job, retry_emails, 1)
-    if visible.status == "completed":
+    if visible.status == "completed" and not visible.is_cache_refresh:
         job_store.record_catch_all(visible)
         write_csv(visible)
         job_store.persist(visible)
@@ -805,10 +812,12 @@ def finish_background_retry(job: Job) -> Job | None:
     ]
     smtp_review_event_store.record_many(review_events)
     cache_and_release_probe_results(job.results, owner_job_id=job.id)
-    job_store.record_catch_all(parent)
-    write_csv(parent)
+    if not parent.is_cache_refresh:
+        job_store.record_catch_all(parent)
+        write_csv(parent)
     job_store.upsert_results(parent.id, changed_results)
-    publish_completed_result_objects(parent, changed_results)
+    if not parent.is_cache_refresh:
+        publish_completed_result_objects(parent, changed_results)
     if next_retry:
         enqueue_background_retry(parent, job, next_retry, job.temporary_retry_attempts + 1)
     if changed and parent.owner_id:
@@ -916,9 +925,11 @@ def finish_background_retry_failure(job: Job, error: str) -> Job | None:
         changed += 1
         changed_results.append(result)
     cache_and_release_probe_results(changed_results, owner_job_id=job.id)
-    write_csv(parent)
+    if not parent.is_cache_refresh:
+        write_csv(parent)
     job_store.upsert_results(parent.id, changed_results)
-    publish_completed_result_objects(parent, changed_results)
+    if not parent.is_cache_refresh:
+        publish_completed_result_objects(parent, changed_results)
     if changed and parent.owner_id:
         result_index_by_email = {
             email.lower(): index for index, email in enumerate(parent.emails)

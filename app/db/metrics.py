@@ -359,6 +359,7 @@ class MetricsStore:
                 WHERE result.updated_at >= ?
                     AND result.progress_state IN ('completed', 'failed')
                     AND job.parent_id IS NULL AND job.retry_parent_id IS NULL
+                    AND job.is_cache_refresh IS NOT TRUE
             )
             SELECT
                 provider,
@@ -446,6 +447,7 @@ class MetricsStore:
             JOIN jobs AS job ON job.id=result.job_id
             WHERE result.retry_at IS NOT NULL
                 AND job.parent_id IS NULL AND job.retry_parent_id IS NULL
+                AND job.is_cache_refresh IS NOT TRUE
                 AND EXISTS (
                     SELECT 1 FROM jobs AS child
                     WHERE child.retry_parent_id=job.id
@@ -530,6 +532,7 @@ class MetricsStore:
                 WHERE result.initial_completed_at >= ? AND result.initial_completed_at < ?
                     AND result.progress_state IN ('completed', 'failed')
                     AND job.parent_id IS NULL AND job.retry_parent_id IS NULL
+                    AND job.is_cache_refresh IS NOT TRUE
             )
             SELECT day, provider, COUNT(*),
                 COALESCE(SUM(CASE WHEN deliverability IS NULL AND NOT is_skipped THEN 1 ELSE 0 END), 0),
@@ -618,7 +621,10 @@ class MetricsStore:
             else:
                 verified_sql = "SELECT COUNT(*) FROM users WHERE email_verified=1"
             verified_users = connection.execute(verified_sql).fetchone()[0]
-            visible_job_filter = "parent_id IS NULL AND retry_parent_id IS NULL"
+            visible_job_filter = (
+                "parent_id IS NULL AND retry_parent_id IS NULL "
+                "AND is_cache_refresh IS NOT TRUE"
+            )
             jobs_total = connection.execute(
                 f"SELECT COUNT(*) FROM jobs WHERE {visible_job_filter}"
             ).fetchone()[0]
@@ -649,6 +655,7 @@ class MetricsStore:
                 SELECT COALESCE(AVG(CASE WHEN status='completed' AND started_at IS NOT NULL
                     THEN {duration_queue} END), 0)
                 FROM jobs WHERE created_at >= ? AND retry_parent_id IS NOT NULL
+                    AND is_cache_refresh IS NOT TRUE
                 """,
                 (today_start,),
             ).fetchone()[0]
@@ -664,7 +671,8 @@ class MetricsStore:
                 FROM job_results AS result
                 JOIN jobs AS job ON job.id=result.job_id
                 WHERE job.status='completed' AND job.finished_at >= ?
-                    AND job.parent_id IS NULL AND job.retry_parent_id IS NULL""",
+                    AND job.parent_id IS NULL AND job.retry_parent_id IS NULL
+                    AND job.is_cache_refresh IS NOT TRUE""",
                 (today_start,),
             ).fetchone()
             credits_today = connection.execute(

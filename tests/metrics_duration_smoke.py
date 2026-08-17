@@ -14,11 +14,16 @@ from app.config import settings
 from app.db.auth import auth_store
 from app.db.jobs import Job, job_store, utc_now
 from app.db.metrics import metrics_store
+from app.db.sqlite import connect as connect_sqlite
 
 
 original_database_path = settings.database_path
 with tempfile.TemporaryDirectory() as raw_dir:
-    object.__setattr__(settings, "database_path", Path(raw_dir) / "metrics.db")
+    database_path = Path(raw_dir) / "metrics.db"
+    object.__setattr__(settings, "database_path", database_path)
+    job_store._connect = lambda: connect_sqlite(database_path)
+    auth_store._connect = lambda: connect_sqlite(database_path)
+    metrics_store._connect = lambda: connect_sqlite(database_path)
     job_store._initialized = False
     auth_store._initialized = False
     metrics_store._initialized = False
@@ -63,7 +68,17 @@ with tempfile.TemporaryDirectory() as raw_dir:
         started_at=now - timedelta(seconds=600),
         finished_at=now,
     )
-    for job in (visible, visible_failed, child, retry):
+    cache_refresh = Job(
+        id="internal-cache-refresh",
+        emails=["refresh@example.com"],
+        worker_count=1,
+        status="completed",
+        is_cache_refresh=True,
+        created_at=now - timedelta(seconds=2400),
+        started_at=now - timedelta(seconds=1200),
+        finished_at=now,
+    )
+    for job in (visible, visible_failed, child, retry, cache_refresh):
         job_store.add(job)
 
     snapshot = metrics_store.snapshot()

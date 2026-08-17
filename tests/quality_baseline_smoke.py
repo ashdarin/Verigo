@@ -61,6 +61,7 @@ def main() -> int:
     assert "result.initial_completed_at >= ? AND result.initial_completed_at < ?" in connection.sql
     assert "TO_CHAR(result.initial_completed_at" in connection.sql
     assert "result.initial_completed_at - job.created_at" in connection.sql
+    assert "job.is_cache_refresh IS NOT TRUE" in connection.sql
     assert "GROUP BY day, provider" in connection.sql
     assert "PERCENTILE_CONT" in connection.sql
     assert connection.params == (

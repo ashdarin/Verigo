@@ -60,6 +60,10 @@ def main() -> int:
     assert any("result.updated_at - result.initial_completed_at" in query for query in connection.queries)
     assert not any("job.finished_at AS initial_completed_at" in query for query in connection.queries)
     assert any("job.parent_id IS NULL" in query for query in connection.queries)
+    assert all(
+        "job.is_cache_refresh IS NOT TRUE" in query
+        for query in connection.queries
+    )
     assert any("PERCENTILE_CONT" in query for query in connection.queries)
     assert any("result.retry_at IS NOT NULL" in query for query in connection.queries)
     assert any("child.status IN ('queued', 'running')" in query for query in connection.queries)
