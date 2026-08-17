@@ -358,6 +358,14 @@ def test_remote_claim_long_poll_is_database_bounded() -> None:
     source = (ROOT / "app" / "api" / "routes.py").read_text(encoding="utf-8")
     assert "await asyncio.sleep(wait_seconds)" in source
     assert "await asyncio.sleep(min(2.0, remaining))" in source
+    idle_heartbeat = (
+        "if remaining <= 0:\n"
+        "                # An idle remote worker is still available capacity. Record one\n"
+        "                # heartbeat per completed long-poll window so node health does\n"
+        "                # not decay while the queue is empty.\n"
+        "                job_store.record_worker_seen("
+    )
+    assert idle_heartbeat in source
     assert "min(0.25" not in source
 
 

@@ -757,6 +757,12 @@ async def claim_tencent_qq_job(
                 }
             remaining = deadline - time.monotonic()
             if remaining <= 0:
+                # An idle remote worker is still available capacity. Record one
+                # heartbeat per completed long-poll window so node health does
+                # not decay while the queue is empty.
+                job_store.record_worker_seen(
+                    execution_target, worker_name, worker_capacity
+                )
                 return {"job": None}
             # The worker API is long-polled. A 250 ms retry interval turned one
             # idle request into up to 80 write transactions over PostgreSQL.
