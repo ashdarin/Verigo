@@ -13,6 +13,8 @@ from scripts.queue_health_alerts import QueueHealth, evaluate  # noqa: E402
 
 
 def main() -> int:
+    source = (ROOT / "scripts" / "queue_health_alerts.py").read_text(encoding="utf-8")
+    assert "retry_parent_id IS NULL" in source
     assert evaluate(QueueHealth()) == []
     alerts = evaluate(
         QueueHealth(

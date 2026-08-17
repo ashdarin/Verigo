@@ -50,6 +50,7 @@ def read_health(
                 FROM jobs
                 WHERE status = 'queued'
                   AND parent_id IS NULL
+                  AND retry_parent_id IS NULL
                   AND is_cache_refresh IS NOT TRUE
                   AND created_at < CURRENT_TIMESTAMP - (%s * INTERVAL '1 second')
                 """,
