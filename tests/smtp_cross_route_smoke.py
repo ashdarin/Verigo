@@ -136,9 +136,20 @@ class FakeStore:
         pass
 
 
+class FakeReviewEventStore:
+    def __init__(self) -> None:
+        self.events = []
+
+    def record_many(self, events) -> bool:
+        self.events.extend(events)
+        return True
+
+
 verification._notify_retry_target = lambda _job: None
 verification.write_csv = lambda _job: None
 verification.publish_completed_result_objects = lambda _job, _results=None: None
+review_events = FakeReviewEventStore()
+verification.smtp_review_event_store = review_events
 
 parent = Job(
     id="cross-route-parent",
@@ -160,8 +171,11 @@ assert alternate.worker_count == 1
 assert alternate.temporary_retry_attempts == 0
 assert alternate.cross_route_attempts == 1
 assert parent.results[0]["cross_route_state"] == "scheduled"
+assert [event.event_type for event in review_events.events] == ["scheduled"]
+assert review_events.events[0].email_hash != "person@gmail.com"
 verification.enqueue_background_retry(parent, parent, parent.emails, 1)
 assert len(store.added) == 1
+assert len(review_events.events) == 1
 
 alternate.status = "completed"
 alternate.results = [temporary("person@gmail.com", mx="aspmx.l.google.com")]
@@ -173,6 +187,10 @@ assert same_target.execution_target == "gmail"
 assert same_target.temporary_retry_attempts == 1
 assert same_target.cross_route_attempts == 1
 assert parent.results[0]["cross_route_state"] == "inconclusive"
+assert [event.event_type for event in review_events.events] == [
+    "scheduled", "completed", "excluded",
+]
+assert review_events.events[1].outcome == "inconclusive"
 
 shadow_settings = replace(
     active_settings,
@@ -196,5 +214,6 @@ assert len(shadow_store.added) == 1
 assert shadow_store.added[0].execution_target == "codearts"
 assert shadow_store.added[0].retry_route == "same_target"
 assert shadow_parent.results[0]["cross_route_state"] == "shadow_candidate"
+assert review_events.events[-1].event_type == "shadow_candidate"
 
 print("smtp cross-route smoke: ok")

@@ -433,6 +433,50 @@ TABLES["job_results"] = TableDef(
     ),
 )
 
+TABLES["smtp_review_events"] = TableDef(
+    name="smtp_review_events",
+    columns=(
+        _c("id", "text", False),
+        _c("parent_job_id", "text", False),
+        _c("retry_job_id", "text", True),
+        _c("email_hash", "text", False),
+        _c("provider_key", "text", False),
+        _c("event_type", "text", False),
+        _c("decision_reason", "text", True),
+        _c("origin_execution_target", "text", False),
+        _c("review_execution_target", "text", True),
+        _c("retry_route", "text", False),
+        _c("attempt", "bigint", False, "0"),
+        _c("initial_smtp_code", "text", True),
+        _c("review_smtp_code", "text", True),
+        _c("outcome", "text", True),
+        _c("occurred_at", "timestamptz", False),
+        _c("initial_completed_at", "timestamptz", True),
+        _c("review_started_at", "timestamptz", True),
+        _c("review_completed_at", "timestamptz", True),
+        _c("latency_ms", "bigint", True),
+    ),
+    primary_key=("id",),
+    indexes=(
+        IndexDef("idx_smtp_review_events_occurred", ("occurred_at",), partial=False),
+        IndexDef(
+            "idx_smtp_review_events_type_time",
+            ("event_type", "occurred_at",),
+            partial=False,
+        ),
+        IndexDef(
+            "idx_smtp_review_events_provider_time",
+            ("provider_key", "occurred_at",),
+            partial=False,
+        ),
+        IndexDef(
+            "idx_smtp_review_events_parent_email",
+            ("parent_job_id", "email_hash", "attempt",),
+            partial=False,
+        ),
+    ),
+)
+
 TABLES["jobs"] = TableDef(
     name="jobs",
     columns=(
@@ -1196,6 +1240,7 @@ METRICS_TABLES: tuple[str, ...] = (
     "daily_visitors",
     "company_finder_event_days",
     "company_finder_event_users",
+    "smtp_review_events",
 )
 
 PROSPECTING_TABLES: tuple[str, ...] = (

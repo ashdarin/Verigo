@@ -34,6 +34,7 @@ from app.core.smtp_cross_route import (
     ROUTE_SAME_TARGET,
     decision_for as cross_route_decision,
     mark_decision as mark_cross_route_decision,
+    provider_key as cross_route_provider_key,
     provider_pressure_keys,
 )
 from app.core.verification_outcome import (
@@ -51,6 +52,10 @@ from app.core.worker_lifecycle import (
 )
 from app.core.cloudshell_lifecycle import GMAIL_TARGET, notify_cloudshell_job_queued
 from app.db.jobs import Job, job_store, utc_now
+from app.db.smtp_review_events import (
+    make_smtp_review_event,
+    smtp_review_event_store,
+)
 from app.db.auth import auth_store
 
 
@@ -562,6 +567,7 @@ def enqueue_background_retry(
         or not settings.smtp_cross_route_enabled
     )
     updated_results: list[dict[str, Any]] = []
+    review_decisions: dict[str, dict[str, Any]] = {}
     for result in parent.results:
         result_email_key = str(result.get("email", "")).lower()
         if result_email_key not in email_keys or result_email_key in active_email_keys:
@@ -594,6 +600,15 @@ def enqueue_background_retry(
             result["cross_route_state"] = "shadow_candidate"
         elif source.retry_route != ROUTE_ALTERNATE:
             result["cross_route_state"] = "excluded"
+        review_decisions[result_email_key] = {
+            "decision": decision,
+            "event_type": (
+                "scheduled" if route == ROUTE_ALTERNATE
+                else "shadow_candidate" if decision.eligible
+                else "excluded"
+            ),
+            "initial_result": dict(result),
+        }
         retry_groups.setdefault((f"{route}:{target}", delay_seconds), []).append(
             str(result["email"])
         )
@@ -640,6 +655,25 @@ def enqueue_background_retry(
             ),
         )
         job_store.add(retry_job)
+        event_time = utc_now()
+        smtp_review_event_store.record_many(
+            make_smtp_review_event(
+                parent_job_id=parent.id,
+                retry_job_id=retry_job.id,
+                email=email,
+                provider_key=review_decisions[email.lower()]["decision"].provider_key,
+                event_type=review_decisions[email.lower()]["event_type"],
+                decision_reason=review_decisions[email.lower()]["decision"].reason,
+                origin_execution_target=origin_target,
+                review_execution_target=execution_target,
+                retry_route=route,
+                attempt=(retry_job.cross_route_attempts if route == ROUTE_ALTERNATE else attempt),
+                initial_result=review_decisions[email.lower()]["initial_result"],
+                occurred_at=event_time,
+                initial_completed_at=source.finished_at or parent.finished_at,
+            )
+            for email in group_emails
+        )
         _notify_retry_target(retry_job)
 
 
@@ -704,6 +738,8 @@ def finish_background_retry(job: Job) -> Job | None:
     next_retry: list[str] = []
     changed = 0
     changed_results: list[dict[str, Any]] = []
+    review_events = []
+    review_completed_at = job.finished_at or utc_now()
     for raw_result in job.results:
         result = normalize_result(raw_result)
         email = str(result.get("email", ""))
@@ -721,6 +757,31 @@ def finish_background_retry(job: Job) -> Job | None:
                 result["cross_route_state"] = "confirmed_undeliverable"
             else:
                 result["cross_route_state"] = "inconclusive"
+            review_events.append(make_smtp_review_event(
+                parent_job_id=parent.id,
+                retry_job_id=job.id,
+                email=email,
+                provider_key=str(
+                    previous.get("cross_route_provider")
+                    or cross_route_provider_key(email, previous or result)
+                ),
+                event_type="completed",
+                decision_reason=str(previous.get("cross_route_decision") or "") or None,
+                origin_execution_target=str(job.origin_execution_target or "unknown"),
+                review_execution_target=job.execution_target,
+                retry_route=job.retry_route,
+                attempt=max(1, int(job.cross_route_attempts or 0)),
+                initial_result=previous,
+                review_result=result,
+                outcome=str(result["cross_route_state"]),
+                occurred_at=review_completed_at,
+                initial_completed_at=parent.finished_at,
+                review_started_at=job.started_at,
+                review_completed_at=review_completed_at,
+                latency_ms=int(max(
+                    0.0, (review_completed_at - job.created_at).total_seconds() * 1000
+                )),
+            ))
         if is_retryable_smtp_result(result):
             plan = apply_retry_plan(result)
             if plan.delay_for_attempt(job.temporary_retry_attempts + 1) is None:
@@ -742,6 +803,7 @@ def finish_background_retry(job: Job) -> Job | None:
     parent.results = [
         existing[email.lower()] for email in parent.emails if email.lower() in existing
     ]
+    smtp_review_event_store.record_many(review_events)
     cache_and_release_probe_results(job.results, owner_job_id=job.id)
     job_store.record_catch_all(parent)
     write_csv(parent)
@@ -785,6 +847,8 @@ def finish_background_retry_failure(job: Job, error: str) -> Job | None:
     ]
     if job.retry_route == ROUTE_ALTERNATE:
         changed_route_results: list[dict[str, Any]] = []
+        failure_events = []
+        failed_at = utc_now()
         for result in retryable:
             result["cross_route_attempts"] = max(
                 int(result.get("cross_route_attempts") or 0),
@@ -794,8 +858,34 @@ def finish_background_retry_failure(job: Job, error: str) -> Job | None:
             result["cross_route_origin_target"] = job.origin_execution_target
             result["cross_route_target"] = job.execution_target
             changed_route_results.append(result)
+            email = str(result.get("email") or "")
+            failure_events.append(make_smtp_review_event(
+                parent_job_id=parent.id,
+                retry_job_id=job.id,
+                email=email,
+                provider_key=str(
+                    result.get("cross_route_provider")
+                    or cross_route_provider_key(email, result)
+                ),
+                event_type="worker_failed",
+                decision_reason=str(result.get("cross_route_decision") or "") or None,
+                origin_execution_target=str(job.origin_execution_target or "unknown"),
+                review_execution_target=job.execution_target,
+                retry_route=job.retry_route,
+                attempt=max(1, int(job.cross_route_attempts or 0)),
+                initial_result=result,
+                outcome="worker_failed",
+                occurred_at=failed_at,
+                initial_completed_at=parent.finished_at,
+                review_started_at=job.started_at,
+                review_completed_at=failed_at,
+                latency_ms=int(max(
+                    0.0, (failed_at - job.created_at).total_seconds() * 1000
+                )),
+            ))
         if changed_route_results:
             job_store.upsert_results(parent.id, changed_route_results)
+        smtp_review_event_store.record_many(failure_events)
     if any(
         apply_retry_plan(result).delay_for_attempt(job.temporary_retry_attempts + 1) is not None
         for result in retryable

@@ -59,6 +59,11 @@ def test_json_and_timestamp_columns() -> None:
     assert types["initial_completed_at"] == "timestamptz"
     assert any(index.name == "idx_job_results_quality_window" for index in jr.indexes)
     assert any(index.name == "idx_job_results_initial_quality_window" for index in jr.indexes)
+    review = require_registered("smtp_review_events")
+    review_types = {c.name: c.type for c in review.columns}
+    assert "email_hash" in review_types and "email" not in review_types
+    assert review_types["occurred_at"] == "timestamptz"
+    assert review_types["latency_ms"] == "bigint"
     pc = require_registered("prospecting_candidates")
     # candidate rows often carry free-form payloads as text; result_json style columns only
     assert any(c.type == "timestamptz" for c in pc.columns) or True
@@ -84,6 +89,7 @@ def test_ddl_renders() -> None:
     for name in (
         "users", "jobs", "job_leases", "prospecting_runs", "page_view_days",
         "company_finder_event_days", "company_finder_event_users",
+        "smtp_review_events",
     ):
         assert f'"{name}"' in ddl
 

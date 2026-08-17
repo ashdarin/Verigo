@@ -64,6 +64,118 @@ disable_units() {
     done
 }
 
+edge_worker_units() {
+    {
+        printf '%s\n' verigo-worker@1.service verigo-worker@2.service
+        systemctl list-unit-files --type=service --no-legend \
+            'verigo-worker@*.service' 2>/dev/null \
+            | awk '$1 != "verigo-worker@.service" && $2 == "enabled" {print $1}'
+        systemctl list-units --type=service --state=active --no-legend \
+            'verigo-worker@*.service' 2>/dev/null \
+            | awk '$1 != "verigo-worker@.service" {print $1}'
+    } | sort -uV
+}
+
+restart_edge_workers() {
+    local workers=()
+    mapfile -t workers < <(edge_worker_units)
+    systemctl restart verigo-supervisor "${workers[@]}" verigo-qq-worker
+}
+
+assert_edge_worker_release() {
+    local workers=() unit pid cwd
+    mapfile -t workers < <(edge_worker_units)
+    for unit in "${workers[@]}"; do
+        systemctl is-active --quiet "$unit"
+        pid=$(systemctl show --property MainPID --value "$unit")
+        [[ "$pid" =~ ^[1-9][0-9]*$ ]]
+        cwd=$(readlink -f "/proc/${pid}/cwd")
+        [[ "$cwd" == "$release_path" ]] || {
+            echo "$unit is still running $cwd instead of $release_path" >&2
+            return 1
+        }
+    done
+}
+
+set_env_value() {
+    local file=$1 key=$2 value=$3
+    if grep -q "^${key}=" "$file"; then
+        sed -i "s/^${key}=.*/${key}=${value}/" "$file"
+    else
+        printf '%s=%s\n' "$key" "$value" >> "$file"
+    fi
+}
+
+managed_cross_route_settings() {
+    cat <<'EOF'
+VERIGO_SMTP_CROSS_ROUTE_ENABLED=true
+VERIGO_SMTP_CROSS_ROUTE_SHADOW_MODE=false
+VERIGO_SMTP_CROSS_ROUTE_TARGET=local
+VERIGO_SMTP_CROSS_ROUTE_MAX_PER_EMAIL=1
+VERIGO_SMTP_CROSS_ROUTE_CONCURRENCY=1
+VERIGO_SMTP_CROSS_ROUTE_PER_MX_CONCURRENCY=1
+VERIGO_SMTP_CROSS_ROUTE_PRESSURE_MIN_SAMPLES=5
+VERIGO_SMTP_CROSS_ROUTE_PRESSURE_4XX_RATE=0.60
+VERIGO_SMTP_CROSS_ROUTE_DISPATCH_DELAY_SECONDS=0
+EOF
+}
+
+sync_managed_cross_route_config() {
+    local file=$1 setting key value
+    while IFS= read -r setting; do
+        key=${setting%%=*}
+        value=${setting#*=}
+        set_env_value "$file" "$key" "$value"
+    done < <(managed_cross_route_settings)
+}
+
+assert_managed_cross_route_config() {
+    local file=$1 setting
+    while IFS= read -r setting; do
+        grep -Fqx "$setting" "$file" || {
+            echo "Managed SMTP cross-route setting drifted in $file: ${setting%%=*}" >&2
+            return 1
+        }
+    done < <(managed_cross_route_settings)
+}
+
+verify_runtime_cross_route_config() {
+    local env_file=$1
+    (
+        set -a
+        source "$env_file"
+        set +a
+        PYTHONPATH="$release_path" "$state_dir/.venv/bin/python" - <<'PY'
+from app.config import settings
+
+actual = {
+    "enabled": settings.smtp_cross_route_enabled,
+    "shadow": settings.smtp_cross_route_shadow_mode,
+    "target": settings.smtp_cross_route_target,
+    "max_per_email": settings.smtp_cross_route_max_per_email,
+    "concurrency": settings.smtp_cross_route_concurrency,
+    "per_mx": settings.smtp_cross_route_per_mx_concurrency,
+    "pressure_min": settings.smtp_cross_route_pressure_min_samples,
+    "pressure_rate": settings.smtp_cross_route_pressure_4xx_rate,
+    "dispatch_delay": settings.smtp_cross_route_dispatch_delay_seconds,
+}
+expected = {
+    "enabled": True,
+    "shadow": False,
+    "target": "local",
+    "max_per_email": 1,
+    "concurrency": 1,
+    "per_mx": 1,
+    "pressure_min": 5,
+    "pressure_rate": 0.60,
+    "dispatch_delay": 0,
+}
+if actual != expected:
+    raise SystemExit(f"SMTP cross-route runtime drift: {actual}")
+PY
+    )
+}
+
 rollback() {
     local status=$?
     trap - ERR
@@ -73,8 +185,7 @@ rollback() {
         if [[ "$deploy_role" == "shanghai-app" ]]; then
             systemctl restart verigo verigo-worker-api || true
         elif [[ "${VERIGO_DEPLOY_MAINTENANCE:-false}" == "true" ]]; then
-            systemctl restart verigo-supervisor verigo-worker@1 verigo-worker@2 \
-                verigo-qq-worker || true
+            restart_edge_workers || true
         fi
     fi
     exit "$status"
@@ -123,8 +234,8 @@ install_env_files() {
         'VERIGO_PROSPECTING_SCHEDULER_SUCCESSES_PER_STEP=8' \
         'VERIGO_PROSPECTING_SCHEDULER_STEP_SIZE=2' \
         'VERIGO_SCHEDULER_COOLDOWN_SECONDS=120' \
-        'VERIGO_SMTP_CROSS_ROUTE_ENABLED=false' \
-        'VERIGO_SMTP_CROSS_ROUTE_SHADOW_MODE=true' \
+        'VERIGO_SMTP_CROSS_ROUTE_ENABLED=true' \
+        'VERIGO_SMTP_CROSS_ROUTE_SHADOW_MODE=false' \
         'VERIGO_SMTP_CROSS_ROUTE_TARGET=local' \
         'VERIGO_SMTP_CROSS_ROUTE_MAX_PER_EMAIL=1' \
         'VERIGO_SMTP_CROSS_ROUTE_CONCURRENCY=1' \
@@ -148,6 +259,7 @@ install_env_files() {
         grep -q "^${key}=" /etc/verigo/verigo.env \
             || printf '%s\n' "$setting" >> /etc/verigo/verigo.env
     done
+    sync_managed_cross_route_config /etc/verigo/verigo.env
     grep -q '^VERIGO_METRICS_SALT=' /etc/verigo/verigo.env \
         || printf 'VERIGO_METRICS_SALT=%s\n' "$(openssl rand -hex 32)" \
             >> /etc/verigo/verigo.env
@@ -197,6 +309,7 @@ write_worker_env() {
         printf '%s\n' 'VERIGO_WORKER_LEASE_SECONDS=180' >> "$worker_env_tmp"
     fi
     chmod 600 "$worker_env_tmp"
+    assert_managed_cross_route_config "$worker_env_tmp"
     mv -f "$worker_env_tmp" /etc/verigo/verigo-worker.env
 }
 
@@ -219,6 +332,7 @@ VERIGO_QQ_SCHEDULER_SHARD_SIZE=6
 VERIGO_EMAIL_HARD_TIMEOUT_SECONDS=90
 EOF
     chmod 600 "$qq_env_tmp"
+    assert_managed_cross_route_config "$qq_env_tmp"
     mv -f "$qq_env_tmp" /etc/verigo/tencent-qq-worker.env
 }
 
@@ -250,6 +364,9 @@ test -f "$release_path/app/main.py"
 test -f "$release_path/RELEASE_VERSION"
 install_env_files
 write_worker_env
+assert_managed_cross_route_config /etc/verigo/verigo.env
+assert_managed_cross_route_config /etc/verigo/verigo-worker.env
+verify_runtime_cross_route_config /etc/verigo/verigo-worker.env
 
 if ! cmp -s "$previous_release/requirements.txt" "$release_path/requirements.txt"; then
     "$state_dir/.venv/bin/pip" install --disable-pip-version-check \
@@ -297,8 +414,9 @@ if [[ "$deploy_role" == "shanghai-app" ]]; then
     mv -f "$worker_bundle_tmp" "$state_dir/data/cloudstudio-worker.tar.gz"
 
     systemctl daemon-reload
+    mapfile -t edge_workers < <(edge_worker_units)
     disable_units caddy verigo-monitor.timer verigo-monitor.service \
-        verigo-supervisor verigo-worker@1 verigo-worker@2 \
+        verigo-supervisor "${edge_workers[@]}" \
         verigo-postgres-tunnel verigo-postgres-worker-tunnel \
         verigo-data-app-tunnel verigo-cloudstudio-keepalive verigo-qq-worker
     systemctl enable --now verigo-company-finder-tunnel \
@@ -316,6 +434,9 @@ if [[ "$deploy_role" == "shanghai-app" ]]; then
                 sleep 1
             done
             [[ "$code" == "401" ]]
+            assert_managed_cross_route_config /etc/verigo/verigo.env
+            assert_managed_cross_route_config /etc/verigo/verigo-worker.env
+            verify_runtime_cross_route_config /etc/verigo/verigo-worker.env
             prune_releases
             trap - ERR
             printf 'Verigo %s release %s health check passed\n' "$deploy_role" "$release_version"
@@ -328,6 +449,8 @@ if [[ "$deploy_role" == "shanghai-app" ]]; then
 fi
 
 write_qq_env
+assert_managed_cross_route_config /etc/verigo/tencent-qq-worker.env
+verify_runtime_cross_route_config /etc/verigo/tencent-qq-worker.env
 install -m 644 "$release_path/deploy/verigo-data-app-tunnel.service" \
     /etc/systemd/system/verigo-data-app-tunnel.service
 install -m 644 "$release_path/deploy/verigo-postgres-tunnel.service" \
@@ -360,21 +483,27 @@ disable_units verigo verigo-worker-api verigo-company-finder-tunnel \
     verigo-backup.timer verigo-backup.service \
     verigo-retention.timer verigo-retention.service
 activate_release "$release_path"
+mapfile -t edge_workers < <(edge_worker_units)
 systemctl enable --now verigo-data-app-tunnel verigo-postgres-tunnel \
     verigo-postgres-worker-tunnel caddy verigo-monitor.timer \
-    verigo-supervisor verigo-worker@1 verigo-worker@2 \
+    verigo-supervisor "${edge_workers[@]}" \
     verigo-qq-worker
 systemctl reload caddy
 
 if [[ "${VERIGO_DEPLOY_MAINTENANCE:-false}" == "true" ]]; then
-    systemctl restart verigo-supervisor verigo-worker@1 verigo-worker@2 \
-        verigo-qq-worker
+    restart_edge_workers
+    assert_edge_worker_release
 else
     echo "Worker processes were left running; use maintenance mode for an immediate worker restart"
 fi
 
 for _ in {1..60}; do
     if curl -fsS https://verigo.site/api/health >/dev/null; then
+        assert_managed_cross_route_config /etc/verigo/verigo.env
+        assert_managed_cross_route_config /etc/verigo/verigo-worker.env
+        assert_managed_cross_route_config /etc/verigo/tencent-qq-worker.env
+        verify_runtime_cross_route_config /etc/verigo/verigo-worker.env
+        verify_runtime_cross_route_config /etc/verigo/tencent-qq-worker.env
         prune_releases
         trap - ERR
         printf 'Verigo %s release %s health check passed\n' "$deploy_role" "$release_version"

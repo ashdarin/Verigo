@@ -98,6 +98,7 @@ from app.db.metrics import metrics_store
 from app.db.prospecting import ProspectingRun, prospecting_store
 from app.db import company_catalog
 from app.db.result_objects import result_object_store
+from app.db.smtp_review_events import smtp_review_event_store
 from app.tasks.verification import (
     cancel_job_probes,
     clean_emails,
@@ -936,6 +937,7 @@ def admin_metrics(_: Annotated[User, Depends(require_admin)]) -> dict[str, objec
     return {
         **metrics_store.snapshot(),
         "verification_cache": job_store.cache_report(),
+        "smtp_cross_route": smtp_review_event_store.report(),
     }
 
 

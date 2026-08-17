@@ -238,6 +238,45 @@ class JobStore:
                 connection.execute("CREATE INDEX IF NOT EXISTS idx_jobs_parent ON jobs(parent_id, created_at)")
                 connection.execute("CREATE INDEX IF NOT EXISTS idx_jobs_retry_parent ON jobs(retry_parent_id, created_at)")
                 connection.execute("CREATE INDEX IF NOT EXISTS idx_jobs_cross_route_queue ON jobs(execution_target, retry_route, status, created_at)")
+                connection.execute("""
+                    CREATE TABLE IF NOT EXISTS smtp_review_events (
+                        id TEXT PRIMARY KEY,
+                        parent_job_id TEXT NOT NULL,
+                        retry_job_id TEXT,
+                        email_hash TEXT NOT NULL,
+                        provider_key TEXT NOT NULL,
+                        event_type TEXT NOT NULL,
+                        decision_reason TEXT,
+                        origin_execution_target TEXT NOT NULL,
+                        review_execution_target TEXT,
+                        retry_route TEXT NOT NULL,
+                        attempt INTEGER NOT NULL DEFAULT 0,
+                        initial_smtp_code TEXT,
+                        review_smtp_code TEXT,
+                        outcome TEXT,
+                        occurred_at TEXT NOT NULL,
+                        initial_completed_at TEXT,
+                        review_started_at TEXT,
+                        review_completed_at TEXT,
+                        latency_ms INTEGER
+                    )
+                """)
+                connection.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_smtp_review_events_occurred "
+                    "ON smtp_review_events(occurred_at)"
+                )
+                connection.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_smtp_review_events_type_time "
+                    "ON smtp_review_events(event_type, occurred_at)"
+                )
+                connection.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_smtp_review_events_provider_time "
+                    "ON smtp_review_events(provider_key, occurred_at)"
+                )
+                connection.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_smtp_review_events_parent_email "
+                    "ON smtp_review_events(parent_job_id, email_hash, attempt)"
+                )
                 connection.execute("CREATE TABLE IF NOT EXISTS schema_migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)")
                 connection.execute(
                     """CREATE TABLE IF NOT EXISTS service_state (

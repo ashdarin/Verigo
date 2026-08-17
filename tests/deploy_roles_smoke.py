@@ -47,6 +47,21 @@ assert "verigo-monitor.timer" in release
 assert "verigo-qq-worker" in release
 assert "disable_units verigo-cloudstudio-keepalive" in release
 assert "rm -f /etc/systemd/system/verigo-cloudstudio-keepalive.service" in release
+assert "edge_worker_units()" in release
+assert "restart_edge_workers()" in release
+assert "assert_edge_worker_release()" in release
+assert "systemctl list-unit-files --type=service" in release
+assert "systemctl list-units --type=service --state=active" in release
+assert 'restart_edge_workers || true' in release
+assert 'restart_edge_workers\n' in release
+assert 'assert_edge_worker_release\n' in release
+assert 'verigo-supervisor "${edge_workers[@]}"' in release
+assert "managed_cross_route_settings()" in release
+assert "sync_managed_cross_route_config /etc/verigo/verigo.env" in release
+assert "assert_managed_cross_route_config /etc/verigo/verigo-worker.env" in release
+assert "verify_runtime_cross_route_config /etc/verigo/verigo-worker.env" in release
+assert "VERIGO_SMTP_CROSS_ROUTE_ENABLED=true" in release
+assert "VERIGO_SMTP_CROSS_ROUTE_SHADOW_MODE=false" in release
 
 edge_caddy = (deploy / "Caddyfile.edge").read_text(encoding="utf-8")
 shanghai_caddy = (deploy / "Caddyfile.shanghai").read_text(encoding="utf-8")
