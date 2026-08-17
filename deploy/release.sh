@@ -67,11 +67,11 @@ disable_units() {
 edge_worker_units() {
     {
         printf '%s\n' verigo-worker@1.service verigo-worker@2.service
-        systemctl list-unit-files --type=service --no-legend \
-            'verigo-worker@*.service' 2>/dev/null \
+        { systemctl list-unit-files --type=service --no-legend \
+            'verigo-worker@*.service' 2>/dev/null || true; } \
             | awk '$1 != "verigo-worker@.service" && $2 == "enabled" {print $1}'
-        systemctl list-units --type=service --state=active --no-legend \
-            'verigo-worker@*.service' 2>/dev/null \
+        { systemctl list-units --type=service --state=active --no-legend \
+            'verigo-worker@*.service' 2>/dev/null || true; } \
             | awk '$1 != "verigo-worker@.service" {print $1}'
     } | sort -uV
 }
