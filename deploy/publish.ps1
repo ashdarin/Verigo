@@ -83,14 +83,14 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "Could not create the release archive." }
 
     Invoke-NativeWithRetry -Description "Prepare remote release directory" -Operation {
-        & $ssh @sshOptions $remote "rm -rf -- $ReleaseRoot; install -d -m 700 $ReleaseRoot"
+        & $ssh @sshOptions $remote "set -eu; rm -rf -- $ReleaseRoot; install -d -m 700 $ReleaseRoot"
     }
     Invoke-NativeWithRetry -Description "Upload release archive" -Operation {
         & $scp @sshOptions $archive "${remote}:$ReleaseRoot/release.tar.gz"
     }
     $maintenanceValue = if ($Maintenance) { "true" } else { "false" }
     Invoke-NativeWithRetry -Description "Apply release" -Operation {
-        & $ssh @sshOptions $remote "tar -xzf $ReleaseRoot/release.tar.gz -C $ReleaseRoot; printf '%s\n' $version > $ReleaseRoot/.verigo-release; sudo -n /usr/local/sbin/verigo-apply-release $Role $ReleaseRoot $maintenanceValue"
+        & $ssh @sshOptions $remote "set -eu; tar -xzf $ReleaseRoot/release.tar.gz -C $ReleaseRoot; printf '%s\n' $version > $ReleaseRoot/.verigo-release; sudo -n /usr/local/sbin/verigo-apply-release $Role $ReleaseRoot $maintenanceValue"
     }
 } finally {
     Remove-Item -LiteralPath $archive -Force -ErrorAction SilentlyContinue

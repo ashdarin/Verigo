@@ -15,6 +15,8 @@ assert "clean Git working tree" in publish
 assert "Invoke-NativeWithRetry" in publish
 assert "ConnectTimeout=15" in publish
 assert "Start-Sleep -Seconds $delaySeconds" in publish
+assert '"set -eu; rm -rf -- $ReleaseRoot' in publish
+assert '"set -eu; tar -xzf $ReleaseRoot/release.tar.gz' in publish
 release_wrapper = (deploy / "verigo-apply-release").read_text(encoding="utf-8")
 assert "shanghai-app|hong-kong-edge-worker" in release_wrapper
 assert "/tmp/verigo-release" in release_wrapper
