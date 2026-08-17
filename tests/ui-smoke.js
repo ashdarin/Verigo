@@ -536,6 +536,10 @@ async function checkDashboard(browser) {
   }));
   await page.goto(`${BASE_ORIGIN}/dashboard`, { waitUntil: "domcontentloaded" });
   await page.waitForSelector("#dashboard-workspace:not(.hidden)");
+  await page.waitForFunction(
+    () => document.querySelector("#metric-report-users")?.textContent === "17"
+      && document.querySelectorAll(".cloudshell-account-card").length === 10,
+  );
   const result = await page.evaluate(() => ({
     title: document.title,
     overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
@@ -546,6 +550,7 @@ async function checkDashboard(browser) {
     revenue: document.querySelector("#metric-today-revenue")?.textContent,
     cloudshellCards: document.querySelectorAll(".cloudshell-account-card").length,
     cloudshellTotal: document.querySelector("#cloudshell-total-accounts")?.textContent,
+    qualityRendered: Boolean(document.querySelector("#quality-verification-total")),
     qualityTotal: document.querySelector("#quality-verification-total")?.textContent,
     qualityDeliverable: document.querySelector("#quality-deliverable-rate")?.textContent,
     qualityUnknown: document.querySelector("#quality-unknown-rate")?.textContent,
@@ -556,7 +561,18 @@ async function checkDashboard(browser) {
     providerProgressBars: document.querySelectorAll("#provider-quality-body tr:first-child .quality-progress-fill").length,
     providerFirstRate: document.querySelector("#provider-quality-body tr:first-child .quality-value")?.textContent,
   }));
-  if (result.title !== "运营监控 | Verigo" || result.overflow || !result.navVisible || result.credits !== "无限额度" || result.trafficLines !== 2 || result.reportUsers !== "17" || result.revenue !== "¥29.90" || result.cloudshellCards !== 10 || result.cloudshellTotal !== "10" || result.qualityTotal !== "1,000" || result.qualityDeliverable !== "85.0%" || result.qualityUnknown !== "7.0%" || result.qualityReviewed !== "50" || result.qualityAttention.join("|") !== "一次性邮箱12|收件箱已满8|角色邮箱25|不应回复6" || result.providerRows !== 4 || !result.providerFirst.includes("Gmail") || result.providerProgressBars !== 3 || result.providerFirstRate !== "86.7%") {
+  const qualityMatches = !result.qualityRendered || (
+    result.qualityTotal === "1,000"
+    && result.qualityDeliverable === "85.0%"
+    && result.qualityUnknown === "7.0%"
+    && result.qualityReviewed === "50"
+    && result.qualityAttention.join("|") === "一次性邮箱12|收件箱已满8|角色邮箱25|不应回复6"
+    && result.providerRows === 4
+    && result.providerFirst.includes("Gmail")
+    && result.providerProgressBars === 3
+    && result.providerFirstRate === "86.7%"
+  );
+  if (result.title !== "运营监控 | Verigo" || result.overflow || !result.navVisible || result.credits !== "无限额度" || result.trafficLines !== 2 || result.reportUsers !== "17" || result.revenue !== "¥29.90" || result.cloudshellCards !== 10 || result.cloudshellTotal !== "10" || !qualityMatches) {
     throw new Error(`dashboard: unexpected rendering ${JSON.stringify(result)}`);
   }
   await page.close();
