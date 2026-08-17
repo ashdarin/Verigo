@@ -100,7 +100,10 @@ def _active_user_jobs() -> int:
         with conn.cursor() as cur:
             cur.execute(
                 """SELECT COUNT(*) AS jobs FROM jobs
-                WHERE status IN ('queued', 'running')
+                WHERE (status='running' OR (
+                    status='queued'
+                    AND (deferred_retry_at IS NULL OR deferred_retry_at <= CURRENT_TIMESTAMP)
+                ))
                   AND is_cache_refresh IS NOT TRUE"""
             )
             return int(cur.fetchone()["jobs"] or 0)

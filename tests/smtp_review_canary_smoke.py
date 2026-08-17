@@ -104,5 +104,6 @@ assert not canary._excluded("person@company.example")
 assert "print(email" not in inspect.getsource(canary)
 assert "is_cache_refresh=True" in inspect.getsource(canary.main)
 assert "--confirm-production" in inspect.getsource(canary.main)
+assert "deferred_retry_at IS NULL" in inspect.getsource(canary._active_user_jobs)
 
 print("smtp review canary smoke: ok")
