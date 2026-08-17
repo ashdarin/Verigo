@@ -4,6 +4,7 @@ import inspect
 import sys
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -105,5 +106,33 @@ assert "print(email" not in inspect.getsource(canary)
 assert "is_cache_refresh=True" in inspect.getsource(canary.main)
 assert "--confirm-production" in inspect.getsource(canary.main)
 assert "deferred_retry_at IS NULL" in inspect.getsource(canary._active_user_jobs)
+
+# Unique-receiver runs must not queue multiple probes into one MX cooling bucket.
+canary._active_emails = lambda: set()
+canary._historical_4xx_rows = lambda **_kwargs: [
+    {"email": "cooling@cooling.example.test", "result_json": {}},
+    {"email": "first@first.example.test", "result_json": {}},
+    {"email": "same-receiver@duplicate.example.test", "result_json": {}},
+]
+canary._stable_rows = lambda **_kwargs: [
+    {"email": "stable@stable.example.test", "result_json": {"deliverable": True}},
+]
+canary.email_execution_target = lambda *_args, **_kwargs: "gmail"
+canary.cross_route_decision = lambda *_args, **_kwargs: SimpleNamespace(eligible=True)
+canary._receiver_keys = lambda emails: {
+    "cooling.example.test": "mx-cooling",
+    "first.example.test": "mx-a",
+    "duplicate.example.test": "mx-a",
+    "stable.example.test": "mx-b",
+}
+canary._cooling_receiver_keys = lambda _keys: {"mx-cooling"}
+sample = canary.sample_candidates(
+    total=2, fourxx=1, per_domain=1, lookback_days=90, seed="smoke",
+    unique_receiver=True,
+)
+assert [candidate.cohort for candidate in sample] == ["historical_4xx", "stable"]
+assert {candidate.email for candidate in sample} == {
+    "first@first.example.test", "stable@stable.example.test",
+}
 
 print("smtp review canary smoke: ok")

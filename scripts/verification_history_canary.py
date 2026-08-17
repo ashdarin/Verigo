@@ -172,27 +172,67 @@ def _stable_rows(*, lookback_days: int, limit: int, seed: str) -> list[dict[str,
             return list(cur.fetchall())
 
 
+def _receiver_keys(emails: Iterable[str]) -> dict[str, str]:
+    """Resolve known scheduler buckets without performing DNS lookups."""
+    domains = sorted({_domain(email) for email in emails if _domain(email)})
+    if not domains:
+        return {}
+    with connection(resolve_database_url()) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT domain, scheduler_key FROM scheduler_domain_routes
+                WHERE domain=ANY(%s)""",
+                (domains,),
+            )
+            routed = {
+                str(row["domain"]): str(row["scheduler_key"])
+                for row in cur.fetchall()
+            }
+    return {domain: routed.get(domain, f"domain:{domain}") for domain in domains}
+
+
+def _cooling_receiver_keys(receiver_keys: Iterable[str]) -> set[str]:
+    keys = sorted(set(receiver_keys))
+    if not keys:
+        return set()
+    with connection(resolve_database_url()) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT scheduler_key FROM scheduler_domain_profiles
+                WHERE scheduler_key=ANY(%s)
+                  AND cooldown_until>CURRENT_TIMESTAMP""",
+                (keys,),
+            )
+            return {str(row["scheduler_key"]) for row in cur.fetchall()}
+
+
 def sample_candidates(
     *, total: int, fourxx: int, per_domain: int, lookback_days: int, seed: str,
+    unique_receiver: bool = False,
 ) -> list[Candidate]:
     active = _active_emails()
     selected: list[Candidate] = []
     selected_emails: set[str] = set()
     domain_counts: Counter[str] = Counter()
+    selected_receivers: set[str] = set()
 
-    def add(candidate: Candidate) -> bool:
+    def add(candidate: Candidate, receiver_by_domain: dict[str, str], cooling: set[str]) -> bool:
         email = candidate.email.lower()
         domain = _domain(email)
+        receiver = receiver_by_domain.get(domain, f"domain:{domain}")
         if (
             email in active
             or email in selected_emails
             or _excluded(email)
             or domain_counts[domain] >= per_domain
+            or (unique_receiver and (receiver in cooling or receiver in selected_receivers))
         ):
             return False
         selected.append(candidate)
         selected_emails.add(email)
         domain_counts[domain] += 1
+        if unique_receiver:
+            selected_receivers.add(receiver)
         return True
 
     rows = _historical_4xx_rows(
@@ -200,6 +240,7 @@ def sample_candidates(
         limit=max(2000, fourxx * 30),
         seed=f"{seed}:4xx",
     )
+    historical: list[Candidate] = []
     for row in rows:
         email = str(row["email"] or "").lower()
         if _excluded(email):
@@ -212,7 +253,12 @@ def sample_candidates(
         decision = cross_route_decision(email, payload, source_target=target)
         if not decision.eligible:
             continue
-        add(Candidate(email, "historical_4xx", "temporary_4xx", target))
+        historical.append(Candidate(email, "historical_4xx", "temporary_4xx", target))
+
+    historical_receivers = _receiver_keys(item.email for item in historical)
+    cooling_receivers = _cooling_receiver_keys(historical_receivers.values()) if unique_receiver else set()
+    for candidate in historical:
+        add(candidate, historical_receivers, cooling_receivers)
         if sum(candidate.cohort == "historical_4xx" for candidate in selected) >= fourxx:
             break
 
@@ -231,13 +277,20 @@ def sample_candidates(
         limit=max(5000, stable_needed * 40),
         seed=f"{seed}:stable",
     )
+    stable: list[Candidate] = []
     for row in rows:
         email = str(row["email"] or "").lower()
         target = email_execution_target(email, None)
         if target not in REMOTE_REVIEW_TARGETS:
             continue
         payload = _payload(row["result_json"])
-        if add(Candidate(email, "stable", _baseline(payload), target)) and len(selected) >= total:
+        stable.append(Candidate(email, "stable", _baseline(payload), target))
+
+    stable_receivers = _receiver_keys(item.email for item in stable)
+    if unique_receiver:
+        cooling_receivers |= _cooling_receiver_keys(stable_receivers.values())
+    for candidate in stable:
+        if add(candidate, stable_receivers, cooling_receivers) and len(selected) >= total:
             break
 
     if len(selected) != total:
@@ -430,6 +483,11 @@ def main() -> int:
     parser.add_argument("--fourxx", type=int, default=500)
     parser.add_argument("--stage-size", type=int, default=500)
     parser.add_argument("--per-domain", type=int, default=8)
+    parser.add_argument(
+        "--unique-receiver",
+        action="store_true",
+        help="use at most one address per scheduler receiver and skip active cooldowns",
+    )
     parser.add_argument("--lookback-days", type=int, default=90)
     parser.add_argument("--quiet-seconds", type=int, default=15)
     parser.add_argument("--quiet-timeout-seconds", type=int, default=900)
@@ -462,6 +520,7 @@ def main() -> int:
             per_domain=per_domain,
             lookback_days=max(1, min(365, args.lookback_days)),
             seed=seed,
+            unique_receiver=args.unique_receiver,
         )
         for offset in range(0, len(candidates), stage_size):
             if offset:
