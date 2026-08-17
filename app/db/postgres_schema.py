@@ -456,6 +456,9 @@ TABLES["jobs"] = TableDef(
         _c("deferred_retry_at", "timestamptz", True),
         _c("temporary_retry_attempts", "bigint", False, "0"),
         _c("retry_parent_id", "text", True),
+        _c("retry_route", "text", False, "'same_target'"),
+        _c("origin_execution_target", "text", True),
+        _c("cross_route_attempts", "bigint", False, "0"),
         _c("enrich_profiles", "bigint", False, "0"),
         _c("list_name", "text", True),
         _c("is_cache_refresh", "boolean", False, "false"),
@@ -465,6 +468,11 @@ TABLES["jobs"] = TableDef(
         IndexDef("idx_jobs_retry_parent", ("retry_parent_id", "created_at",), partial=False),
         IndexDef("idx_jobs_parent", ("parent_id", "created_at",), partial=False),
         IndexDef("idx_jobs_queue", ("status", "created_at",), partial=False),
+        IndexDef(
+            "idx_jobs_cross_route_queue",
+            ("execution_target", "retry_route", "status", "created_at",),
+            partial=False,
+        ),
     ),
 )
 

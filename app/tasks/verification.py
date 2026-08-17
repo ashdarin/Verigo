@@ -29,6 +29,13 @@ from app.core.result_retry import (
     smtp_temporary_status,
 )
 from app.core.smtp_retry_policy import apply_retry_plan, retry_plan
+from app.core.smtp_cross_route import (
+    ROUTE_ALTERNATE,
+    ROUTE_SAME_TARGET,
+    decision_for as cross_route_decision,
+    mark_decision as mark_cross_route_decision,
+    provider_pressure_keys,
+)
 from app.core.verification_outcome import (
     RETRY_NEVER,
     apply_outcome,
@@ -539,10 +546,25 @@ def enqueue_background_retry(
     if not emails:
         return
     email_keys = {email.lower() for email in emails}
-    retry_groups: dict[int, list[str]] = {}
+    active = job_store.retry_children(parent.id)
+    active_email_keys = {
+        email.lower()
+        for child in active
+        if child.status in {"queued", "running"}
+        for email in child.emails
+    }
+    retry_groups: dict[tuple[str, int], list[str]] = {}
+    origin_target = source.origin_execution_target or source.execution_target
+    allow_alternate = source.retry_route != ROUTE_ALTERNATE
+    pressure_keys = provider_pressure_keys(parent.results)
+    shadow = (
+        settings.smtp_cross_route_shadow_mode
+        or not settings.smtp_cross_route_enabled
+    )
     updated_results: list[dict[str, Any]] = []
     for result in parent.results:
-        if str(result.get("email", "")).lower() not in email_keys:
+        result_email_key = str(result.get("email", "")).lower()
+        if result_email_key not in email_keys or result_email_key in active_email_keys:
             continue
         plan = apply_retry_plan(result)
         delay_seconds = plan.delay_for_attempt(attempt)
@@ -551,19 +573,49 @@ def enqueue_background_retry(
             _clear_retry_metadata(result, "completed")
             updated_results.append(result)
             continue
-        retry_groups.setdefault(delay_seconds, []).append(str(result["email"]))
+        decision = cross_route_decision(
+            str(result["email"]),
+            result,
+            source_target=origin_target,
+            pressure_keys=pressure_keys,
+            allow_alternate=allow_alternate,
+        )
+        mark_cross_route_decision(result, decision, shadow=shadow)
+        target = origin_target
+        route = ROUTE_SAME_TARGET
+        if decision.eligible and not shadow and decision.alternate_target:
+            target = decision.alternate_target
+            route = ROUTE_ALTERNATE
+            delay_seconds = settings.smtp_cross_route_dispatch_delay_seconds
+            result["cross_route_state"] = "scheduled"
+            result["cross_route_attempts"] = int(result.get("cross_route_attempts") or 0) + 1
+            result["cross_route_origin_target"] = origin_target
+        elif decision.eligible:
+            result["cross_route_state"] = "shadow_candidate"
+        elif source.retry_route != ROUTE_ALTERNATE:
+            result["cross_route_state"] = "excluded"
+        retry_groups.setdefault((f"{route}:{target}", delay_seconds), []).append(
+            str(result["email"])
+        )
         result["retry_state"] = "scheduled"
         result["retry_attempt"] = attempt
         result["retry_max_attempts"] = plan.max_attempts
         result["retry_at"] = (utc_now() + timedelta(seconds=delay_seconds)).isoformat()
         updated_results.append(result)
     job_store.upsert_results(parent.id, updated_results)
-    active = job_store.retry_children(parent.id)
-    for delay_seconds, group_emails in retry_groups.items():
+    for (route_target, delay_seconds), group_emails in retry_groups.items():
+        route, execution_target = route_target.split(":", 1)
         group_keys = {email.lower() for email in group_emails}
+        child_attempt = (
+            source.temporary_retry_attempts
+            if route == ROUTE_ALTERNATE
+            else attempt
+        )
         duplicate = any(
             child.status in {"queued", "running"}
-            and child.temporary_retry_attempts == attempt
+            and child.temporary_retry_attempts == child_attempt
+            and child.retry_route == route
+            and child.execution_target == execution_target
             and {email.lower() for email in child.emails} == group_keys
             for child in active
         )
@@ -573,12 +625,19 @@ def enqueue_background_retry(
         retry_job = Job(
             id=uuid.uuid4().hex[:12],
             emails=group_emails,
-            worker_count=source.worker_count,
+            worker_count=1 if route == ROUTE_ALTERNATE else source.worker_count,
             owner_id=parent.owner_id,
-            execution_target=source.execution_target,
+            execution_target=execution_target,
             retry_parent_id=parent.id,
             deferred_retry_at=retry_at,
-            temporary_retry_attempts=attempt,
+            temporary_retry_attempts=child_attempt,
+            retry_route=route,
+            origin_execution_target=origin_target,
+            cross_route_attempts=(
+                source.cross_route_attempts + 1
+                if route == ROUTE_ALTERNATE
+                else source.cross_route_attempts
+            ),
         )
         job_store.add(retry_job)
         _notify_retry_target(retry_job)
@@ -649,6 +708,19 @@ def finish_background_retry(job: Job) -> Job | None:
         result = normalize_result(raw_result)
         email = str(result.get("email", ""))
         previous = existing.get(email.lower(), {})
+        if job.retry_route == ROUTE_ALTERNATE:
+            result["cross_route_attempts"] = max(
+                int(previous.get("cross_route_attempts") or 0),
+                int(job.cross_route_attempts or 0),
+            )
+            result["cross_route_origin_target"] = job.origin_execution_target
+            result["cross_route_target"] = job.execution_target
+            if result.get("deliverable") is True:
+                result["cross_route_state"] = "confirmed_deliverable"
+            elif result.get("deliverable") is False:
+                result["cross_route_state"] = "confirmed_undeliverable"
+            else:
+                result["cross_route_state"] = "inconclusive"
         if is_retryable_smtp_result(result):
             plan = apply_retry_plan(result)
             if plan.delay_for_attempt(job.temporary_retry_attempts + 1) is None:
@@ -711,6 +783,19 @@ def finish_background_retry_failure(job: Job, error: str) -> Job | None:
         for result in parent.results
         if str(result.get("email", "")).lower() in affected and is_retryable_smtp_result(result)
     ]
+    if job.retry_route == ROUTE_ALTERNATE:
+        changed_route_results: list[dict[str, Any]] = []
+        for result in retryable:
+            result["cross_route_attempts"] = max(
+                int(result.get("cross_route_attempts") or 0),
+                int(job.cross_route_attempts or 0),
+            )
+            result["cross_route_state"] = "worker_failed"
+            result["cross_route_origin_target"] = job.origin_execution_target
+            result["cross_route_target"] = job.execution_target
+            changed_route_results.append(result)
+        if changed_route_results:
+            job_store.upsert_results(parent.id, changed_route_results)
     if any(
         apply_retry_plan(result).delay_for_attempt(job.temporary_retry_attempts + 1) is not None
         for result in retryable

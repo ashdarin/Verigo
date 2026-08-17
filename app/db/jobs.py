@@ -89,6 +89,9 @@ class Job:
     retry_parent_id: str | None = None
     deferred_retry_at: datetime | None = None
     temporary_retry_attempts: int = 0
+    retry_route: str = "same_target"
+    origin_execution_target: str | None = None
+    cross_route_attempts: int = 0
     pending_indices: list[int] = field(default_factory=list)
     lease_id: str | None = None
     list_name: str | None = None
@@ -138,7 +141,8 @@ class JobStore:
         "started_at", "finished_at", "error", "results_json", "csv_path",
         "owner_id", "guest_token_hash", "worker_id", "heartbeat_at", "stop_on_deliverable",
         "execution_target", "parent_id", "retry_parent_id",
-        "deferred_retry_at", "temporary_retry_attempts", "list_name", "is_cache_refresh",
+        "deferred_retry_at", "temporary_retry_attempts", "retry_route",
+        "origin_execution_target", "cross_route_attempts", "list_name", "is_cache_refresh",
     )
 
     def __init__(self, keep: int = 100) -> None:
@@ -179,6 +183,9 @@ class JobStore:
             retry_parent_id=row["retry_parent_id"],
             deferred_retry_at=as_datetime(row["deferred_retry_at"]),
             temporary_retry_attempts=int(row["temporary_retry_attempts"] or 0),
+            retry_route=str(row["retry_route"] or "same_target"),
+            origin_execution_target=row["origin_execution_target"],
+            cross_route_attempts=int(row["cross_route_attempts"] or 0),
             list_name=row["list_name"],
             is_cache_refresh=as_bool(row["is_cache_refresh"]),
         )
@@ -215,18 +222,22 @@ class JobStore:
                         retry_parent_id TEXT,
                         deferred_retry_at TEXT,
                         temporary_retry_attempts INTEGER NOT NULL DEFAULT 0,
+                        retry_route TEXT NOT NULL DEFAULT 'same_target',
+                        origin_execution_target TEXT,
+                        cross_route_attempts INTEGER NOT NULL DEFAULT 0,
                         list_name TEXT,
                         is_cache_refresh INTEGER NOT NULL DEFAULT 0
                     )
                     """
                 )
                 existing = {row[1] for row in connection.execute("PRAGMA table_info(jobs)")}
-                for name, kind in (("owner_id", "TEXT"), ("guest_token_hash", "TEXT"), ("worker_id", "TEXT"), ("heartbeat_at", "TEXT"), ("stop_on_deliverable", "INTEGER NOT NULL DEFAULT 0"), ("execution_target", "TEXT NOT NULL DEFAULT 'local'"), ("parent_id", "TEXT"), ("retry_parent_id", "TEXT"), ("deferred_retry_at", "TEXT"), ("temporary_retry_attempts", "INTEGER NOT NULL DEFAULT 0"), ("list_name", "TEXT"), ("is_cache_refresh", "INTEGER NOT NULL DEFAULT 0")):
+                for name, kind in (("owner_id", "TEXT"), ("guest_token_hash", "TEXT"), ("worker_id", "TEXT"), ("heartbeat_at", "TEXT"), ("stop_on_deliverable", "INTEGER NOT NULL DEFAULT 0"), ("execution_target", "TEXT NOT NULL DEFAULT 'local'"), ("parent_id", "TEXT"), ("retry_parent_id", "TEXT"), ("deferred_retry_at", "TEXT"), ("temporary_retry_attempts", "INTEGER NOT NULL DEFAULT 0"), ("retry_route", "TEXT NOT NULL DEFAULT 'same_target'"), ("origin_execution_target", "TEXT"), ("cross_route_attempts", "INTEGER NOT NULL DEFAULT 0"), ("list_name", "TEXT"), ("is_cache_refresh", "INTEGER NOT NULL DEFAULT 0")):
                     if name not in existing:
                         connection.execute(f"ALTER TABLE jobs ADD COLUMN {name} {kind}")
                 connection.execute("CREATE INDEX IF NOT EXISTS idx_jobs_queue ON jobs(status, created_at)")
                 connection.execute("CREATE INDEX IF NOT EXISTS idx_jobs_parent ON jobs(parent_id, created_at)")
                 connection.execute("CREATE INDEX IF NOT EXISTS idx_jobs_retry_parent ON jobs(retry_parent_id, created_at)")
+                connection.execute("CREATE INDEX IF NOT EXISTS idx_jobs_cross_route_queue ON jobs(execution_target, retry_route, status, created_at)")
                 connection.execute("CREATE TABLE IF NOT EXISTS schema_migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)")
                 connection.execute(
                     """CREATE TABLE IF NOT EXISTS service_state (
@@ -982,6 +993,9 @@ class JobStore:
             job.retry_parent_id,
             _sql_ts(job.deferred_retry_at),
             job.temporary_retry_attempts,
+            job.retry_route,
+            job.origin_execution_target,
+            job.cross_route_attempts,
             job.list_name,
             bool(job.is_cache_refresh),
         )
@@ -992,8 +1006,9 @@ class JobStore:
                 id, emails_json, worker_count, status, created_at, started_at, finished_at,
                 error, results_json, csv_path, owner_id, guest_token_hash, worker_id, heartbeat_at,
                 stop_on_deliverable, execution_target, parent_id, retry_parent_id, deferred_retry_at,
-                temporary_retry_attempts, list_name, is_cache_refresh
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                temporary_retry_attempts, retry_route, origin_execution_target, cross_route_attempts,
+                list_name, is_cache_refresh
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 emails_json=excluded.emails_json, worker_count=excluded.worker_count,
                 status=excluded.status, started_at=excluded.started_at,
@@ -1006,6 +1021,9 @@ class JobStore:
                 retry_parent_id=excluded.retry_parent_id,
                 deferred_retry_at=excluded.deferred_retry_at,
                 temporary_retry_attempts=excluded.temporary_retry_attempts,
+                retry_route=excluded.retry_route,
+                origin_execution_target=excluded.origin_execution_target,
+                cross_route_attempts=excluded.cross_route_attempts,
                 list_name=excluded.list_name,
                 is_cache_refresh=excluded.is_cache_refresh
             WHERE jobs.status != 'stopped' OR excluded.status = 'stopped'
@@ -1794,6 +1812,7 @@ class JobStore:
                                 AND waiter.expires_at>?
                         ))
                 ORDER BY j.is_cache_refresh ASC,
+                    CASE WHEN j.retry_route='alternate_route' THEN 1 ELSE 0 END,
                     CASE WHEN j.execution_target=? THEN 0 ELSE 1 END,
                     COALESCE(turn.last_claimed_at, {epoch}), j.created_at
                 LIMIT ?
@@ -1808,11 +1827,43 @@ class JobStore:
             if not rows:
                 connection.commit()
                 return None
+            has_cross_route_candidate = any(
+                str(row[self._columns.index("retry_route")]) == "alternate_route"
+                for row in rows
+            )
+            if postgres_active() and has_cross_route_candidate:
+                cross_route_advisory = connection.execute(
+                    "SELECT pg_try_advisory_xact_lock(hashtext(?), hashtext(?))",
+                    ("smtp-cross-route-claim", execution_target),
+                ).fetchone()
+                if not cross_route_advisory or not bool(cross_route_advisory[0]):
+                    connection.rollback()
+                    return None
             active_by_key: dict[str, int] = {}
             for key, slots in connection.execute("""
                 SELECT mx_key, SUM(slots) FROM mx_scheduler_leases WHERE expires_at >= ? GROUP BY mx_key
             """, (_sql_ts(now),)):
                 active_by_key[str(key)] = int(slots)
+            active_cross_route = 0
+            cross_route_by_key: dict[str, int] = {}
+            if has_cross_route_candidate:
+                active_cross_route = int(connection.execute("""
+                    SELECT COUNT(DISTINCT lease.id) FROM job_leases lease
+                    JOIN jobs job ON job.id=lease.job_id
+                    WHERE lease.completed_at IS NULL AND lease.heartbeat_at>=?
+                        AND job.retry_route='alternate_route'
+                """, (_sql_ts(stale),)).fetchone()[0])
+                cross_route_by_key = {
+                    str(key): int(slots)
+                    for key, slots in connection.execute("""
+                    SELECT mx.mx_key, SUM(mx.slots) FROM mx_scheduler_leases mx
+                    JOIN job_leases lease ON lease.id=mx.lease_id
+                    JOIN jobs job ON job.id=lease.job_id
+                    WHERE mx.expires_at>=? AND lease.completed_at IS NULL
+                        AND job.retry_route='alternate_route'
+                    GROUP BY mx.mx_key
+                    """, (_sql_ts(now),))
+                }
             job: Job | None = None
             owner_key: str | None = None
             indices: list[int] = []
@@ -1822,6 +1873,12 @@ class JobStore:
             for row in rows:
                 candidate = self._job_from_row(row)
                 candidate_is_prospecting = self._is_prospecting_job(connection, candidate.id)
+                candidate_is_cross_route = candidate.retry_route == "alternate_route"
+                if (
+                    candidate_is_cross_route
+                    and active_cross_route >= settings.smtp_cross_route_concurrency
+                ):
+                    continue
                 leased: set[int] = set()
                 for (raw_indices,) in connection.execute("""
                     SELECT indices_json FROM job_leases WHERE job_id=? AND completed_at IS NULL
@@ -1835,7 +1892,9 @@ class JobStore:
                 candidate_slots: dict[str, int] = {}
                 candidate_load = dict(active_by_key)
                 candidate_shard_size = (
-                    max(1, prospecting_shard_size)
+                    1
+                    if candidate_is_cross_route
+                    else max(1, prospecting_shard_size)
                     if candidate_is_prospecting and prospecting_shard_size is not None
                     else max(1, shard_size)
                 )
@@ -1894,8 +1953,16 @@ class JobStore:
                     profile = profiles.get(mx_key)
                     if (
                         index in leased
-                        or self._scheduler_profile_is_cooling_down_value(
-                            profile[2] if profile else None, now
+                        or (
+                            not candidate_is_cross_route
+                            and self._scheduler_profile_is_cooling_down_value(
+                                profile[2] if profile else None, now
+                            )
+                        )
+                        or (
+                            candidate_is_cross_route
+                            and cross_route_by_key.get(mx_key, 0)
+                            >= settings.smtp_cross_route_per_mx_concurrency
                         )
                         or candidate_load.get(mx_key, 0) >= self._scheduler_profile_limit_from_row(
                             mx_key, profile, now,

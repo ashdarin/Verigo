@@ -123,6 +123,15 @@ install_env_files() {
         'VERIGO_PROSPECTING_SCHEDULER_SUCCESSES_PER_STEP=8' \
         'VERIGO_PROSPECTING_SCHEDULER_STEP_SIZE=2' \
         'VERIGO_SCHEDULER_COOLDOWN_SECONDS=120' \
+        'VERIGO_SMTP_CROSS_ROUTE_ENABLED=false' \
+        'VERIGO_SMTP_CROSS_ROUTE_SHADOW_MODE=true' \
+        'VERIGO_SMTP_CROSS_ROUTE_TARGET=local' \
+        'VERIGO_SMTP_CROSS_ROUTE_MAX_PER_EMAIL=1' \
+        'VERIGO_SMTP_CROSS_ROUTE_CONCURRENCY=1' \
+        'VERIGO_SMTP_CROSS_ROUTE_PER_MX_CONCURRENCY=1' \
+        'VERIGO_SMTP_CROSS_ROUTE_PRESSURE_MIN_SAMPLES=5' \
+        'VERIGO_SMTP_CROSS_ROUTE_PRESSURE_4XX_RATE=0.60' \
+        'VERIGO_SMTP_CROSS_ROUTE_DISPATCH_DELAY_SECONDS=0' \
         'VERIGO_TENCENT_QQ_WORKER_ALLOWED_EMAILS=*' \
         'VERIGO_GMAIL_WORKER_ALLOWED_EMAILS=*' \
         'VERIGO_CODEARTS_WORKER_ALLOWED_EMAILS=*' \
@@ -278,6 +287,8 @@ if [[ "$deploy_role" == "shanghai-app" ]]; then
         "$release_path/scripts/ensure_company_finder_metrics_schema.py"
     PYTHONPATH="$release_path" "$state_dir/.venv/bin/python" \
         "$release_path/scripts/ensure_verification_cache_schema.py"
+    PYTHONPATH="$release_path" "$state_dir/.venv/bin/python" \
+        "$release_path/scripts/ensure_smtp_cross_route_schema.py"
 
     worker_bundle_tmp=$(mktemp "$state_dir/data/.cloudstudio-worker.XXXXXX.tar.gz")
     tar -czf "$worker_bundle_tmp" -C "$release_path" app requirements.txt RELEASE_VERSION

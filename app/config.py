@@ -486,6 +486,37 @@ class Settings:
     temporary_smtp_retry_seconds: float = 60.0
     smtp_greylist_retry_seconds: int = 300
     smtp_greylist_retry_max_attempts: int = 2
+    # A bounded diagnostic recheck through a different worker egress. Keep
+    # shadow mode on until production metrics confirm the candidate rate.
+    smtp_cross_route_enabled: bool = env_bool("VERIGO_SMTP_CROSS_ROUTE_ENABLED", False)
+    smtp_cross_route_shadow_mode: bool = env_bool(
+        "VERIGO_SMTP_CROSS_ROUTE_SHADOW_MODE", True
+    )
+    smtp_cross_route_target: str = os.getenv(
+        "VERIGO_SMTP_CROSS_ROUTE_TARGET", "local"
+    ).strip().lower()
+    smtp_cross_route_max_per_email: int = max(
+        1, int(os.getenv("VERIGO_SMTP_CROSS_ROUTE_MAX_PER_EMAIL", "1"))
+    )
+    smtp_cross_route_concurrency: int = max(
+        1, int(os.getenv("VERIGO_SMTP_CROSS_ROUTE_CONCURRENCY", "1"))
+    )
+    smtp_cross_route_per_mx_concurrency: int = max(
+        1, int(os.getenv("VERIGO_SMTP_CROSS_ROUTE_PER_MX_CONCURRENCY", "1"))
+    )
+    smtp_cross_route_pressure_min_samples: int = max(
+        3, int(os.getenv("VERIGO_SMTP_CROSS_ROUTE_PRESSURE_MIN_SAMPLES", "5"))
+    )
+    smtp_cross_route_pressure_4xx_rate: float = min(
+        1.0,
+        max(
+            0.5,
+            float(os.getenv("VERIGO_SMTP_CROSS_ROUTE_PRESSURE_4XX_RATE", "0.60")),
+        ),
+    )
+    smtp_cross_route_dispatch_delay_seconds: int = max(
+        0, int(os.getenv("VERIGO_SMTP_CROSS_ROUTE_DISPATCH_DELAY_SECONDS", "0"))
+    )
     # The public disposable-email API is advisory and queried only for an
     # unknown domain after local checks. It never changes SMTP deliverability.
     disposable_lookup_enabled: bool = env_bool("VERIGO_DISPOSABLE_LOOKUP_ENABLED", False)
