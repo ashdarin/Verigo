@@ -1216,6 +1216,56 @@ class JobStore:
             results.append(result)
         return results
 
+    def results_for_emails(self, job_id: str, emails: Iterable[str]) -> list[dict[str, Any]]:
+        """Load only selected durable rows, even for a large parent job."""
+        self.initialize()
+        keys = sorted({str(email).strip().lower() for email in emails if str(email).strip()})
+        if not keys:
+            return []
+        rows: list[tuple[Any, Any, Any]] = []
+        # Keep SQLite's bind-variable ceiling out of the hot review-dispatch path.
+        with closing(self._connect()) as connection:
+            for start in range(0, len(keys), 500):
+                batch = keys[start : start + 500]
+                placeholders = ", ".join("?" for _ in batch)
+                rows.extend(connection.execute(
+                    f"""SELECT original_index, progress_state, result_json
+                    FROM job_results WHERE job_id=? AND lower(email) IN ({placeholders})""",
+                    (job_id, *batch),
+                ).fetchall())
+        results: list[dict[str, Any]] = []
+        for index, state, raw in sorted(rows, key=lambda row: int(row[0])):
+            result = _json_load(raw)
+            result["original_index"] = int(index)
+            result["progress_state"] = state
+            results.append(result)
+        return results
+
+    def initial_completion_times(
+        self, job_id: str, emails: Iterable[str],
+    ) -> dict[str, datetime]:
+        """Return immutable first-result times for a bounded set of addresses."""
+        self.initialize()
+        keys = sorted({str(email).strip().lower() for email in emails if str(email).strip()})
+        if not keys:
+            return {}
+        rows: list[tuple[Any, Any]] = []
+        with closing(self._connect()) as connection:
+            for start in range(0, len(keys), 500):
+                batch = keys[start : start + 500]
+                placeholders = ", ".join("?" for _ in batch)
+                rows.extend(connection.execute(
+                    f"""SELECT email, initial_completed_at FROM job_results
+                    WHERE job_id=? AND lower(email) IN ({placeholders})
+                      AND initial_completed_at IS NOT NULL""",
+                    (job_id, *batch),
+                ).fetchall())
+        return {
+            str(email).lower(): completed
+            for email, raw_completed in rows
+            if (completed := as_datetime(raw_completed)) is not None
+        }
+
     def result_page(
         self,
         job_id: str,

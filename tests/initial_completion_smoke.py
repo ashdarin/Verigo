@@ -61,6 +61,12 @@ def main() -> int:
         ).fetchone()
     assert reviewed_initial == initial
     assert reviewed_update > first_update
+    selected = store.results_for_emails(job.id, ["first@example.com"])
+    assert len(selected) == 1 and selected[0]["deliverable"] is True
+    assert (
+        store.initial_completion_times(job.id, ["first@example.com"])["first@example.com"].isoformat()
+        == initial
+    )
 
     failed_job = Job(
         id="failed-before-claim",

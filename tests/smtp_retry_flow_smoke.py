@@ -20,6 +20,9 @@ class FakeStore:
     def get(self, job_id: str) -> Job | None:
         return self.parent if job_id == self.parent.id else None
 
+    def initial_completion_times(self, _job_id: str, _emails) -> dict:
+        return {}
+
     def persist(self, job: Job) -> None:
         assert job.id == self.parent.id
 
@@ -52,9 +55,15 @@ class FakeStore:
         return False
 
 
+class FakeReviewEvents:
+    def record_many(self, _events) -> bool:
+        return True
+
+
 verification.write_csv = lambda _job: None
 verification.publish_completed_result_objects = lambda _job, _results=None: None
 verification._notify_retry_target = lambda _job: None
+verification.smtp_review_event_store = FakeReviewEvents()
 
 temporary_parent = Job(
     id="retry-policy-temporary-parent",

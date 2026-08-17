@@ -126,6 +126,9 @@ class FakeStore:
     def get(self, job_id: str) -> Job | None:
         return self.parent if job_id == self.parent.id else None
 
+    def initial_completion_times(self, _job_id: str, _emails) -> dict:
+        return {}
+
     def cache_results(self, results: list[dict], *, owner_job_id: str | None = None) -> list[str]:
         return []
 

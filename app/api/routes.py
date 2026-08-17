@@ -110,6 +110,7 @@ from app.tasks.verification import (
     finish_background_retry,
     finish_background_retry_failure,
     finish_initial_job,
+    enqueue_initial_smtp_reviews,
     apply_prospecting_receiver_protection,
     summarize,
     sync_parent_job,
@@ -818,6 +819,9 @@ def report_tencent_qq_results(
         job.id, worker_name, payload.lease_id, normalized, execution_target=execution_target,
     ):
         raise HTTPException(status_code=409, detail="Remote worker lease is no longer active")
+    # The callback has made these rows durable. Start an eligible review now;
+    # do not make one receiver's cooldown wait for the rest of this shard.
+    enqueue_initial_smtp_reviews(job, normalized)
     # Incremental callbacks must stay cheap for large remote shards. The old
     # path reloaded every result and rescanned all Catch-all evidence after
     # every single SMTP response, amplifying SQLite I/O as O(results * shard).
@@ -876,6 +880,7 @@ def complete_tencent_qq_job(
             result for result in refreshed.results
             if int(result.get("original_index", -1)) in completed_indices
         ]
+        enqueue_initial_smtp_reviews(job, completed_results)
         cache_and_release_probe_results(completed_results, owner_job_id=job.id)
         sync_parent_job(job)
         return serialize_job(refreshed)

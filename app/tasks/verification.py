@@ -547,6 +547,9 @@ def enqueue_background_retry(
     source: Job,
     emails: list[str],
     attempt: int,
+    *,
+    pressure_results: list[dict[str, Any]] | None = None,
+    initial_completed_at_by_email: dict[str, datetime] | None = None,
 ) -> None:
     """Queue reason-specific rechecks without changing the user task state."""
     if not emails:
@@ -562,7 +565,9 @@ def enqueue_background_retry(
     retry_groups: dict[tuple[str, int], list[str]] = {}
     origin_target = source.origin_execution_target or source.execution_target
     allow_alternate = source.retry_route != ROUTE_ALTERNATE
-    pressure_keys = provider_pressure_keys(parent.results)
+    pressure_keys = provider_pressure_keys(
+        pressure_results if pressure_results is not None else parent.results
+    )
     shadow = (
         settings.smtp_cross_route_shadow_mode
         or not settings.smtp_cross_route_enabled
@@ -673,11 +678,60 @@ def enqueue_background_retry(
                 attempt=(retry_job.cross_route_attempts if route == ROUTE_ALTERNATE else attempt),
                 initial_result=review_decisions[email.lower()]["initial_result"],
                 occurred_at=event_time,
-                initial_completed_at=source.finished_at or parent.finished_at,
+                initial_completed_at=(
+                    (initial_completed_at_by_email or {}).get(email.lower())
+                    or source.finished_at
+                    or parent.finished_at
+                ),
             )
             for email in group_emails
         )
         _notify_retry_target(retry_job)
+
+
+def enqueue_initial_smtp_reviews(
+    source: Job,
+    completed_results: list[dict[str, Any]],
+) -> None:
+    """Dispatch first-pass SMTP reviews when a shard settles, not when its root ends."""
+    if source.retry_parent_id:
+        return
+    if source.is_cache_refresh and source.list_name != SMTP_REVIEW_CANARY_LIST_NAME:
+        return
+    candidate_emails = [
+        str(result["email"])
+        for result in completed_results
+        if result.get("email")
+        and is_retryable_smtp_result(result)
+        and not result.get("greylist_retry_exhausted")
+    ]
+    if not candidate_emails:
+        return
+    visible_id = source.parent_id or source.id
+    parent = job_store.get(visible_id, include_results=False)
+    if parent is None or parent.status == "stopped":
+        return
+    # Do not hydrate a large job for every shard completion. Decisions only
+    # need the just-settled rows; pressure is computed from this shard below.
+    parent.results = job_store.results_for_emails(parent.id, candidate_emails)
+    retry_emails = [
+        str(result["email"])
+        for result in parent.results
+        if result.get("email")
+        and is_retryable_smtp_result(result)
+        and not result.get("greylist_retry_exhausted")
+    ]
+    if not retry_emails:
+        return
+    initial_times = job_store.initial_completion_times(parent.id, retry_emails)
+    enqueue_background_retry(
+        parent,
+        source,
+        retry_emails,
+        1,
+        pressure_results=completed_results,
+        initial_completed_at_by_email=initial_times,
+    )
 
 
 def _clear_retry_metadata(result: dict[str, Any], state: str = "completed") -> None:
@@ -715,14 +769,10 @@ def finish_initial_job(job: Job) -> Job:
     )
     if job.is_cache_refresh and not canary_review:
         return visible
-    retry_emails = [
-        str(result["email"])
-        for result in visible.results
-        if result.get("email")
-        and is_retryable_smtp_result(result)
-        and not result.get("greylist_retry_exhausted")
-    ]
-    enqueue_background_retry(visible, job, retry_emails, 1)
+    # The visible aggregate metadata is intentionally not hydrated here. The
+    # source child still contains its completed shard, which is enough to
+    # dispatch reviews for the final partition as well.
+    enqueue_initial_smtp_reviews(job, job.results)
     if visible.status == "completed" and not visible.is_cache_refresh:
         job_store.record_catch_all(visible)
         write_csv(visible)
@@ -747,6 +797,7 @@ def finish_background_retry(job: Job) -> Job | None:
     changed_results: list[dict[str, Any]] = []
     review_events = []
     review_completed_at = job.finished_at or utc_now()
+    initial_times = job_store.initial_completion_times(parent.id, job.emails)
     for raw_result in job.results:
         result = normalize_result(raw_result)
         email = str(result.get("email", ""))
@@ -782,7 +833,7 @@ def finish_background_retry(job: Job) -> Job | None:
                 review_result=result,
                 outcome=str(result["cross_route_state"]),
                 occurred_at=review_completed_at,
-                initial_completed_at=parent.finished_at,
+                initial_completed_at=initial_times.get(email.lower()) or parent.finished_at,
                 review_started_at=job.started_at,
                 review_completed_at=review_completed_at,
                 latency_ms=int(max(
@@ -1408,6 +1459,7 @@ def run_job(job: Job) -> None:
                 shard_results = [
                     by_index[index] for index in missing_indices if index in by_index
                 ]
+                enqueue_initial_smtp_reviews(refreshed, shard_results)
                 cache_and_release_probe_results(shard_results, owner_job_id=job.id)
                 job = refreshed
                 return

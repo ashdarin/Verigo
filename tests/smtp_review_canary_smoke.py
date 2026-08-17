@@ -43,6 +43,19 @@ class FakeStore:
     def complete_probe_leases(self, _owner_job_id, _results):
         return []
 
+    def get(self, job_id: str, include_results: bool = True) -> Job | None:
+        return self.parent if job_id == self.parent.id else None
+
+    def results_for_emails(self, _job_id: str, emails) -> list[dict]:
+        wanted = {str(email).lower() for email in emails}
+        return [
+            dict(result) for result in self.parent.results
+            if str(result.get("email", "")).lower() in wanted
+        ]
+
+    def initial_completion_times(self, _job_id: str, _emails) -> dict:
+        return {}
+
     def retry_children(self, _parent_id):
         return self.added
 
