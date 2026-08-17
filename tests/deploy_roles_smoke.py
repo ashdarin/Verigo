@@ -39,6 +39,8 @@ assert "disable_units caddy verigo-monitor.timer" in release
 assert "verigo-company-finder-tunnel" in release
 assert "verigo-backup.timer verigo-retention.timer" in release
 assert "disable_units verigo verigo-worker-api" in release
+assert "VERIGO_CLOUDSHELL_LIFECYCLE_DISPATCH_ENABLED=false" in release
+assert "VERIGO_CLOUDSHELL_LIFECYCLE_DISPATCH_ENABLED=true" in release
 assert "verigo-data-app-tunnel" in release
 assert "verigo-postgres-worker-tunnel" in release
 assert "verigo-monitor.timer" in release

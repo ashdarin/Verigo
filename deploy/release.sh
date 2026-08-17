@@ -145,6 +145,23 @@ install_env_files() {
     grep -q '^VERIGO_MONITOR_TOKEN=[^[:space:]]' /etc/verigo/verigo.env \
         || printf 'VERIGO_MONITOR_TOKEN=%s\n' "$(openssl rand -hex 32)" \
             >> /etc/verigo/verigo.env
+    if [[ "$deploy_role" == "shanghai-app" ]]; then
+        if grep -q '^VERIGO_CLOUDSHELL_LIFECYCLE_DISPATCH_ENABLED=' /etc/verigo/verigo.env; then
+            sed -i 's/^VERIGO_CLOUDSHELL_LIFECYCLE_DISPATCH_ENABLED=.*/VERIGO_CLOUDSHELL_LIFECYCLE_DISPATCH_ENABLED=false/' \
+                /etc/verigo/verigo.env
+        else
+            printf '%s\n' 'VERIGO_CLOUDSHELL_LIFECYCLE_DISPATCH_ENABLED=false' \
+                >> /etc/verigo/verigo.env
+        fi
+    else
+        if grep -q '^VERIGO_CLOUDSHELL_LIFECYCLE_DISPATCH_ENABLED=' /etc/verigo/verigo.env; then
+            sed -i 's/^VERIGO_CLOUDSHELL_LIFECYCLE_DISPATCH_ENABLED=.*/VERIGO_CLOUDSHELL_LIFECYCLE_DISPATCH_ENABLED=true/' \
+                /etc/verigo/verigo.env
+        else
+            printf '%s\n' 'VERIGO_CLOUDSHELL_LIFECYCLE_DISPATCH_ENABLED=true' \
+                >> /etc/verigo/verigo.env
+        fi
+    fi
     chmod 600 /etc/verigo/verigo.env
 
     if grep -q '^VERIGO_PROSPECTING_BETA_MAX_CANDIDATES=120$' /etc/verigo/verigo.env; then

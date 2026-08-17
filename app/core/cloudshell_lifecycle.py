@@ -624,6 +624,11 @@ cloudshell_lifecycles = (
 
 
 def notify_cloudshell_job_queued() -> None:
+    # The Shanghai web service may not have a route to Google's OAuth and
+    # Cloud Shell APIs. Its HK supervisor independently polls the durable
+    # Gmail queue, so suppressing local bootstrap does not delay a wakeup.
+    if not settings.cloudshell_lifecycle_dispatch_enabled:
+        return
     for lifecycle in cloudshell_lifecycles:
         lifecycle.notify_job_queued()
 

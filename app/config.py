@@ -331,6 +331,11 @@ class Settings:
     cloudshell_bootstrap_cooldown_seconds: int = max(
         60, int(os.getenv("VERIGO_CLOUDSHELL_BOOTSTRAP_COOLDOWN_SECONDS", "300"))
     )
+    # The web/API node only records Gmail work. Bootstrap must run on the
+    # worker supervisor that has outbound access to Google Cloud Shell.
+    cloudshell_lifecycle_dispatch_enabled: bool = env_bool(
+        "VERIGO_CLOUDSHELL_LIFECYCLE_DISPATCH_ENABLED", True
+    )
     cloudshell_coordinator_enabled: bool = env_bool(
         "VERIGO_CLOUDSHELL_COORDINATOR_ENABLED", True
     )

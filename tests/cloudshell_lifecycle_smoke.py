@@ -11,6 +11,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import app.core.cloudshell_lifecycle as lifecycle_module
+from app.config import settings
 from app.core.cloudshell_lifecycle import (
     CloudShellLifecycle,
     _load_cloudshell_account_specs,
@@ -76,6 +77,28 @@ lifecycle.stop()
 assert lifecycle._thread is None
 assert cloudshell_lifecycle.account_id == "account1"
 assert cloudshell_secondary_lifecycle.account_id == "account2"
+
+class _WakeRecorder:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def notify_job_queued(self) -> None:
+        self.calls += 1
+
+
+recorder = _WakeRecorder()
+previous_dispatch = settings.cloudshell_lifecycle_dispatch_enabled
+try:
+    object.__setattr__(settings, "cloudshell_lifecycle_dispatch_enabled", False)
+    with patch.object(lifecycle_module, "cloudshell_lifecycles", (recorder,)):
+        lifecycle_module.notify_cloudshell_job_queued()
+    assert recorder.calls == 0
+    object.__setattr__(settings, "cloudshell_lifecycle_dispatch_enabled", True)
+    with patch.object(lifecycle_module, "cloudshell_lifecycles", (recorder,)):
+        lifecycle_module.notify_cloudshell_job_queued()
+    assert recorder.calls == 1
+finally:
+    object.__setattr__(settings, "cloudshell_lifecycle_dispatch_enabled", previous_dispatch)
 
 idle_lifecycle = CloudShellLifecycle(worker_id="cloudshell-idle", worker_processes=2)
 idle_lifecycle._idle_since = 0.0
