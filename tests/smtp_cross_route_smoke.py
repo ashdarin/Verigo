@@ -56,6 +56,16 @@ assert smtp_cross_route.decision_for(
 qq = temporary("person@qq.com", mx="mx1.qq.com")
 assert smtp_cross_route.decision_for(
     qq["email"], qq, source_target="tencent_qq"
+).reason == "qq_source_excluded"
+
+qq_source_non_qq = temporary("person@example.test", mx="mx.example.test")
+assert smtp_cross_route.decision_for(
+    qq_source_non_qq["email"], qq_source_non_qq, source_target="tencent_qq"
+).reason == "qq_source_excluded"
+
+qq_from_other_source = temporary("person@qq.com", mx="mx1.qq.com")
+assert smtp_cross_route.decision_for(
+    qq_from_other_source["email"], qq_from_other_source, source_target="codearts"
 ).reason == "qq_excluded"
 
 microsoft_365 = temporary(

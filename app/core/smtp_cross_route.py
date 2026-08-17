@@ -139,6 +139,8 @@ def decision_for(
         return CrossRouteDecision(False, "feature_disabled", key)
     if not allow_alternate:
         return CrossRouteDecision(False, "route_already_checked", key)
+    if source_target == "tencent_qq":
+        return CrossRouteDecision(False, "qq_source_excluded", key)
     if is_qq_email(email) or key in QQ_PROVIDER_KEYS:
         return CrossRouteDecision(False, "qq_excluded", key)
     if key in MICROSOFT_PROVIDER_KEYS:
